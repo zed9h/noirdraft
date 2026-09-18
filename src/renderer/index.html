@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NoirDraft</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="toolbar">
+        <h1>NoirDraft</h1>
+        <div class="document-actions">
+          <button type="button" data-undo>Undo</button>
+          <button type="button" data-redo>Redo</button>
+          <button type="button" data-open>Open</button>
+          <input type="text" data-save-note aria-label="Optional revision note" placeholder="Revision note (optional)">
+          <button type="button" data-save>Save</button>
+          <button type="button" data-save-as>Save as…</button>
+          <span class="status" data-document-status>No document open</span>
+          <button type="button" data-record-external hidden>Record external edit</button>
+        </div>
+      </header>
+      <nav aria-label="Project views">
+        <button type="button" data-view="STORY" aria-current="page">Story</button>
+        <button type="button" data-view="METADATA">Metadata</button>
+        <button type="button" data-view="CHAT">Chat</button>
+        <button type="button" data-view="VERSIONS">Versions</button>
+        <div class="outline" data-outline aria-label="Document outline"></div>
+        <div class="pin-status" data-pin-status aria-label="Context pins"></div>
+        <div class="branch-choices" data-branch-choices aria-label="Redo branches"></div>
+      </nav>
+      <section class="workspace" aria-labelledby="editor-title">
+        <header class="editor-header">
+          <div>
+            <p class="eyebrow">EditContext feasibility prototype</p>
+            <h2 id="editor-title">Untitled story</h2>
+          </div>
+          <p class="runtime" aria-label="Runtime version"></p>
+        </header>
+        <div
+          id="story-editor"
+          class="story-editor editor-pane"
+          role="textbox"
+          aria-label="Story source"
+          aria-multiline="true"
+          tabindex="0"
+          spellcheck="true"
+        ></div>
+        <div
+          id="metadata-editor"
+          class="story-editor editor-pane"
+          role="textbox"
+          aria-label="Metadata source"
+          aria-multiline="true"
+          tabindex="0"
+          spellcheck="true"
+          hidden
+        ></div>
+        <div
+          id="chat-editor"
+          class="story-editor editor-pane"
+          role="textbox"
+          aria-label="Chat source"
+          aria-multiline="true"
+          tabindex="0"
+          spellcheck="true"
+          hidden
+        ></div>
+        <section id="versions-view" class="versions-view editor-pane" aria-label="Versions graph" hidden>
+          <div class="version-list" data-version-list></div>
+          <aside class="version-inspector" data-version-inspector>
+            <p>Select a revision to inspect its stored patch or checkpoint.</p>
+          </aside>
+        </section>
+        <footer class="editor-status" aria-live="polite">
+          <span data-selection-status>0 characters</span>
+          <span>EditContext prototype · source-visible Markdown</span>
+        </footer>
+      </section>
+    </main>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
