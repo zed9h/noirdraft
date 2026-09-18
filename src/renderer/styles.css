@@ -272,7 +272,8 @@ button { font: inherit; }
   outline: none;
   color: #e2dbd1;
   background: #17140f;
-  caret-color: #e8ad70;
+  position: relative;
+  caret-color: transparent;
   font: 17px/1.7 Georgia, "Times New Roman", serif;
   white-space: pre-wrap;
   overflow-wrap: break-word;
@@ -354,8 +355,30 @@ button { font: inherit; }
 .story-editor:focus { border-color: #8d6a48; box-shadow: 0 0 0 1px #8d6a48; }
 .story-editor.is-composing { box-shadow: inset 0 -2px #bd8f61; }
 .story-editor.editor-error { color: #ffb4a9; }
+.story-editor.has-visual-caret::after {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  left: var(--caret-x);
+  top: var(--caret-y);
+  width: 1px;
+  height: var(--caret-height);
+  background: #e8ad70;
+}
 
-.markdown-block { min-height: 1lh; }
+.markdown-block { display: inline; }
+.markdown-block.is-empty-block {
+  display: inline-block;
+  width: 0;
+  min-height: 1lh;
+}
+.layout-caret-anchor {
+  display: inline-block;
+  width: 0;
+  height: 1lh;
+  vertical-align: top;
+}
 .block-heading { color: #f0e9de; font-family: Georgia, "Times New Roman", serif; font-weight: 700; }
 .block-heading[data-level="1"] { font-size: 1.7em; line-height: 1.35; }
 .block-heading[data-level="2"] { font-size: 1.45em; line-height: 1.4; }

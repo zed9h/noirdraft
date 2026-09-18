@@ -53,6 +53,7 @@ export class EditContextEditor {
     const { selectionStart, selectionEnd } = this.model;
     const rect = this.mapping.rangeRect(selectionStart, selectionEnd);
     this.context.updateSelectionBounds(asDOMRect(rect));
+    this.#updateVisualCaret(rect, selectionStart === selectionEnd);
   }
 
   #listen() {
@@ -94,7 +95,11 @@ export class EditContextEditor {
       event.preventDefault();
       this.replace(this.model.selectionStart, this.model.selectionEnd, text, 'paste');
     });
-    this.element.addEventListener('focus', () => this.#syncDOMSelection());
+    this.element.addEventListener('focus', () => {
+      this.#syncDOMSelection();
+      this.updateBounds();
+    });
+    this.element.addEventListener('blur', () => this.#updateVisualCaret(null, false));
     document.addEventListener('selectionchange', () => this.#domSelectionChanged());
     new ResizeObserver(() => this.updateBounds()).observe(this.element);
     this.element.addEventListener('scroll', () => this.updateBounds(), { passive: true });
@@ -155,5 +160,21 @@ export class EditContextEditor {
     if (target === null) return;
     if (extend) this.setSelection(Math.min(this.model.selectionStart, target), Math.max(this.model.selectionEnd, target));
     else this.setSelection(target, target);
+  }
+
+  #updateVisualCaret(rect, collapsed) {
+    const visible = collapsed && document.activeElement === this.element;
+    this.element.classList.toggle('has-visual-caret', visible);
+    if (!visible || !rect) return;
+    const control = this.element.getBoundingClientRect();
+    const fontSize = Number.parseFloat(getComputedStyle(this.element).fontSize) || 16;
+    // Keep the cursor glyph independent from the line box. Empty terminal
+    // rows need a full-height hit/IME rectangle, but painting that rectangle
+    // as a caret makes it visibly taller than the cursor in ordinary text.
+    const height = fontSize;
+    const top = rect.top + Math.max(0, (rect.height - height) / 2);
+    this.element.style.setProperty('--caret-x', `${rect.left - control.left + this.element.scrollLeft}px`);
+    this.element.style.setProperty('--caret-y', `${top - control.top + this.element.scrollTop}px`);
+    this.element.style.setProperty('--caret-height', `${height}px`);
   }
 }

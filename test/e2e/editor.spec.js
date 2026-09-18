@@ -235,6 +235,114 @@ test('Windows navigation commands respect graphemes, words, lines, and document 
   }
 });
 
+test('block boundaries have one caret transition and edit on the first keypress', async () => {
+  const { application, window } = await launch();
+  try {
+    const editor = window.getByRole('textbox', { name: 'Story source' });
+    const source = '# One\n## Two\n\n> Three\n';
+    await editor.focus();
+    const layout = await window.evaluate(async (text) => {
+      const { editor: instance, model } = window.__noirDraftTest;
+      instance.replace(0, model.text.length, text);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const firstBreak = text.indexOf('\n');
+      const blankBreak = text.indexOf('\n\n') + 1;
+      const positions = [firstBreak, firstBreak + 1, blankBreak, blankBreak + 1, text.length];
+      return {
+        positions,
+        tops: positions.map((offset) => instance.mapping.rangeRect(offset).top),
+        layoutAnchors: positions.filter((offset) => instance.mapping.toDOM(offset).node.classList?.contains('layout-caret-anchor')),
+        roundTrips: positions.map((offset) => {
+          const position = instance.mapping.toDOM(offset);
+          return instance.mapping.fromDOM(position.node, position.offset);
+        }),
+      };
+    }, source);
+    expect(layout.layoutAnchors).toEqual([source.length]);
+    expect(layout.roundTrips).toEqual(layout.positions);
+    expect(layout.tops[0]).toBeLessThan(layout.tops[1]);
+    expect(layout.tops[1]).toBeLessThan(layout.tops[2]);
+    expect(layout.tops[2]).toBeLessThan(layout.tops[3]);
+
+    const terminalMetrics = await window.evaluate((text) => {
+      const { editor: instance, model } = window.__noirDraftTest;
+      instance.replace(0, model.text.length, text);
+      const rect = instance.mapping.rangeRect(text.length);
+      return { height: rect.height, lineHeight: Number.parseFloat(getComputedStyle(instance.element).lineHeight) };
+    }, '# Heading\n');
+    expect(terminalMetrics.height).toBeCloseTo(terminalMetrics.lineHeight, 1);
+    await window.evaluate((text) => {
+      const { editor: instance, model } = window.__noirDraftTest;
+      instance.replace(0, model.text.length, text);
+    }, source);
+
+    // Enter inserts immediately at a visual line end, and one Backspace
+    // reverses it. There is no DOM-only stop between these source offsets.
+    await window.evaluate((offset) => window.__noirDraftTest.editor.setSelection(offset, offset), source.indexOf('\n'));
+    await window.keyboard.press('Enter');
+    expect(await window.evaluate(() => window.__noirDraftTest.model.text)).toBe('# One\n\n## Two\n\n> Three\n');
+    await window.keyboard.press('Backspace');
+    expect(await window.evaluate(() => window.__noirDraftTest.model.text)).toBe(source);
+
+    // At the next line's first offset, one Backspace removes its separator
+    // and joins the lines instead of deleting content from the line below.
+    await window.evaluate((offset) => window.__noirDraftTest.editor.setSelection(offset, offset), source.indexOf('\n') + 1);
+    await window.keyboard.press('Backspace');
+    expect(await window.evaluate(() => window.__noirDraftTest.model.text)).toBe('# One## Two\n\n> Three\n');
+
+    // Repeated edits must stay on canonical source boundaries both in the
+    // middle of a row and at the terminal row. This is where an extra layout
+    // newline used to create an alternating, invisible caret stop.
+    await window.evaluate((text) => {
+      const { editor: instance, model } = window.__noirDraftTest;
+      instance.replace(0, model.text.length, text);
+      instance.setSelection(4, 4);
+    }, 'left right');
+    const middleTops = [];
+    for (let index = 0; index < 3; index += 1) {
+      await window.keyboard.press('Enter');
+      middleTops.push(await window.evaluate(() => {
+        const { editor: instance, model } = window.__noirDraftTest;
+        return instance.mapping.rangeRect(model.selectionEnd).top;
+      }));
+    }
+    expect(await window.evaluate(() => window.__noirDraftTest.model.text)).toBe('left\n\n\n right');
+    expect(middleTops[0]).toBeLessThan(middleTops[1]);
+    expect(middleTops[1]).toBeLessThan(middleTops[2]);
+    for (let index = 0; index < 3; index += 1) await window.keyboard.press('Backspace');
+    expect(await window.evaluate(() => window.__noirDraftTest.model.text)).toBe('left right');
+
+    await window.evaluate((text) => {
+      const { editor: instance, model } = window.__noirDraftTest;
+      instance.replace(0, model.text.length, text);
+      instance.setSelection(text.length, text.length);
+    }, 'tail\n');
+    const terminalTops = [];
+    for (let index = 0; index < 3; index += 1) {
+      await window.keyboard.press('Enter');
+      terminalTops.push(await window.evaluate(() => {
+        const { editor: instance, model } = window.__noirDraftTest;
+        const rect = instance.mapping.rangeRect(model.selectionEnd);
+        const painted = getComputedStyle(instance.element, '::after');
+        return {
+          top: rect.top,
+          height: rect.height,
+          visualCaret: instance.element.classList.contains('has-visual-caret') && Number.parseFloat(painted.height) > 0,
+        };
+      }));
+    }
+    expect(await window.evaluate(() => window.__noirDraftTest.model.text)).toBe('tail\n\n\n\n');
+    expect(terminalTops.every((rect) => rect.height > 0)).toBe(true);
+    expect(terminalTops.every((rect) => rect.visualCaret)).toBe(true);
+    expect(terminalTops[0].top).toBeLessThan(terminalTops[1].top);
+    expect(terminalTops[1].top).toBeLessThan(terminalTops[2].top);
+    for (let index = 0; index < 3; index += 1) await window.keyboard.press('Backspace');
+    expect(await window.evaluate(() => window.__noirDraftTest.model.text)).toBe('tail\n');
+  } finally {
+    await application.close();
+  }
+});
+
 test('composition lifecycle and requested character bounds remain wired', async () => {
   const { application, window } = await launch();
   try {
@@ -359,7 +467,8 @@ test('incremental rendering preserves unaffected prefix blocks and mappings', as
       const source = '# First\n\nAlpha.\n\n## Second\n\nBeta text here.\n\n### Third\n\nGamma.\n';
       editor.replace(0, model.text.length, source);
       const firstBlock = editor.element.firstElementChild;
-      const lastBlock = editor.element.lastElementChild;
+      const blocks = editor.element.querySelectorAll('.markdown-block');
+      const lastBlock = blocks.item(blocks.length - 1);
       const from = model.text.indexOf('text');
       editor.replace(from, from + 4, '**prose**');
       const roundTrips = [];
@@ -369,7 +478,7 @@ test('incremental rendering preserves unaffected prefix blocks and mappings', as
       }
       return {
         preserved: firstBlock === editor.element.firstElementChild,
-        suffixPreserved: lastBlock === editor.element.lastElementChild,
+        suffixPreserved: lastBlock === [...editor.element.querySelectorAll('.markdown-block')].at(-1),
         sourceMatches: editor.element.textContent === model.text,
         contextMatches: editor.context.text === model.text,
         allOffsetsMap: roundTrips.every(Boolean),
