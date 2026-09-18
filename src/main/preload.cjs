@@ -9,4 +9,8 @@ contextBridge.exposeInMainWorld('noirDraft', Object.freeze({
     open: () => ipcRenderer.invoke('document:open'),
     save: (request) => ipcRenderer.invoke('document:save', request),
   }),
+  preferences: Object.freeze({
+    get: () => ipcRenderer.invoke('preferences:get'),
+    set: (patch) => ipcRenderer.invoke('preferences:set', patch),
+  }),
 }));

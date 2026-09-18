@@ -118,7 +118,7 @@ export async function commitRevision(history, baseStory, resultStory, options = 
     payload: checkpoint ? after : createUnifiedDiff(before, after),
   };
   history.revisions.set(id, revision);
-  history.currentRevision = id;
+  if (options.setCurrent ?? true) history.currentRevision = id;
   return revision;
 }
 

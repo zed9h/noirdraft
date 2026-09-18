@@ -1,13 +1,17 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, Menu, dialog, ipcMain } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { readDocument, safeSaveDocument } from './files.js';
+import { readPreferences, writePreferences } from './preferences.js';
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const authorizedDocumentPaths = new Set();
 if (process.env.NOIRDRAFT_E2E_ALLOWED_PATH) {
   authorizedDocumentPaths.add(path.resolve(process.env.NOIRDRAFT_E2E_ALLOWED_PATH));
 }
+const preferencesPath = process.env.NOIRDRAFT_E2E_PREFERENCES_PATH
+  ? path.resolve(process.env.NOIRDRAFT_E2E_PREFERENCES_PATH)
+  : path.join(app.getPath('userData'), 'preferences.json');
 
 function publicError(error) {
   return {
@@ -61,6 +65,11 @@ function registerDocumentHandlers() {
   });
 }
 
+function registerPreferencesHandlers() {
+  ipcMain.handle('preferences:get', () => readPreferences(preferencesPath));
+  ipcMain.handle('preferences:set', (_event, patch) => writePreferences(preferencesPath, patch));
+}
+
 function createWindow() {
   const window = new BrowserWindow({
     width: 1200,
@@ -83,7 +92,9 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null);
   registerDocumentHandlers();
+  registerPreferencesHandlers();
   createWindow();
 
   app.on('activate', () => {

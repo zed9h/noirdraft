@@ -20,4 +20,6 @@ npm run test:e2e:virtual # Linux: isolated virtual display; does not open deskto
 npm run validate
 ```
 
-The E2E suite launches the real Electron runtime. On Linux, use `test:e2e:virtual` to keep its windows off the active desktop. Phase 1 must validate EditContext selection and IME correctness before work advances to later application systems.
+The E2E suite launches the real Electron runtime. On Linux, use `test:e2e:virtual` to keep its windows off the active desktop.
+
+See `docs/release-audit.md` for the runbook covering what still needs a real Windows machine, a human IME tester, and sustained real-world usage before a first release — everything else is already implemented and automatically tested.

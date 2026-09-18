@@ -31,11 +31,16 @@ test('transient undo and branch-aware persistent Redo… use one STORY graph', a
     const redo = window.getByRole('button', { name: 'Redo…', exact: true });
     await expect(redo).toBeEnabled();
     await redo.click();
-    const choices = window.getByLabel('Redo branches').getByRole('button');
-    await expect(choices).toHaveCount(2);
-    await expect(choices.nth(0)).toContainText('First branch');
-    await expect(choices.nth(1)).toContainText('Second branch');
-    await choices.nth(1).click();
+
+    // Redo… reuses the bounded local graph as its branch chooser rather than
+    // a separate branch-selection UI: it switches to Versions, centered on
+    // the current node, showing both sibling branches as their own nodes.
+    await expect(window.getByLabel('Redo branches')).toContainText('2 branches');
+    const graphPanel = window.getByLabel('Versions graph');
+    await expect(graphPanel.locator('.graph-node')).toHaveCount(3);
+    const secondBranchNode = graphPanel.locator('.graph-node', { hasText: 'Second branch' });
+    await secondBranchNode.getByRole('button', { name: 'Checkout' }).click();
+    await window.getByRole('button', { name: 'Story', exact: true }).click();
     await expect.poll(() => window.evaluate(() => window.__noirDraftTest.model.text)).toContain('Second branch.');
     const graph = await window.evaluate(() => {
       const history = window.__noirDraftTest.getHistory();

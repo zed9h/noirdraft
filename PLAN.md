@@ -767,7 +767,7 @@ Distinguish clearly:
 * exact target being revised;
 * current user instruction.
 
-Do not make rejected historical variants part of normal context unless explicitly requested.
+Do not make unselected historical variants part of normal context unless explicitly requested or deliberately included from the revision workbench.
 
 Do not automatically replay the complete chat log on every request.
 
@@ -1020,15 +1020,15 @@ Do not optimize this prematurely; reliability matters more than minimizing a few
 
 # 27. History graph
 
-History is a graph/tree rather than merely an undo stack.
+History is a graph rather than merely an undo stack.
 
-Normal progression:
+Normal progression is linear:
 
 ```text
 A ─ B ─ C ─ D
-````
+```
 
-If the user checks out B and makes a new change:
+If the user checks out B and creates another version, the old continuation remains:
 
 ```text
 A ─ B ─ C ─ D
@@ -1036,33 +1036,37 @@ A ─ B ─ C ─ D
       E ─ F
 ```
 
-C and D remain preserved.
+Never destroy abandoned branches merely because the user continued from an earlier state. Alternative prose is part of the manuscript's working history, not temporary garbage.
 
-Never destroy abandoned branches merely because the user edits from an earlier state.
-
-This is central to managing alternative prose.
-
-A generated alternative is therefore not a separate special object.
-
-It is naturally another branch.
-
-Example:
+Every AI proposal must also be represented as a revision node, including proposals that are never accepted as the current STORY. Generating several alternatives from the same base therefore creates sibling nodes while leaving the checked-out revision unchanged until the author chooses one:
 
 ```text
-                 agent: restrained
+                 AI proposal A
                ┌── C
-A ─ B ─────────┤
-               └── D
-                 agent: emotional
+A ─ B ─────────┼── D  AI proposal B
+               └── E  AI proposal C
 ```
 
-The graph UI can interpret those branches as alternative revisions.
+"Rejected" means "not selected as the working revision", not "deleted from history".
+
+The graph has two different relationships which must not be conflated:
+
+```text
+ancestry    = which complete STORY state a revision was derived from
+provenance  = which older revisions supplied copied/adopted pieces of text
+```
+
+Normal editing from revision `B` creates a child of `B`, even if some text was copied from `A` or another branch. Those source revisions are provenance, not additional parents.
+
+A revision should have multiple parents only for an explicit whole-document merge/reconciliation operation where more than one complete branch is intentionally treated as ancestry.
+
+This distinction keeps Undo/Redo semantically meaningful while still allowing the application to show that a composite revision contains material taken from several alternatives.
 
 ---
 
 # 28. Undo / redo behavior
 
-Persistent undo/redo traverses the graph.
+Persistent undo/redo traverses graph ancestry.
 
 On a linear history:
 
@@ -1077,29 +1081,27 @@ Undo
 Redo
 ```
 
-If undo reaches a revision with multiple possible children:
-
-```text
-A ─ B
-     ├─ C
-     ├─ D
-     └─ E
-```
-
-there is no unique Redo.
-
-The UI should present:
+If an undone node has multiple forward children, there is no unique Redo. Present:
 
 ```text
 Undo
 Redo…
 ```
 
-The ellipsis indicates that multiple forward choices exist.
+`Redo…` opens the relevant local graph choices rather than silently selecting one.
 
-Activating `Redo…` should reveal the alternatives and preferably focus/open the corresponding portion of the change graph.
+Likewise, if the current node is an explicit multi-parent merge, there is no unique previous branch. Present:
 
-Never silently select a branch.
+```text
+Undo…
+Redo
+```
+
+`Undo…` lets the author choose which parent path to follow.
+
+Do not create `Undo…` merely because text in a revision has provenance from several sources; provenance is not ancestry.
+
+The same local-graph chooser should be reused for branch selection rather than maintaining a second unrelated branch UI.
 
 ---
 
@@ -1138,7 +1140,7 @@ This establishes an exact base revision for the AI operation.
 
 ### Agent → User
 
-When an accepted AI modification is applied, commit it immediately as an agent revision before the user resumes manual editing.
+When AI generation successfully produces a valid alternative, preserve that alternative immediately as an agent-origin revision branch from the exact base. Do not require it to become the checked-out STORY first. If the author chooses it, checks it out, or builds a composite from it, that later action is separate from preserving the proposal itself.
 
 ### Explicit Save
 
@@ -1180,7 +1182,7 @@ Commit pending story edits before unloading the current document.
 
 ### Significant structural action
 
-Large paste, accepted agent rewrite, history checkout, or other clearly bounded transformations may justify immediate transactions.
+Large paste, agent proposal creation, proposal checkout, composite commit, history checkout, or other clearly bounded transformations may justify immediate transactions.
 
 ---
 
@@ -1315,59 +1317,119 @@ application constructs model context
 ↓
 KoboldCpp streams proposal
 ↓
-proposal is shown without silently destroying current prose
+valid proposal is preserved as an agent revision branch from the exact base
 ↓
-user applies/rejects
+checked-out STORY remains unchanged
 ↓
-if applied:
-    STORY changes
-    agent graph node commits immediately
+user may preview / compare / generate another / use in composite / check out
 ↓
-background commit-note generation begins
+if a proposal or composite becomes the working STORY:
+    checkout or composition creates the appropriate state transition
+↓
+background commit-note generation can describe the preserved proposal revision
 ```
 
-Variations can naturally branch from the same parent revision.
+Variations naturally branch from the same parent revision. Unselected proposals remain available to passage lineage and the revision workbench.
 
 ---
 
-# 35. Revisions in narrative context
+# 35. Revisions in narrative context and passage lineage
 
-History inspection should not be limited to raw diffs.
+History inspection must not be limited to a raw diff screen or a global revision list.
 
-Eventually allow selecting a graph node and viewing that STORY state in the normal story editor.
+The most useful entry point during normal writing is the prose itself.
 
-Alternative branch revisions should therefore be inspectable in their actual narrative context.
+When the author selects a paragraph or arbitrary range, the application should be able to derive a **textual lineage** for that range by mapping it backward and forward through the exact whole-STORY patches.
 
-Useful operations later:
+Conceptually:
 
 ```text
-checkout
-compare with current
-compare siblings
-create branch here
-return to current
+selected range in current revision
+        ↓ map through parent patch
+corresponding range in parent
+        ↓
+revision that changed it
+        ↓
+continue through relevant ancestors / descendants
 ```
 
-Do not implement complex merge semantics in the first milestone.
+This does not require stable paragraph IDs. Lineage is derived from revision history.
+
+Where exact mapping becomes impossible because text was heavily rewritten, split, joined, or moved, the UI may use textual similarity only as a navigation hint. It must not pretend uncertain lineage is exact.
+
+A selected passage can expose a compact history affordance showing only revisions that materially changed that passage. Clicking one should allow the author to preview that historical passage in narrative context, compare it with the current text, or send it to the revision workbench.
+
+Useful operations include:
+
+```text
+preview passage at revision
+compare with current
+compare siblings
+open in workbench
+checkout full revision
+return to current
+include revision as AI reference
+```
+
+The normal STORY editor should remain visually quiet; passage-history controls should appear on selection, hover, command, or another deliberate action rather than permanently decorating every paragraph.
 
 ---
 
-# 36. Diff presentation
+# 36. Revision comparison and composition workbench
 
-Stored patch format and visual diff are separate concerns.
+Stored patch format and visual comparison are separate concerns. `# VERSIONS` may continue storing conventional human-readable unified diffs, while the UI provides prose-oriented comparison and composition.
 
-The file may contain conventional unified diff.
+The revision workbench is a core feature, not a late cosmetic refinement. Its purpose is to let the author compare several alternatives and construct a better version from them.
 
-The UI can provide better prose-oriented diff rendering:
+The workbench should support:
 
-* additions;
-* deletions;
-* changed words;
-* changed paragraphs;
-* side-by-side or inline modes;
-* acceptance of selected hunks later.
+* two or more source revisions selected for comparison;
+* word-, phrase-, paragraph-, and hunk-level highlighting where useful;
+* synchronized narrative context around the compared passage;
+* quick adoption of a phrase, hunk, or paragraph from any source;
+* an editable **Composite** result using the same custom story editor model;
+* manual rewriting directly in the composite;
+* explicit inclusion of one or more compared revisions/passages as references for another AI pass;
+* clear indication of which source revisions are currently included/pinned for that AI request;
+* creation of a new revision from the resulting composite without destroying any source alternative.
 
-Do not mutate the stored patch merely to optimize visual display.
+A useful conceptual layout is:
+
+```text
+┌──────────────┬──────────────┐
+│ Revision A   │ Revision B   │   additional sources can be tabs/cards
+│ passage      │ passage      │
+└──────────────┴──────────────┘
+             ↓ pick / compare
+┌─────────────────────────────┐
+│ Composite                   │
+│ editable resulting prose    │
+└─────────────────────────────┘
+```
+
+Do not require three or four full manuscript columns simultaneously. The UI should remain compact and allow source revisions to be swapped, pinned, or temporarily expanded.
+
+## 36.1 Provenance during composition
+
+When text is copied/adopted from a revision inside NoirDraft, preserve lightweight provenance where practical:
+
+```text
+source revision
+source range or hunk
+result range
+```
+
+Internal copy/paste may use an application-specific clipboard payload in addition to ordinary `text/plain`. Copying through another application may naturally lose this metadata without affecting the text itself.
+
+When the composite becomes a new revision, provenance can be summarized as source references associated with that revision. It must not automatically convert those source revisions into graph parents.
+
+An explicit future merge command may create a true multi-parent revision; ordinary pick-and-choose composition should not.
+
+## 36.2 Proposal preservation
+
+All generated alternatives should remain available to the workbench even if they were never checked out as canonical STORY. This is necessary for the application to manage abundance rather than discarding potentially useful prose.
+
+The workbench should make "not chosen yet" cheap. Accept/reject should not mean irreversible keep/delete.
 
 ---
 
@@ -1882,35 +1944,57 @@ Use UTF-8 for disk storage.
 
 # 51. UI organization
 
-Initial application structure can remain simple:
+The application should be visually compact, dark, and writing-first. Avoid an IDE-like shell and avoid permanently spending vertical space on implementation/debug information.
+
+Remove the default Electron/native menu bar from the normal interface.
+
+Use one small application header row containing only high-value controls and status, for example:
 
 ```text
-┌─────────────────────────────────────────────┐
-│ toolbar / document / model status           │
-├──────────────┬──────────────────────────────┤
-│ navigation   │                              │
-│              │ selected primary view        │
-│ Story        │                              │
-│ Metadata     │                              │
-│ Chat         │                              │
-│ Versions     │                              │
-│              │                              │
-├──────────────┴──────────────────────────────┤
-│ optional model/context/status information   │
-└─────────────────────────────────────────────┘
+NoirDraft   story.md · saved            Undo   Redo…   Save   ⋮
 ```
 
-Do not lock into a sidebar-heavy IDE layout.
+The permanent revision-note input does not belong in this header. Ask for an optional note only when the user explicitly creates a checkpoint/save that benefits from one, or expose note editing from revision details.
 
-This is a writing application, not a programming environment.
+Development diagnostics such as Electron/Chromium versions, EditContext labels, prototype banners, and low-level status strings should move behind a debug/developer mode.
 
-The Story pane should receive the greatest visual emphasis.
+The main layout should be:
+
+```text
+┌──────────────────────────────────────────────────────────┐
+│ compact title / document status / core actions           │
+├──────────┬─────────────────────────────────┬─────────────┤
+│ left     │                                 │ right       │
+│ nav      │          main workspace         │ chat / AI   │
+│          │                                 │ context     │
+│ collaps. │                                 │ collaps.    │
+└──────────┴─────────────────────────────────┴─────────────┘
+```
+
+The left navigation sidebar is collapsible and contains STORY/METADATA navigation plus entry points to history tools.
+
+The right sidebar is collapsible and primarily hosts chat/agent interaction, context pins/references, generation state, and context inspection when relevant.
+
+Both sidebars should be able to disappear entirely so the story editor can occupy nearly the full window.
+
+The Story workspace receives the greatest visual emphasis. History machinery should appear on demand rather than permanently reducing manuscript space.
+
+The major working modes are complementary, not four unrelated full-screen pages:
+
+```text
+Normal writing        STORY + subtle passage history + optional sidebars
+Revision workbench    compare alternatives + editable composite
+History graph         navigate nearby revision topology
+Metadata              edit/navigation of project references
+```
+
+CHAT remains stored as its own Markdown root, but its normal interaction surface is the right sidebar rather than requiring the author to leave the story whenever they talk to the model.
 
 ---
 
-# 52. STORY navigator
+# 52. STORY navigator and passage history
 
-Because headings already represent meaningful structure, build navigation directly from them.
+Derive the STORY outline directly from headings using the shared scanner.
 
 Example:
 
@@ -1926,17 +2010,17 @@ Chapter Two
 
 No separate outline database is necessary.
 
-Clicking navigates to the corresponding story range.
+Clicking a heading navigates to the corresponding story range.
 
-The same heading parser used by context/navigation should feed this view.
+The same left sidebar can expose passage-history actions for the current selection. Do not show an always-on Git-blame column beside every paragraph; instead provide a compact contextual control that can reveal the revisions that actually changed the selected passage.
 
-Do not create duplicate structural representations.
+The passage-history projection is derived from whole-STORY patches as described in section 35.
 
 ---
 
 # 53. METADATA navigator
 
-Likewise derive navigation from heading hierarchy.
+Derive METADATA navigation from its heading hierarchy.
 
 Example:
 
@@ -1950,15 +2034,17 @@ Places
     Citadel
 ```
 
-Pin actions operate directly on these paths.
+Pin actions operate directly on these human-readable paths.
+
+METADATA editing may take the central workspace when explicitly selected, but metadata navigation remains available from the collapsible left sidebar.
 
 ---
 
-# 54. CHAT navigator
+# 54. CHAT sidebar and navigator
 
-Chat history can similarly use Markdown headings as its natural grouping mechanism.
+`# CHAT` remains ordinary Markdown storage, but normal conversation with the model should live in the collapsible right sidebar so the author can keep STORY visible while discussing or rewriting it.
 
-Avoid prematurely forcing one rigid concept of "conversation."
+Chat history can still use Markdown headings as its natural grouping mechanism. Avoid prematurely forcing one rigid concept of "conversation."
 
 A writer may want:
 
@@ -1971,26 +2057,39 @@ revision conversation
 
 The Markdown hierarchy should accommodate those naturally.
 
+When the sidebar needs more room, it may expand or take the main workspace, but the default writing flow should not require switching away from STORY just to issue an instruction.
+
 ---
 
-# 55. VERSIONS graph view
+# 55. History graph view
 
-Parse `# VERSIONS` into an in-memory graph projection.
+Parse `# VERSIONS` into an in-memory graph projection. Graph data is always derived from Markdown; do not create a hidden graph database.
 
-Each node should expose:
+Do **not** render the complete revision graph as an ever-growing indented list. That representation becomes unusable as depth and branching increase.
+
+Use a current-node-centered graph. Show only a bounded neighborhood around the selected/current revision:
 
 ```text
-revision identifier
-parent(s)
-timestamp
-origin
-note
-affected change summary if available
+                 r75
+                  │
+r68 ···7··· r82 ─ r83 ─ [r84] ─ r85
+                           \
+                            r86
 ```
 
-Graph data is derived from Markdown every time the file is loaded.
+Requirements:
 
-Do not maintain a second hidden graph database.
+* current/selected revision is visually central;
+* show a configurable number of immediate parents, children, siblings, and nearby branch nodes;
+* collapse distant stretches into jump edges labelled with the number of hidden revisions;
+* clicking a jumper expands/navigates toward that region rather than loading the entire graph;
+* support searching farther revisions by note, revision ID, origin, time, affected text/heading where available;
+* allow filtering to revisions relevant to the currently selected STORY range;
+* preserve explicit `Redo…` / `Undo…` branch choices through this same graph UI;
+* show origin, timestamp, note, proposal/current state, and provenance hints without turning every node into a large card;
+* allow inspection of exact stored patch/checkpoint data on demand, but do not make raw patch text the default graph presentation.
+
+The graph is a navigation tool. The revision workbench is the composition tool. Do not overload either with the other's responsibilities.
 
 ---
 
@@ -2322,13 +2421,12 @@ Separate fine local editing undo from durable revision history.
 
 ---
 
-## Phase 8 — Versions graph UI
+## Phase 8 — Initial Versions projection (completed prototype scope)
 
-Visualize revision graph.
-
-Support:
+Maintain the existing minimal history projection as a verified foundation:
 
 ```text
+parsed graph data
 current node
 checkout
 branch inspection
@@ -2336,10 +2434,47 @@ notes
 origin
 timestamps
 Redo… navigation
-diff inspection
+canonical diff inspection
 ```
 
-Avoid merge functionality initially.
+This phase proves history reconstruction and basic navigation, but its indented/card presentation is explicitly not the final history UX.
+
+---
+
+## Phase 8A — Compact application shell
+
+Refine the prototype shell before adding more major model-facing features:
+
+```text
+remove default native menu bar
+single compact header row
+smaller/darker visual treatment
+collapsible left navigation
+collapsible right chat/AI sidebar
+remove permanent prototype/debug labels from normal UI
+move optional revision note out of permanent toolbar
+maximize central writing space
+```
+
+Preserve keyboard accessibility and expose developer diagnostics only through an explicit debug mode.
+
+---
+
+## Phase 8B — Revision navigation and composition workbench
+
+Replace the minimal Versions presentation with the core writing-oriented history UX.
+
+Implement in this order:
+
+1. **Passage lineage** — for a selected STORY range, derive revisions that changed that text by mapping ranges through exact patches; expose compact contextual navigation without stable paragraph IDs.
+2. **Revision comparison** — compare multiple revisions/passages with prose-oriented diff highlighting and synchronized context.
+3. **Editable Composite** — let the author pick hunks/phrases/paragraphs from alternatives, manually edit the result, and commit it as a new revision.
+4. **Revision references for AI** — allow selected revisions/passages in the workbench to be explicitly included as context for another pass, with clear visual indication of what is included.
+5. **Provenance** — retain source revision/range metadata for internal pick/copy/paste where practical, while keeping provenance distinct from ancestry.
+6. **Local graph** — replace the unbounded indented list with a current-node-centered bounded graph, expandable jump edges, search, and selection-relevant filtering.
+7. **Proposal preservation** — ensure every AI-generated alternative can exist as a sibling revision even when it is never checked out as current STORY.
+
+Do not introduce automatic multi-parent ancestry merely because a composite copied text from several revisions. Reserve multiple parents for an explicit merge operation.
 
 ---
 
@@ -2406,14 +2541,17 @@ selection
 instruction
 context assembly
 generation
-proposal
-accept/reject
-revision commit
+proposal revision created from exact base
+proposal previewed without checking it out
+choose / compare / compose / request another pass
+explicit checkout or composite commit when desired
 ```
 
-Never silently replace text.
+Never silently replace canonical STORY.
 
-Support generation from the same base multiple times, naturally producing branches.
+Every successful proposal becomes a preserved agent-origin revision branch from its exact base, even if the author does not select it. Multiple generations from one base therefore remain available to passage history and the revision workbench rather than overwriting one another.
+
+The author may explicitly check out a proposal, use only parts of it in a composite, include it as context for another AI pass, or leave it as an unselected alternative.
 
 ---
 
@@ -2438,21 +2576,22 @@ Never create a new STORY revision merely because its metadata note arrived.
 
 ## Phase 14 — Refinement
 
-Only after real writing use, consider:
+Only after real writing use, consider refinements beyond the core revision workbench:
 
 ```text
 tables
-prose-oriented word diff
-partial hunk acceptance
-compare sibling revisions
-richer revision navigation
+more sophisticated diff heuristics
+true explicit multi-parent merge workflow
+advanced move/split/join lineage heuristics
 more Gemma tools
 additional context retrieval
 semantic search/embeddings
 more Markdown extensions
 ```
 
-Do not build these merely because they are possible.
+Do not postpone the basic comparison/composite/passage-history workflow to this phase; that is core functionality and belongs in Phase 8B.
+
+Do not build optional refinements merely because they are possible.
 
 ---
 
@@ -2620,11 +2759,15 @@ It should provide:
 * context pinning;
 * chat;
 * whole-STORY persistent revision graph;
-* branch-aware undo/redo;
-* diffs;
+* branch-aware undo/redo with explicit `Redo…` / `Undo…` choices where ancestry is ambiguous;
+* passage-level revision navigation derived from patches;
+* comparison/composition workbench with an editable composite;
+* preserved AI proposal branches, including unselected alternatives;
+* bounded current-node-centered history graph rather than an unbounded indented list;
+* prose-oriented diffs and source provenance for composite work where practical;
 * KoboldCpp connection;
 * selection/section rewrite;
-* explicit accept/reject;
+* explicit proposal preview/checkout/comparison/composition controls;
 * background AI commit notes;
 * context visibility.
 
@@ -2649,7 +2792,7 @@ Do not initially build:
 * publishing/layout engine;
 * rich-text WYSIWYG conversion;
 * Git integration;
-* complex merge conflict resolution.
+* automatic/complex merge conflict resolution; explicit multi-parent merge may be added later, but ordinary composition must not fake merge ancestry.
 
 These can distract from the core problem.
 
