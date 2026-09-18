@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { startFakeKoboldServer } from '../support/fake-kobold-server.js';
 
-test('the AI sidebar detects a disconnected server cleanly, then connects to the fake KoboldCpp server', async () => {
+test('the app info dialog reports a disconnected server, then the connected fake KoboldCpp model', async () => {
   // Isolate machine-global preferences so the initial "disconnected" check
   // below is deterministic even when a real KoboldCpp server happens to be
   // running on the application's normal default URL, as it may be on a
@@ -27,8 +27,11 @@ test('the AI sidebar detects a disconnected server cleanly, then connects to the
 
     // The isolated preferences point at an unreachable port, so the editor
     // must show a clean disconnected state rather than hanging or throwing.
-    const status = window.getByLabel('AI connection status');
-    await expect(status).toContainText('Disconnected');
+    await window.getByLabel('More actions').click();
+    await window.getByRole('button', { name: 'App info…' }).click();
+    const info = window.getByRole('dialog', { name: 'NoirDraft' });
+    await expect(info.getByText('Disconnected', { exact: true })).toBeVisible();
+    await info.getByLabel('Close app info').click();
 
     const server = await startFakeKoboldServer({ model: 'gemma-fake', contextLength: 8192 });
     try {
@@ -37,8 +40,11 @@ test('the AI sidebar detects a disconnected server cleanly, then connects to the
       await window.getByLabel('KoboldCpp server URL').fill(server.url);
       await window.getByRole('button', { name: 'Connect' }).click();
 
-      await expect(status).toContainText('Connected: gemma-fake');
-      await expect(status).toContainText('8192');
+      await window.getByLabel('More actions').click();
+      await window.getByRole('button', { name: 'App info…' }).click();
+      await expect(info.getByText('Connected', { exact: true })).toBeVisible();
+      await expect(info.getByText('gemma-fake', { exact: true })).toBeVisible();
+      await expect(info.getByText('8192 tokens', { exact: true })).toBeVisible();
 
       const contextLength = await window.evaluate(() => window.__noirDraftTest.getKoboldContextLength());
       expect(contextLength).toBe(8192);

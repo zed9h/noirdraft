@@ -29,13 +29,18 @@ test('launches the secure, menu-free compact shell', async () => {
     expect(editContext.available).toBe(true);
     expect(editContext.attached).toBe(true);
 
-    // Developer diagnostics are hidden by default and revealed through the overflow menu.
-    const runtimeLabel = window.getByLabel('Runtime version');
-    await expect(runtimeLabel).toBeHidden();
+    // Runtime diagnostics live in an on-demand info dialog, never in the editor chrome.
     await window.getByLabel('More actions').click();
-    await window.getByRole('button', { name: 'Developer info' }).click();
-    await expect(runtimeLabel).toBeVisible();
-    await expect(runtimeLabel).toContainText('Electron');
+    await window.getByRole('button', { name: 'App info…' }).click();
+    const info = window.getByRole('dialog', { name: 'NoirDraft' });
+    await expect(info).toBeVisible();
+    await expect(info.getByText(/words · .* characters ·/)).toHaveCount(3);
+    await expect(info.getByText('1 revision · current 0', { exact: false })).toBeVisible();
+    await expect(info.getByText(/current Markdown/)).toBeVisible();
+    await expect(info.getByText('Electron', { exact: false })).toBeVisible();
+    await expect(info.getByText('0.1.0', { exact: false })).toBeVisible();
+    await info.getByLabel('Close app info').click();
+    await expect(info).toBeHidden();
 
     // Both sidebars are collapsible, and the writing area still works once collapsed.
     const sidebarLeft = window.getByLabel('Project views');

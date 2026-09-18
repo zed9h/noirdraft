@@ -18,20 +18,33 @@ import { projectRoot } from './project/projection.js';
 import { serializeProjectDocument } from './project/serialize.js';
 
 const runtime = window.noirDraft?.runtime;
-const runtimeElement = document.querySelector('.runtime');
-if (runtime && runtimeElement) runtimeElement.textContent = `Electron ${runtime.electron} · Chromium ${runtime.chromium}`;
 
-const shell = document.querySelector('.shell');
 const sidebarLeft = document.querySelector('[data-sidebar-left]');
 const sidebarRight = document.querySelector('[data-sidebar-right]');
 const toggleLeftButton = document.querySelector('[data-toggle-left]');
 const toggleRightButton = document.querySelector('[data-toggle-right]');
-const toggleDebugButton = document.querySelector('[data-toggle-debug]');
 const overflowToggle = document.querySelector('[data-overflow-toggle]');
 const overflowMenu = document.querySelector('[data-overflow-menu]');
 const saveNotePopover = document.querySelector('[data-save-note-popover]');
 const saveNoteInput = document.querySelector('[data-save-note-input]');
 const chatOutline = document.querySelector('[data-chat-outline]');
+const appInfoButton = document.querySelector('[data-app-info]');
+const appInfoDialog = document.querySelector('[data-app-info-dialog]');
+const appVersion = document.querySelector('[data-app-version]');
+const appAIConnection = document.querySelector('[data-app-ai-connection]');
+const appAIModel = document.querySelector('[data-app-ai-model]');
+const appAIContext = document.querySelector('[data-app-ai-context]');
+const appRuntime = document.querySelector('[data-app-runtime]');
+const appDocument = document.querySelector('[data-app-document]');
+const appStorageSize = document.querySelector('[data-app-storage-size]');
+const appSectionCount = document.querySelector('[data-app-section-count]');
+const appStoryStats = document.querySelector('[data-app-story-stats]');
+const appMetadataStats = document.querySelector('[data-app-metadata-stats]');
+const appChatStats = document.querySelector('[data-app-chat-stats]');
+const appVersionStats = document.querySelector('[data-app-version-stats]');
+const appOtherSections = document.querySelector('[data-app-other-sections]');
+const appOtherSectionStats = document.querySelector('[data-app-other-section-stats]');
+let getStorageContents = null;
 
 const closeOverflowMenu = () => {
   overflowMenu.hidden = true;
@@ -51,12 +64,28 @@ const setSidebarVisible = (sidebar, toggleButton, visible) => {
   toggleButton.setAttribute('aria-expanded', String(visible));
 };
 
-toggleDebugButton.addEventListener('click', () => {
-  const next = shell.dataset.debug !== 'true';
-  shell.dataset.debug = String(next);
-  toggleDebugButton.setAttribute('aria-pressed', String(next));
-  closeOverflowMenu();
-});
+const byteSize = (text) => new TextEncoder().encode(String(text)).length;
+const formatSize = (bytes) => {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KiB`;
+  return `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
+};
+const wordCount = (text) => {
+  if (typeof Intl.Segmenter === 'function') {
+    return [...new Intl.Segmenter(undefined, { granularity: 'word' }).segment(String(text))]
+      .filter(({ isWordLike }) => isWordLike).length;
+  }
+  return String(text).match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu)?.length ?? 0;
+};
+const characterCount = (text) => typeof Intl.Segmenter === 'function'
+  ? [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(String(text))].length
+  : [...String(text)].length;
+const contentStats = (text, storageBytes) => `${wordCount(text).toLocaleString()} words · ${characterCount(text).toLocaleString()} characters · ${formatSize(storageBytes)} stored`;
+const chatStats = (text, storageBytes) => {
+  const messages = String(text).match(/^##\s+(?:User|Agent)\s*#*\s*$/gim)?.length ?? 0;
+  const conversations = String(text).match(/^#(?!#)\s+.+$/gm)?.length ?? 0;
+  return `${conversations} conversation${conversations === 1 ? '' : 's'} · ${messages} message${messages === 1 ? '' : 's'} · ${contentStats(text, storageBytes)}`;
+};
 
 const toggleAutoNotesButton = document.querySelector('[data-toggle-auto-notes]');
 let autoNotesEnabled = false;
@@ -76,6 +105,7 @@ const aiConnectionCancel = document.querySelector('[data-ai-connection-cancel]')
 const preferences = window.noirDraft?.preferences;
 let koboldClient = null;
 let koboldContextLength = null;
+let koboldModel = null;
 let onConnectionChange = () => {};
 
 const setAIStatus = (text, state = 'disconnected') => {
@@ -83,9 +113,51 @@ const setAIStatus = (text, state = 'disconnected') => {
   aiStatus.dataset.connected = state;
 };
 
+const updateAppInfo = () => {
+  let storage = null;
+  let storedProject = null;
+  try {
+    storage = getStorageContents?.() ?? null;
+    storedProject = parseProjectDocument(storage);
+  } catch {
+    // An invalid in-progress Markdown projection must not prevent opening the
+    // information dialog; the individual content counts remain useful.
+  }
+  const storedSectionSize = (name) => byteSize(storedProject?.roots[name]?.source ?? '');
+  const otherRoots = storedProject?.unknownRoots ?? project.unknownRoots;
+  const otherBytes = otherRoots.reduce((total, root) => total + byteSize(root.source), 0);
+  appDocument.textContent = currentDocument?.filePath.split(/[\\/]/).at(-1) ?? 'Untitled story';
+  appStorageSize.textContent = storage ? `${formatSize(byteSize(storage))} · current Markdown` : 'Not available while this document is invalid';
+  const sectionCount = storedProject?.segments.filter(({ type }) => type === 'root').length ?? 0;
+  appSectionCount.textContent = `${sectionCount} top-level section${sectionCount === 1 ? '' : 's'}`;
+  appStoryStats.textContent = contentStats(models.STORY.text, storedSectionSize('STORY'));
+  appMetadataStats.textContent = contentStats(models.METADATA.text, storedSectionSize('METADATA'));
+  appChatStats.textContent = chatStats(models.CHAT.text, storedSectionSize('CHAT'));
+  const revisionCount = history?.revisions.size ?? 0;
+  appVersionStats.textContent = `${revisionCount} revision${revisionCount === 1 ? '' : 's'} · current ${history?.currentRevision ?? '—'} · ${formatSize(storedSectionSize('VERSIONS'))}`;
+  appOtherSections.hidden = otherRoots.length === 0;
+  appOtherSectionStats.textContent = `${otherRoots.length} section${otherRoots.length === 1 ? '' : 's'} · ${formatSize(otherBytes)}`;
+  appAIConnection.textContent = aiStatus.dataset.connected === 'true' ? 'Connected' : 'Disconnected';
+  appAIModel.textContent = koboldModel ?? '—';
+  appAIContext.textContent = koboldContextLength ? `${koboldContextLength} tokens` : '—';
+  appRuntime.textContent = runtime ? `Electron ${runtime.electron} · Chromium ${runtime.chromium}` : 'Unavailable';
+};
+
+appInfoButton.addEventListener('click', async () => {
+  closeOverflowMenu();
+  updateAppInfo();
+  appInfoDialog.showModal();
+  try {
+    appVersion.textContent = await runtime?.getAppVersion?.() ?? 'Unavailable';
+  } catch {
+    appVersion.textContent = 'Unavailable';
+  }
+});
+
 const connectToKobold = async (baseUrl) => {
   koboldClient = new KoboldClient(baseUrl);
   koboldContextLength = null;
+  koboldModel = null;
   setAIStatus(`Connecting to ${baseUrl}…`);
   const availability = await koboldClient.checkAvailability();
   if (!availability.available) {
@@ -99,6 +171,7 @@ const connectToKobold = async (baseUrl) => {
     koboldContextLength = null;
   }
   const contextLabel = koboldContextLength ? ` · context ${koboldContextLength}` : '';
+  koboldModel = availability.model ?? null;
   setAIStatus(`Connected: ${availability.model ?? 'unknown model'}${contextLabel}`, 'true');
   onConnectionChange();
 };
@@ -865,8 +938,9 @@ try {
   });
 
   const renderVersions = () => {
-    if (!history || !versionList) return;
+    if (!history) return;
     renderLocalGraph();
+    if (!versionList) return;
     versionList.replaceChildren();
     const depthCache = new Map();
     for (const revision of [...history.revisions.values()].sort((left, right) => left.id - right.id)) {
@@ -1052,6 +1126,7 @@ try {
     replacements.set('VERSIONS', serializeHistory(history));
     return serializeProjectDocument(project, replacements);
   };
+  getStorageContents = buildProjectContents;
 
   persistAfterCommit = async () => {
     if (!currentDocument || historyMismatch) return;

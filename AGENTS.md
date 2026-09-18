@@ -1,32 +1,66 @@
-# Agent instructions for NoirDraft
+# NoirDraft agent guide
 
-## E2E tests must run headless (virtual display), not headed
+This is the cold-start map for work in this repository. Read the focused module and its matching tests before changing behavior; core logic is intentionally small, plain JavaScript modules.
 
-Electron has no true headless mode — every `_electron.launch()` call opens a
-real OS window. On this Linux development machine, that window opens on the
-actual desktop and blocks the user from using their computer while tests run.
-
-**Always run E2E tests through Xvfb, never directly:**
+## First five minutes
 
 ```sh
-npm run test:e2e:virtual        # preferred: whole E2E suite, isolated virtual display
-xvfb-run -a npx playwright test <file>   # preferred: a single spec file
+git status --short
+cat package.json
+rg --files src test docs | sort
+npm test
 ```
 
-**Never run these directly** (they open real, visible windows):
+Read `README.md` for user behavior, `PLAN.md` for the product/storage contract, `TODO.md` for implementation evidence and scope, and `REVIEW.md` for remaining manual release work. Preserve unrelated dirty-worktree changes.
+
+## Find the right code
+
+| Task | Start here | Tests to read |
+| --- | --- | --- |
+| Electron lifecycle, IPC, files, backups, preferences | `src/main/` | `files.test.js`, `preferences.test.js` |
+| Text input, caret, selection, Markdown display | `src/renderer/editor/` | `editor.spec.js`, `model.test.js`, `markdown-scan.test.js` |
+| UI/view switching | `src/renderer/app.js`, `index.html`, `styles.css` | matching `test/e2e/*.spec.js` |
+| Project roots, headings, pins, CHAT | `src/renderer/project/` | `project.test.js`, `navigation-pins.test.js`, `chat.test.js` |
+| Revisions, diffs, branches, lineage, composites | `src/renderer/history/` | matching unit and E2E history tests |
+| KoboldCpp, prompts, proposals, notes | `src/renderer/ai/` | `kobold.test.js`, `agent.test.js`, `notes.test.js` |
+
+Keep deterministic logic in its focused subsystem, then wire it through `app.js`; do not turn `app.js` into a business-logic bucket.
+
+## Architecture invariants
+
+- The Markdown file is authoritative: no hidden database, binary sidecar, or second canonical manuscript state.
+- Preserve unknown roots and line-ending conventions on parse/serialize.
+- `StoryModel` is canonical text and selection. DOM, renderer, EditContext, caret geometry, and AI operations project from it.
+- Source offsets are UTF-16. Keep DOM/source mappings reversible, including formatted and terminal-empty rows.
+- AI output is a proposal until explicit application; a missing KoboldCpp server must not block editing/saving.
+- History records meaningful editing intervals. Adopted-text provenance is not history ancestry.
+
+## Develop and verify
+
+Requires Node.js 22+:
 
 ```sh
-npm run test:e2e
-npx playwright test ...
+npm install
+npm start
+npm test
 ```
 
-`npm run validate` also runs the suite headed via `npm run test:e2e` —
-prefer running `npm test` and `xvfb-run -a npx playwright test` (or
-`npm run test:e2e:virtual`) separately instead of `npm run validate` when
-you need the E2E portion.
+Add a unit test for pure logic. Add an E2E test when behavior involves Electron, DOM layout, keyboard/mouse input, selection, or EditContext. Use `test/support/fake-kobold-server.js`, not a live model, for automated AI tests.
 
-Only fall back to a real (non-Xvfb) headed run if a test is failing in a way
-that seems specific to the virtual display itself (e.g., a genuine GPU/font
-rendering difference) and you've confirmed Xvfb isn't the actual cause —
-this should be rare, and even then prefer capturing a screenshot under Xvfb
-first rather than watching a live window.
+### Always use Xvfb for E2E on this Linux machine
+
+Electron has no true headless mode; `_electron.launch()` opens a real window. Run:
+
+```sh
+npm run test:e2e:virtual
+xvfb-run -a npx playwright test <file>
+```
+
+Do not run `npm run test:e2e`, `npx playwright test ...`, or `npm run validate` directly here: they can take over the active desktop. Prefer focused virtual-display tests while iterating. Run `git diff --check` before handoff; `npm pack --dry-run` checks package contents.
+
+## Useful references
+
+- `docs/edit-context-manual-validation.md`: Windows IME/dead-key/emoji/clipboard pass.
+- `docs/chat-format.md`, `docs/versions-format.md`: persistent Markdown formats.
+- `test/fixtures/`: awkward Markdown and LF/CRLF fixtures.
+- `test/support/fake-kobold-server.js`: deterministic AI integration server.

@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
-    <div class="shell" data-debug="false">
+    <div class="shell">
       <header class="app-header">
         <div class="header-left">
           <button type="button" class="icon-button" data-toggle-left aria-label="Toggle navigation sidebar" aria-expanded="true">☰</button>
@@ -29,7 +29,7 @@
               <button type="button" data-record-external hidden>Record external edit</button>
               <button type="button" data-ai-connection>AI connection…</button>
               <button type="button" data-toggle-auto-notes aria-pressed="false">Automatic revision notes</button>
-              <button type="button" data-toggle-debug aria-pressed="false">Developer info</button>
+              <button type="button" data-app-info>App info…</button>
             </div>
           </div>
         </div>
@@ -46,6 +46,38 @@
         <button type="button" data-ai-connection-confirm>Connect</button>
         <button type="button" data-ai-connection-cancel>Cancel</button>
       </div>
+      <dialog class="app-info-dialog" data-app-info-dialog aria-labelledby="app-info-title">
+        <form method="dialog">
+          <div class="app-info-heading">
+            <div>
+              <h2 id="app-info-title">NoirDraft</h2>
+              <p>A local-first Markdown editor for fiction.</p>
+            </div>
+            <button type="submit" class="icon-button" aria-label="Close app info">×</button>
+          </div>
+          <dl class="app-info-details">
+            <div><dt>Document</dt><dd data-app-document>Untitled story</dd></div>
+            <div><dt>Storage file</dt><dd data-app-storage-size>—</dd></div>
+            <div><dt>Sections</dt><dd data-app-section-count>—</dd></div>
+          </dl>
+          <h3 class="app-info-group">Manuscript</h3>
+          <dl class="app-info-details">
+            <div><dt>Story</dt><dd data-app-story-stats>—</dd></div>
+            <div><dt>Metadata</dt><dd data-app-metadata-stats>—</dd></div>
+            <div><dt>Chat</dt><dd data-app-chat-stats>—</dd></div>
+            <div><dt>Versions</dt><dd data-app-version-stats>—</dd></div>
+            <div data-app-other-sections hidden><dt>Other roots</dt><dd data-app-other-section-stats>—</dd></div>
+          </dl>
+          <h3 class="app-info-group">Application</h3>
+          <dl class="app-info-details">
+            <div><dt>App version</dt><dd data-app-version>Loading…</dd></div>
+            <div><dt>AI connection</dt><dd data-app-ai-connection>Checking…</dd></div>
+            <div><dt>AI model</dt><dd data-app-ai-model>—</dd></div>
+            <div><dt>Context length</dt><dd data-app-ai-context>—</dd></div>
+            <div><dt>Runtime</dt><dd data-app-runtime>Loading…</dd></div>
+          </dl>
+        </form>
+      </dialog>
       <div class="body">
         <nav class="sidebar sidebar-left" data-sidebar-left aria-label="Project views">
           <div class="view-switch">
@@ -64,7 +96,6 @@
           </div>
         </nav>
         <section class="workspace" aria-labelledby="editor-title">
-          <p class="eyebrow debug-only">EditContext feasibility prototype</p>
           <div
             id="story-editor"
             class="story-editor editor-pane"
@@ -106,7 +137,6 @@
               <input type="text" data-version-search aria-label="Search revisions" placeholder="Search revisions (id, note, origin)…">
               <div class="version-search-results" data-version-search-results hidden></div>
               <div class="version-graph" data-version-graph aria-label="Local revision graph"></div>
-              <div class="version-list debug-only" data-version-list aria-label="Full revision list (developer)"></div>
             </div>
             <aside class="version-inspector" data-version-inspector>
               <p>Select a revision to inspect its stored patch or checkpoint.</p>
@@ -114,12 +144,10 @@
           </section>
           <footer class="editor-status" aria-live="polite">
             <span data-selection-status>0 characters</span>
-            <span class="debug-only">EditContext prototype · source-visible Markdown</span>
-            <span class="runtime debug-only" aria-label="Runtime version"></span>
           </footer>
         </section>
         <aside class="sidebar sidebar-right" data-sidebar-right aria-label="Chat">
-          <div class="ai-status" data-ai-status aria-label="AI connection status">Disconnected</div>
+          <div class="ai-status" data-ai-status aria-label="AI connection status" hidden>Disconnected</div>
           <div class="context-inspector" data-context-inspector aria-label="Context inspector" hidden>
             <button type="button" data-context-toggle>Preview context…</button>
             <div class="context-inspector-body" data-context-inspector-body hidden></div>

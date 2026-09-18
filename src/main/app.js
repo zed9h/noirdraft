@@ -70,6 +70,10 @@ function registerPreferencesHandlers() {
   ipcMain.handle('preferences:set', (_event, patch) => writePreferences(preferencesPath, patch));
 }
 
+function registerRuntimeHandlers() {
+  ipcMain.handle('runtime:getAppVersion', () => app.getVersion());
+}
+
 function createWindow() {
   const window = new BrowserWindow({
     width: 1200,
@@ -95,6 +99,7 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   registerDocumentHandlers();
   registerPreferencesHandlers();
+  registerRuntimeHandlers();
   createWindow();
 
   app.on('activate', () => {

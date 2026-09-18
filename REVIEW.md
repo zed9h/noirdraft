@@ -35,10 +35,10 @@ is for a human to sanity-check them together, on a manuscript with real
 branching, the way the automated tests can't fully substitute for.
 
 1. **Compact shell**: confirm no native menu bar appears; collapse and
-   restore both sidebars; toggle Developer info and confirm the runtime/debug
-   labels appear only then.
+   restore both sidebars; open App info… and confirm the version and runtime
+   details are available without adding labels to the writing view.
 2. **KoboldCpp connection**: point the AI connection popover at a real running
-   KoboldCpp server; confirm the sidebar shows the real model name and context
+   KoboldCpp server; confirm App info… shows the real model name and context
    length (not an estimate).
 3. **Branch a manuscript**: make an edit, save, undo, make a different edit,
    save — creating two sibling revisions from the same parent. Confirm
