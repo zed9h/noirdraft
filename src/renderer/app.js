@@ -34,6 +34,7 @@ const appVersion = document.querySelector('[data-app-version]');
 const appAIConnection = document.querySelector('[data-app-ai-connection]');
 const appAIModel = document.querySelector('[data-app-ai-model]');
 const appAIContext = document.querySelector('[data-app-ai-context]');
+const appSelection = document.querySelector('[data-app-selection]');
 const appRuntime = document.querySelector('[data-app-runtime]');
 const appDocument = document.querySelector('[data-app-document]');
 const appStorageSize = document.querySelector('[data-app-storage-size]');
@@ -225,10 +226,12 @@ const compositeViewButton = document.querySelector('[data-view="COMPOSITE"]');
 const compositeCommitButton = document.querySelector('[data-composite-commit]');
 const compositeDiscardButton = document.querySelector('[data-composite-discard]');
 const compositeProvenanceList = document.querySelector('[data-composite-provenance]');
-const selectionStatus = document.querySelector('[data-selection-status]');
 const documentStatus = document.querySelector('[data-document-status]');
 const editorTitle = document.querySelector('#editor-title');
-const outline = document.querySelector('[data-outline]');
+const outlines = {
+  STORY: document.querySelector('[data-outline-story]'),
+  METADATA: document.querySelector('[data-outline-metadata]'),
+};
 const pinStatus = document.querySelector('[data-pin-status]');
 const branchChoices = document.querySelector('[data-branch-choices]');
 const passageHistoryContainer = document.querySelector('[data-passage-history]');
@@ -252,6 +255,7 @@ const versionInspector = document.querySelector('[data-version-inspector]');
 const versionGraph = document.querySelector('[data-version-graph]');
 const versionSearchInput = document.querySelector('[data-version-search]');
 const versionSearchResults = document.querySelector('[data-version-search-results]');
+const versionToggleButtons = document.querySelectorAll('[data-toggle-versions]');
 const undoButton = document.querySelector('[data-undo]');
 const redoButton = document.querySelector('[data-redo]');
 const recordExternalButton = document.querySelector('[data-record-external]');
@@ -267,6 +271,9 @@ const models = {
 let currentDocument = null;
 let project = parseProjectDocument('# STORY\n\n');
 let activeRoot = 'STORY';
+let versionsOpen = false;
+const openFolds = new Set(['STORY', 'METADATA']);
+const collapsedSectionPaths = new Set();
 let metadataDirty = false;
 let chatDirty = false;
 let history = null;
@@ -528,7 +535,7 @@ try {
     if (!compositeState) {
       editors.COMPOSITE.replace(0, models.COMPOSITE.text.length, model.text, 'open');
       compositeState = { baseRevisionId: history.currentRevision, provenance: [], activeRange: [range[0], range[1]] };
-      compositeViewButton.hidden = false;
+      if (compositeViewButton) compositeViewButton.hidden = false;
     }
     const [from, to] = compositeState.activeRange;
     const { text, provenance } = adoptIntoComposite(models.COMPOSITE.text, compositeState.provenance, {
@@ -551,7 +558,7 @@ try {
     const compositeText = models.COMPOSITE.text;
     if (compositeText === baseText) {
       compositeState = null;
-      compositeViewButton.hidden = true;
+      if (compositeViewButton) compositeViewButton.hidden = true;
       switchView('STORY');
       return;
     }
@@ -562,7 +569,7 @@ try {
     });
     models.STORY.replace(0, models.STORY.text.length, compositeText, { origin: 'checkout' });
     compositeState = null;
-    compositeViewButton.hidden = true;
+    if (compositeViewButton) compositeViewButton.hidden = true;
     renderVersions();
     refreshHistoryControls();
     await persistAfterCommit();
@@ -571,7 +578,7 @@ try {
 
   compositeDiscardButton.addEventListener('click', () => {
     compositeState = null;
-    compositeViewButton.hidden = true;
+    if (compositeViewButton) compositeViewButton.hidden = true;
     switchView('STORY');
   });
 
@@ -794,7 +801,7 @@ try {
   };
   const updateSelectionStatus = (detail) => {
     const selected = detail.selectionEnd - detail.selectionStart;
-    selectionStatus.textContent = selected
+    appSelection.textContent = selected
       ? `${selected} of ${detail.text.length} UTF-16 units selected`
       : `${detail.text.length} UTF-16 units · caret ${detail.selectionStart}`;
   };
@@ -837,27 +844,104 @@ try {
     void generateNoteFor(revision);
   };
 
-  const inspectRevision = (revision) => {
+  let focusedRevisionId = null;
+  let inspectedRevisionId = null;
+  let pinnedRevisionIds = [];
+  let renderedGraphNodeIds = [];
+
+  const renderPinnedVariations = async () => {
+    if (!history) return;
     versionInspector.replaceChildren();
     const title = document.createElement('h3');
-    title.textContent = `Revision ${revision.id}`;
-    const metadata = document.createElement('p');
-    metadata.textContent = `${revision.origin} · ${revision.timestamp} · parent${revision.parents.length === 1 ? '' : 's'} ${revision.parents.join(', ') || 'none'}`;
-    const note = document.createElement('p');
-    note.textContent = revision.note ?? '[no note]';
-    const payload = document.createElement('pre');
-    payload.textContent = revision.payload;
-    payload.dataset.payloadType = revision.payloadType;
-    versionInspector.append(title, metadata, note, payload);
+    title.textContent = pinnedRevisionIds.length
+      ? `Pinned variations (${pinnedRevisionIds.length})`
+      : 'Variation inspector';
+    versionInspector.append(title);
+    const ids = pinnedRevisionIds.length ? pinnedRevisionIds : (inspectedRevisionId === null ? [] : [inspectedRevisionId]);
+    if (ids.length === 0) {
+      const hint = document.createElement('p');
+      hint.textContent = 'Select a node with the arrow keys, then pin it to keep its content here. Pinned revisions compare automatically.';
+      versionInspector.append(hint);
+      return;
+    }
+    const revisions = ids.map((id) => history.revisions.get(id)).filter(Boolean);
+    for (const revision of revisions) {
+      const section = document.createElement('section');
+      section.className = 'pinned-variation';
+      const heading = document.createElement('h4');
+      heading.textContent = `Revision ${revision.id}`;
+      const details = document.createElement('p');
+      details.textContent = `${revision.origin} · ${revision.timestamp} · ${revision.note ?? '[no note]'}`;
+      const actions = document.createElement('div');
+      const pin = document.createElement('button');
+      pin.type = 'button';
+      const isPinned = pinnedRevisionIds.includes(revision.id);
+      pin.textContent = isPinned ? 'Unpin' : 'Pin variation';
+      pin.addEventListener('click', () => togglePinnedRevision(revision.id));
+      const checkout = document.createElement('button');
+      checkout.type = 'button';
+      checkout.textContent = revision.id === history.currentRevision ? 'Current' : 'Checkout';
+      checkout.disabled = revision.id === history.currentRevision || !commitController;
+      checkout.addEventListener('click', async () => {
+        await commitController.checkout(revision.id);
+        focusedRevisionId = revision.id;
+        renderVersions();
+        refreshHistoryControls();
+      });
+      const payload = document.createElement('pre');
+      payload.dataset.payloadType = revision.payloadType;
+      payload.textContent = revision.payload;
+      actions.append(pin, checkout);
+      section.append(heading, details, actions, payload);
+      versionInspector.append(section);
+    }
+    if (pinnedRevisionIds.length > 1) {
+      const compare = document.createElement('section');
+      compare.className = 'pinned-comparison';
+      const heading = document.createElement('h4');
+      heading.textContent = 'Automatic comparison';
+      compare.append(heading);
+      const [baseId, ...variationIds] = pinnedRevisionIds;
+      const baseText = await reconstructRevision(history, baseId);
+      for (const variationId of variationIds) {
+        const row = document.createElement('div');
+        row.className = 'variation-diff';
+        const label = document.createElement('p');
+        label.textContent = `Revision ${baseId} ↔ Revision ${variationId}`;
+        row.append(label);
+        const variationText = await reconstructRevision(history, variationId);
+        for (const op of wordDiff(baseText, variationText)) {
+          const span = document.createElement('span');
+          span.className = op.type === 'delete' ? 'diff-delete' : op.type === 'insert' ? 'diff-insert' : '';
+          span.textContent = op.text;
+          row.append(span);
+        }
+        compare.append(row);
+      }
+      versionInspector.append(compare);
+    }
   };
 
-  let focusedRevisionId = null;
+  const inspectRevision = (revision) => {
+    if (!revision) return;
+    inspectedRevisionId = revision.id;
+    void renderPinnedVariations();
+  };
+
+  const togglePinnedRevision = (revisionId) => {
+    pinnedRevisionIds = pinnedRevisionIds.includes(revisionId)
+      ? pinnedRevisionIds.filter((id) => id !== revisionId)
+      : [...pinnedRevisionIds, revisionId];
+    inspectedRevisionId = revisionId;
+    renderVersions();
+  };
 
   const focusGraphOn = (revisionId) => {
     focusedRevisionId = revisionId;
+    inspectedRevisionId = revisionId;
     versionSearchResults.hidden = true;
     versionSearchInput.value = '';
-    renderLocalGraph();
+    renderVersions();
   };
 
   const renderLocalGraph = () => {
@@ -865,51 +949,46 @@ try {
     const centerId = focusedRevisionId ?? history.currentRevision;
     const graph = buildLocalGraph(history, centerId, { radius: 2 });
     versionGraph.replaceChildren();
-    for (const node of [...graph.nodes].sort((left, right) => left.id - right.id)) {
-      const card = document.createElement('article');
-      card.className = [
-        'graph-node',
-        node.isCurrent ? 'current' : '',
-        node.id === centerId ? 'focused' : '',
-      ].filter(Boolean).join(' ');
-      card.dataset.revisionId = String(node.id);
-      const header = document.createElement('header');
-      const inspect = document.createElement('button');
-      inspect.type = 'button';
-      inspect.textContent = `Revision ${node.id}`;
-      inspect.addEventListener('click', () => {
-        focusGraphOn(node.id);
-        inspectRevision(history.revisions.get(node.id));
-      });
-      const checkout = document.createElement('button');
-      checkout.type = 'button';
-      checkout.textContent = node.isCurrent ? 'Current' : 'Checkout';
-      checkout.disabled = node.isCurrent || !commitController;
-      checkout.addEventListener('click', async () => {
-        await commitController.checkout(node.id);
-        focusedRevisionId = null;
-        renderVersions();
-        refreshHistoryControls();
-      });
-      header.append(inspect, checkout);
-      const details = document.createElement('p');
-      details.textContent = `${node.origin} · ${node.timestamp}`;
-      const note = document.createElement('p');
-      const pending = pendingNotes.has(node.id);
-      note.textContent = pending ? 'Generating note…' : (node.note ?? '[no note]');
-      const parents = document.createElement('p');
-      parents.className = 'graph-parents';
-      parents.textContent = node.parents.length ? `parent${node.parents.length > 1 ? 's' : ''} ${node.parents.join(', ')}` : 'root';
-      card.append(header, details, note, parents);
-      if (!pending && !node.note && node.parents.length > 0 && koboldClient && aiStatus.dataset.connected === 'true') {
-        const regenerate = document.createElement('button');
-        regenerate.type = 'button';
-        regenerate.textContent = 'Generate note';
-        regenerate.addEventListener('click', () => void generateNoteFor(history.revisions.get(node.id)));
-        card.append(regenerate);
+    const nodes = [...graph.nodes].sort((left, right) => left.id - right.id);
+    renderedGraphNodeIds = nodes.map(({ id }) => id);
+    const positions = new Map(nodes.map((node, index) => [node.id, {
+      x: 42 + revisionDepth(node.id) * 132,
+      y: 38 + index * 64,
+    }]));
+    const stage = document.createElement('div');
+    stage.className = 'graph-stage';
+    stage.style.minWidth = `${Math.max(360, ...[...positions.values()].map(({ x }) => x + 110))}px`;
+    stage.style.minHeight = `${Math.max(150, nodes.length * 64 + 30)}px`;
+    const lines = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    lines.classList.add('graph-edges');
+    lines.setAttribute('aria-hidden', 'true');
+    for (const node of nodes) {
+      for (const parentId of node.parents) {
+        const parent = positions.get(parentId);
+        const child = positions.get(node.id);
+        if (!parent || !child) continue;
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', String(parent.x)); line.setAttribute('y1', String(parent.y));
+        line.setAttribute('x2', String(child.x)); line.setAttribute('y2', String(child.y));
+        lines.append(line);
       }
-      versionGraph.append(card);
     }
+    stage.append(lines);
+    for (const node of nodes) {
+      const point = positions.get(node.id);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = ['graph-node', node.isCurrent ? 'current' : '', node.id === centerId ? 'focused' : '', pinnedRevisionIds.includes(node.id) ? 'pinned' : ''].filter(Boolean).join(' ');
+      button.dataset.revisionId = String(node.id);
+      button.style.setProperty('--x', `${point.x}px`);
+      button.style.setProperty('--y', `${point.y}px`);
+      button.textContent = String(node.id);
+      button.setAttribute('aria-label', `Revision ${node.id}${pinnedRevisionIds.includes(node.id) ? ', pinned' : ''}`);
+      button.title = `Revision ${node.id}: ${node.note ?? node.origin}`;
+      button.addEventListener('click', () => focusGraphOn(node.id));
+      stage.append(button);
+    }
+    versionGraph.append(stage);
     for (const jump of graph.jumps) {
       const jumpButton = document.createElement('button');
       jumpButton.type = 'button';
@@ -940,71 +1019,63 @@ try {
   const renderVersions = () => {
     if (!history) return;
     renderLocalGraph();
-    if (!versionList) return;
-    versionList.replaceChildren();
-    const depthCache = new Map();
-    for (const revision of [...history.revisions.values()].sort((left, right) => left.id - right.id)) {
-      const node = document.createElement('article');
-      node.className = `version-node${revision.id === history.currentRevision ? ' current' : ''}`;
-      node.style.setProperty('--depth', revisionDepth(revision.id, depthCache));
-      node.dataset.revisionId = String(revision.id);
-      const header = document.createElement('header');
-      const inspect = document.createElement('button');
-      inspect.type = 'button';
-      inspect.textContent = `Revision ${revision.id}`;
-      inspect.addEventListener('click', () => inspectRevision(revision));
-      const checkout = document.createElement('button');
-      checkout.type = 'button';
-      checkout.textContent = revision.id === history.currentRevision ? 'Current' : 'Checkout';
-      checkout.disabled = revision.id === history.currentRevision || !commitController;
-      checkout.addEventListener('click', async () => {
-        await commitController.checkout(revision.id);
-        renderVersions();
-        refreshHistoryControls();
-      });
-      const details = document.createElement('p');
-      details.textContent = `${revision.origin} · ${revision.timestamp}`;
-      const note = document.createElement('p');
-      const pending = pendingNotes.has(revision.id);
-      note.textContent = pending ? 'Generating note…' : (revision.note ?? '[no note]');
-      header.append(inspect, checkout);
-      node.append(header, details, note);
-      if (!pending && !revision.note && revision.parents.length > 0 && koboldClient && aiStatus.dataset.connected === 'true') {
-        const regenerate = document.createElement('button');
-        regenerate.type = 'button';
-        regenerate.textContent = 'Generate note';
-        regenerate.addEventListener('click', () => void generateNoteFor(revision));
-        node.append(regenerate);
-      }
-      versionList.append(node);
-    }
+    void renderPinnedVariations();
   };
 
   const refreshSidebar = () => {
-    if (activeRoot === 'VERSIONS' || activeRoot === 'COMPOSITE') {
-      outline.replaceChildren();
-      pinStatus.replaceChildren();
-      return;
-    }
-    const headings = extractHeadings(models[activeRoot].text, activeRoot);
     const pins = readPins(models.METADATA.text);
     const pinned = new Set(pins);
-    outline.replaceChildren();
-    for (const heading of headings) {
-      const row = document.createElement('div');
-      row.className = 'outline-row';
-      row.style.setProperty('--level', heading.level);
-      const target = document.createElement('button');
-      target.type = 'button';
-      target.className = 'outline-target';
-      target.textContent = heading.title;
-      target.title = heading.path;
-      target.addEventListener('click', () => {
-        editors[activeRoot].setSelection(heading.from, heading.from);
-        elements[activeRoot].focus();
-      });
-      row.append(target);
-      if (activeRoot === 'STORY' || activeRoot === 'METADATA') {
+    for (const rootName of ['STORY', 'METADATA']) {
+      const outline = outlines[rootName];
+      outline.replaceChildren();
+      const headings = extractHeadings(models[rootName].text, rootName);
+      const hasChildren = (heading) => headings.some((candidate) => candidate.path.startsWith(`${heading.path}/`));
+      const isHiddenByAncestor = (heading) => {
+        let ancestorPath = heading.path.slice(0, heading.path.lastIndexOf('/'));
+        while (ancestorPath.includes('/')) {
+          if (collapsedSectionPaths.has(ancestorPath)) return true;
+          ancestorPath = ancestorPath.slice(0, ancestorPath.lastIndexOf('/'));
+        }
+        return false;
+      };
+      for (const heading of headings) {
+        // A pinned heading is an explicit working set: it remains reachable in
+        // the outline even when every one of its ancestors is collapsed.
+        if ((!openFolds.has(rootName) || isHiddenByAncestor(heading)) && !pinned.has(heading.path)) continue;
+        const row = document.createElement('div');
+        row.className = `outline-row${pinned.has(heading.path) ? ' is-pinned' : ''}`;
+        row.style.setProperty('--level', heading.level);
+        if (hasChildren(heading)) {
+          const sectionToggle = document.createElement('button');
+          sectionToggle.type = 'button';
+          sectionToggle.className = 'section-toggle';
+          const collapsed = collapsedSectionPaths.has(heading.path);
+          sectionToggle.textContent = collapsed ? '›' : '⌄';
+          sectionToggle.setAttribute('aria-label', `${collapsed ? 'Expand' : 'Collapse'} ${heading.path}`);
+          sectionToggle.setAttribute('aria-expanded', String(!collapsed));
+          sectionToggle.addEventListener('click', () => {
+            if (collapsed) collapsedSectionPaths.delete(heading.path);
+            else collapsedSectionPaths.add(heading.path);
+            refreshSidebar();
+          });
+          row.append(sectionToggle);
+        } else {
+          const spacer = document.createElement('span');
+          spacer.className = 'section-toggle-spacer';
+          spacer.setAttribute('aria-hidden', 'true');
+          row.append(spacer);
+        }
+        const target = document.createElement('button');
+        target.type = 'button';
+        target.className = 'outline-target';
+        target.textContent = heading.title;
+        target.title = heading.path;
+        target.addEventListener('click', () => {
+          switchView(rootName);
+          editors[rootName].setSelection(heading.from, heading.from);
+          elements[rootName].focus();
+        });
+        row.append(target);
         const toggle = document.createElement('button');
         toggle.type = 'button';
         toggle.className = 'pin-toggle';
@@ -1019,17 +1090,31 @@ try {
           editors.METADATA.replace(0, models.METADATA.text.length, updated, 'pin');
         });
         row.append(toggle);
+        outline.append(row);
       }
-      outline.append(row);
     }
 
-    const unresolved = pins
-      .map((path) => resolveHeadingPath(documentsForPins(), path))
-      .filter(({ status }) => status !== 'resolved');
+    const pinResults = pins.map((path) => resolveHeadingPath(documentsForPins(), path));
+    const unresolved = pinResults.filter(({ status }) => status !== 'resolved');
     pinStatus.replaceChildren();
     const summary = document.createElement('div');
+    summary.className = 'pinned-heading';
     summary.textContent = `${pins.length} context pin${pins.length === 1 ? '' : 's'}`;
     pinStatus.append(summary);
+    for (const result of pinResults.filter(({ status }) => status === 'resolved')) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'pinned-entry';
+      item.textContent = result.path;
+      item.title = `Open pinned ${result.path}`;
+      item.addEventListener('click', () => {
+        const [rootName] = result.path.split('/');
+        switchView(rootName);
+        editors[rootName].setSelection(result.heading.from, result.heading.from);
+        elements[rootName].focus();
+      });
+      pinStatus.append(item);
+    }
     for (const result of unresolved) {
       const warning = document.createElement('div');
       warning.className = 'unresolved-pin';
@@ -1039,19 +1124,19 @@ try {
   };
 
   const switchView = (rootName) => {
+    if (rootName === 'VERSIONS') {
+      setVersionsOpen(true);
+      return;
+    }
     activeRoot = rootName;
     for (const name of ['STORY', 'METADATA']) elements[name].hidden = !['STORY', 'METADATA'].includes(rootName) || name !== rootName;
-    versionsView.hidden = rootName !== 'VERSIONS';
     compositeView.hidden = rootName !== 'COMPOSITE';
     for (const button of document.querySelectorAll('[data-view]')) {
       if (button.dataset.view === rootName) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
     }
-    if (rootName === 'VERSIONS') {
-      selectionStatus.textContent = `${history?.revisions.size ?? 0} revisions · current ${history?.currentRevision ?? 'none'}`;
-      renderVersions();
-    } else if (rootName === 'COMPOSITE') {
-      selectionStatus.textContent = `${models.COMPOSITE.text.length} UTF-16 units · composite draft`;
+    if (rootName === 'COMPOSITE') {
+      appSelection.textContent = `${models.COMPOSITE.text.length} UTF-16 units · composite draft`;
     } else {
       updateSelectionStatus(models[rootName].snapshot());
     }
@@ -1063,6 +1148,81 @@ try {
       requestAnimationFrame(() => editors[rootName].updateBounds());
     }
   };
+
+  const setVersionsOpen = (open) => {
+    versionsOpen = open;
+    versionsView.hidden = !open;
+    for (const button of versionToggleButtons) {
+      button.setAttribute('aria-expanded', String(open));
+      button.hidden = open && button.classList.contains('versions-reveal');
+    }
+    if (open) {
+      renderVersions();
+      requestAnimationFrame(() => versionGraph.focus());
+    }
+  };
+
+  for (const button of versionToggleButtons) {
+    button.addEventListener('click', () => setVersionsOpen(!versionsOpen));
+  }
+  for (const button of document.querySelectorAll('[data-fold-toggle]')) {
+    button.addEventListener('click', () => {
+      const rootName = button.dataset.foldToggle;
+      const isOpen = openFolds.has(rootName);
+      if (isOpen) openFolds.delete(rootName); else openFolds.add(rootName);
+      document.querySelector(`[data-fold="${rootName}"]`).classList.toggle('is-closed', isOpen);
+      button.textContent = isOpen ? '›' : '⌄';
+      button.setAttribute('aria-expanded', String(!isOpen));
+      button.setAttribute('aria-label', `${isOpen ? 'Expand' : 'Collapse'} ${rootName[0]}${rootName.slice(1).toLowerCase()}`);
+      refreshSidebar();
+    });
+  }
+  for (const button of document.querySelectorAll('[data-root-target]')) {
+    button.addEventListener('click', () => {
+      const rootName = button.dataset.rootTarget;
+      switchView(rootName);
+      elements[rootName].focus();
+    });
+  }
+  sidebarLeft.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+    if (event.target.matches('[data-fold-toggle]')) {
+      const rootName = event.target.dataset.foldToggle;
+      const shouldOpen = event.key === 'ArrowRight';
+      if (openFolds.has(rootName) !== shouldOpen) event.target.click();
+    } else if (event.target.matches('.section-toggle')) {
+      const isExpanded = event.target.getAttribute('aria-expanded') === 'true';
+      const shouldExpand = event.key === 'ArrowRight';
+      if (isExpanded !== shouldExpand) event.target.click();
+    } else {
+      return;
+    }
+    event.preventDefault();
+  });
+  versionGraph.addEventListener('keydown', (event) => {
+    if (!history) return;
+    const currentId = focusedRevisionId ?? history.currentRevision;
+    const revision = history.revisions.get(currentId);
+    let nextId = null;
+    if (event.key === 'ArrowLeft') nextId = revision?.parents[0] ?? null;
+    if (event.key === 'ArrowRight') nextId = childrenOf(history, currentId)[0]?.id ?? null;
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      const index = renderedGraphNodeIds.indexOf(currentId);
+      const offset = event.key === 'ArrowUp' ? -1 : 1;
+      nextId = renderedGraphNodeIds[index + offset] ?? null;
+    }
+    if (event.key === ' ' || event.key === 'Enter') {
+      event.preventDefault();
+      if (event.key === ' ') togglePinnedRevision(currentId);
+      else inspectRevision(revision);
+      return;
+    }
+    if (nextId !== null) {
+      event.preventDefault();
+      focusGraphOn(nextId);
+      requestAnimationFrame(() => versionGraph.focus());
+    }
+  });
 
   for (const [name, element] of Object.entries(elements)) {
     element.addEventListener('editorstatechange', ({ detail }) => {
@@ -1084,10 +1244,21 @@ try {
     if (change.origin !== 'open' && change.origin !== 'initial') chatDirty = true;
   });
 
-  const loadDocument = async (document) => {
-    const parsed = parseProjectDocument(document.contents);
+  const loadDocument = async (openedDocument) => {
+    const parsed = parseProjectDocument(openedDocument.contents);
     if (!parsed.roots.STORY) throw new Error('This document has no # STORY root.');
     project = parsed;
+    // A newly opened project must expose both roots immediately. Collapse
+    // state belongs to the current outline projection, not the document.
+    openFolds.add('STORY');
+    openFolds.add('METADATA');
+    collapsedSectionPaths.clear();
+    for (const button of globalThis.document.querySelectorAll('[data-fold-toggle]')) {
+      const rootName = button.dataset.foldToggle;
+      button.textContent = '⌄';
+      button.setAttribute('aria-expanded', 'true');
+      button.setAttribute('aria-label', `Collapse ${rootName[0]}${rootName.slice(1).toLowerCase()}`);
+    }
     const story = projectRoot(parsed, 'STORY');
     const metadata = projectRoot(parsed, 'METADATA');
     const chat = projectRoot(parsed, 'CHAT');
@@ -1112,8 +1283,8 @@ try {
     }
     metadataDirty = false;
     chatDirty = false;
-    currentDocument = document;
-    editorTitle.textContent = document.filePath.split(/[\\/]/).at(-1);
+    currentDocument = openedDocument;
+    editorTitle.textContent = openedDocument.filePath.split(/[\\/]/).at(-1);
     if (!historyMismatch) showStatus('Saved');
     refreshSidebar();
     refreshChatOutline();
@@ -1232,6 +1403,22 @@ try {
   undoButton.addEventListener('click', () => void runUndo());
   redoButton.addEventListener('click', () => void runRedo());
   window.addEventListener('keydown', (event) => {
+    if (event.key === 'Tab' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      const target = event.target;
+      const panelTarget = target === elements.STORY || target === elements.METADATA || target === elements.CHAT || target === versionGraph;
+      if (panelTarget) {
+        event.preventDefault();
+        const panels = ['STORY', 'METADATA', 'CHAT', 'VERSIONS'];
+        const current = target === elements.CHAT ? 'CHAT' : target === versionGraph ? 'VERSIONS' : activeRoot;
+        const direction = event.shiftKey ? -1 : 1;
+        const next = panels[(panels.indexOf(current) + direction + panels.length) % panels.length];
+        if (next === 'VERSIONS') setVersionsOpen(true);
+        else if (next === 'CHAT') elements.CHAT.focus();
+        else switchView(next);
+        if (next === 'STORY' || next === 'METADATA') elements[next].focus();
+      }
+      return;
+    }
     if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
     const key = event.key.toLowerCase();
     if (key === 'z' && !event.shiftKey) {
@@ -1243,7 +1430,7 @@ try {
     }
   });
 
-  selectionStatus.textContent = `${model.text.length} UTF-16 units · caret 0`;
+  appSelection.textContent = `${model.text.length} UTF-16 units · caret 0`;
   attachHistory(await createHistory(model.text));
   refreshSidebar();
   refreshChatOutline();

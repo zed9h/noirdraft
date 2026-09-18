@@ -74,19 +74,29 @@
             <div><dt>AI connection</dt><dd data-app-ai-connection>Checking…</dd></div>
             <div><dt>AI model</dt><dd data-app-ai-model>—</dd></div>
             <div><dt>Context length</dt><dd data-app-ai-context>—</dd></div>
+            <div><dt>Selection</dt><dd data-app-selection>—</dd></div>
             <div><dt>Runtime</dt><dd data-app-runtime>Loading…</dd></div>
           </dl>
         </form>
       </dialog>
       <div class="body">
         <nav class="sidebar sidebar-left" data-sidebar-left aria-label="Project views">
-          <div class="view-switch">
-            <button type="button" data-view="STORY" aria-current="page">Story</button>
-            <button type="button" data-view="METADATA">Metadata</button>
-            <button type="button" data-view="VERSIONS">Versions</button>
-            <button type="button" data-view="COMPOSITE" hidden>Composite</button>
+          <div class="project-folds" aria-label="Project outline">
+            <section class="project-fold" data-fold="STORY">
+              <div class="root-row">
+                <button type="button" class="fold-toggle" data-fold-toggle="STORY" aria-label="Collapse Story" aria-expanded="true" aria-controls="story-outline">⌄</button>
+                <button type="button" class="root-target" data-root-target="STORY">Story</button>
+              </div>
+              <div id="story-outline" class="outline fold-outline" data-outline-story aria-label="Story outline"></div>
+            </section>
+            <section class="project-fold" data-fold="METADATA">
+              <div class="root-row">
+                <button type="button" class="fold-toggle" data-fold-toggle="METADATA" aria-label="Collapse Metadata" aria-expanded="true" aria-controls="metadata-outline">⌄</button>
+                <button type="button" class="root-target" data-root-target="METADATA">Metadata</button>
+              </div>
+              <div id="metadata-outline" class="outline fold-outline" data-outline-metadata aria-label="Metadata outline"></div>
+            </section>
           </div>
-          <div class="outline" data-outline aria-label="Document outline"></div>
           <div class="pin-status" data-pin-status aria-label="Context pins"></div>
           <div class="branch-choices" data-branch-choices aria-label="Redo branches"></div>
           <div class="passage-history" data-passage-history aria-label="Passage history" hidden>
@@ -132,19 +142,6 @@
             ></div>
             <div class="composite-provenance" data-composite-provenance aria-label="Composite provenance"></div>
           </section>
-          <section id="versions-view" class="versions-view editor-pane" aria-label="Versions graph" hidden>
-            <div class="version-graph-panel">
-              <input type="text" data-version-search aria-label="Search revisions" placeholder="Search revisions (id, note, origin)…">
-              <div class="version-search-results" data-version-search-results hidden></div>
-              <div class="version-graph" data-version-graph aria-label="Local revision graph"></div>
-            </div>
-            <aside class="version-inspector" data-version-inspector>
-              <p>Select a revision to inspect its stored patch or checkpoint.</p>
-            </aside>
-          </section>
-          <footer class="editor-status" aria-live="polite">
-            <span data-selection-status>0 characters</span>
-          </footer>
         </section>
         <aside class="sidebar sidebar-right" data-sidebar-right aria-label="Chat">
           <div class="ai-status" data-ai-status aria-label="AI connection status" hidden>Disconnected</div>
@@ -175,6 +172,21 @@
           ></div>
         </aside>
       </div>
+      <section id="versions-view" class="versions-view" aria-label="Versions graph" hidden>
+        <div class="version-graph-panel" data-version-graph-panel>
+          <div class="versions-heading">
+            <div><p class="eyebrow">Versions</p><h3>Revision graph</h3></div>
+            <button type="button" data-toggle-versions aria-expanded="true">Hide</button>
+          </div>
+          <input type="text" data-version-search aria-label="Search revisions" placeholder="Search revisions (id, note, origin)…">
+          <div class="version-search-results" data-version-search-results hidden></div>
+          <div class="version-graph" data-version-graph aria-label="Version graph" tabindex="0"></div>
+        </div>
+        <aside class="version-inspector" data-version-inspector aria-label="Pinned variations">
+          <p>Explore with arrow keys. Pin revisions to compare their variations.</p>
+        </aside>
+      </section>
+      <button type="button" class="versions-reveal" data-toggle-versions aria-expanded="false">Versions</button>
     </div>
     <script type="module" src="./app.js"></script>
   </body>
