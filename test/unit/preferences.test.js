@@ -29,6 +29,9 @@ test('writePreferences persists a deep merge and readPreferences reflects it', a
     assert.equal(afterSecond.koboldUrl, 'http://localhost:5555');
     assert.equal(afterSecond.generationDefaults.temperature, 1.1);
     assert.equal(afterSecond.generationDefaults.max_length, DEFAULT_PREFERENCES.generationDefaults.max_length);
+
+    await writePreferences(filePath, { chatHistoryMessages: 0 });
+    assert.equal((await readPreferences(filePath)).chatHistoryMessages, 0);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

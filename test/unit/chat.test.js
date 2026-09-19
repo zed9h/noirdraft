@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { appendChatMessage, appendConversation } from '../../src/renderer/project/chat.js';
+import { appendChatMessage, appendChatTurn, appendConversation, parseChatTurns } from '../../src/renderer/project/chat.js';
 import { extractHeadings } from '../../src/renderer/project/headings.js';
 import { parseProjectDocument } from '../../src/renderer/project/parse.js';
 import { projectRoot } from '../../src/renderer/project/projection.js';
@@ -33,4 +33,14 @@ test('CHAT projection serializes under its root and round-trips CRLF', () => {
 
 test('chat helper rejects unclear participant labels', () => {
   assert.throws(() => appendChatMessage('', 'System', 'hidden'), /Unsupported chat participant/);
+});
+
+test('KoboldCpp INPUT/OUTPUT turns remain readable and preserve CRLF', () => {
+  let chat = appendChatTurn('', 'Where is Maria?', 'At the window.').replaceAll('\n', '\r\n');
+  chat = appendChatTurn(chat, 'What does she see?', 'Only rain.');
+  assert.deepEqual(parseChatTurns(chat), [
+    { input: 'Where is Maria?', output: 'At the window.' },
+    { input: 'What does she see?', output: 'Only rain.' },
+  ]);
+  assert.match(chat, /\{\{\[INPUT\]\}\}\r\nWhere is Maria\?\r\n\{\{\[OUTPUT\]\}\}/);
 });

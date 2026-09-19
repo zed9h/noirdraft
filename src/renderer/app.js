@@ -1,4 +1,5 @@
 import { EditContextEditor } from './editor/edit-context.js';
+import { MarkdownRenderer } from './editor/render.js';
 import { StoryModel } from './editor/model.js';
 import { CommitController } from './history/commits.js';
 import { childrenOf, commitRevision, createHistory, recordExternalEdit, reconstructRevision, verifyCurrentStory } from './history/graph.js';
@@ -16,6 +17,7 @@ import { parseProjectDocument } from './project/parse.js';
 import { readPins, writePins } from './project/pins.js';
 import { projectRoot } from './project/projection.js';
 import { serializeProjectDocument } from './project/serialize.js';
+import { appendChatTurn, parseChatTurns } from './project/chat.js';
 
 const runtime = window.noirDraft?.runtime;
 
@@ -27,7 +29,12 @@ const overflowToggle = document.querySelector('[data-overflow-toggle]');
 const overflowMenu = document.querySelector('[data-overflow-menu]');
 const saveNotePopover = document.querySelector('[data-save-note-popover]');
 const saveNoteInput = document.querySelector('[data-save-note-input]');
-const chatOutline = document.querySelector('[data-chat-outline]');
+const chatHistory = document.querySelector('[data-chat-history]');
+const chatPrompt = document.querySelector('[data-chat-prompt]');
+const chatSendButton = document.querySelector('[data-chat-send]');
+const chatCancelButton = document.querySelector('[data-chat-cancel]');
+const chatHistoryCount = document.querySelector('[data-chat-history-count]');
+const chatContextSummary = document.querySelector('[data-chat-context-summary]');
 const appInfoButton = document.querySelector('[data-app-info]');
 const appInfoDialog = document.querySelector('[data-app-info-dialog]');
 const appVersion = document.querySelector('[data-app-version]');
@@ -83,9 +90,8 @@ const characterCount = (text) => typeof Intl.Segmenter === 'function'
   : [...String(text)].length;
 const contentStats = (text, storageBytes) => `${wordCount(text).toLocaleString()} words · ${characterCount(text).toLocaleString()} characters · ${formatSize(storageBytes)} stored`;
 const chatStats = (text, storageBytes) => {
-  const messages = String(text).match(/^##\s+(?:User|Agent)\s*#*\s*$/gim)?.length ?? 0;
-  const conversations = String(text).match(/^#(?!#)\s+.+$/gm)?.length ?? 0;
-  return `${conversations} conversation${conversations === 1 ? '' : 's'} · ${messages} message${messages === 1 ? '' : 's'} · ${contentStats(text, storageBytes)}`;
+  const turns = parseChatTurns(text).length;
+  return `${turns} chat turn${turns === 1 ? '' : 's'} · ${contentStats(text, storageBytes)}`;
 };
 
 const toggleAutoNotesButton = document.querySelector('[data-toggle-auto-notes]');
@@ -197,10 +203,16 @@ aiConnectionInput.addEventListener('keydown', (event) => {
 });
 
 let generationMaxLength = 200;
+let chatHistoryMessageCount = 6;
 if (preferences) {
   preferences.get()
     .then((stored) => {
       generationMaxLength = stored.generationDefaults?.max_length ?? generationMaxLength;
+      const storedChatHistoryCount = Number(stored.chatHistoryMessages);
+      if (Number.isFinite(storedChatHistoryCount) && storedChatHistoryCount >= 0) {
+        chatHistoryMessageCount = Math.floor(storedChatHistoryCount);
+      }
+      chatHistoryCount.value = String(chatHistoryMessageCount);
       autoNotesEnabled = Boolean(stored.autoNotes);
       toggleAutoNotesButton.setAttribute('aria-pressed', String(autoNotesEnabled));
       return connectToKobold(stored.koboldUrl);
@@ -302,25 +314,117 @@ try {
   });
 
   const refreshChatOutline = () => {
-    const headings = extractHeadings(models.CHAT.text, 'CHAT');
-    chatOutline.replaceChildren();
-    for (const heading of headings) {
-      const row = document.createElement('div');
-      row.className = 'outline-row';
-      row.style.setProperty('--level', heading.level);
-      const target = document.createElement('button');
-      target.type = 'button';
-      target.className = 'outline-target';
-      target.textContent = heading.title;
-      target.title = heading.path;
-      target.addEventListener('click', () => {
-        editors.CHAT.setSelection(heading.from, heading.from);
-        elements.CHAT.focus();
-      });
-      row.append(target);
-      chatOutline.append(row);
-    }
+    renderChatHistory();
   };
+
+  let pinnedChatStart = null;
+  let chatAbortController = null;
+  const chatContextStart = (turns) => {
+    if (pinnedChatStart !== null && pinnedChatStart >= 0 && pinnedChatStart < turns.length) return pinnedChatStart;
+    return Math.max(0, turns.length - chatHistoryMessageCount);
+  };
+  const renderChatHistory = (pendingTurn = null) => {
+    const turns = parseChatTurns(models.CHAT.text);
+    const start = chatContextStart(turns);
+    chatHistory.replaceChildren();
+    chatHistory.classList.toggle('has-context', turns.length > 0);
+    chatContextSummary.textContent = turns.length
+      ? `${turns.length - start} of ${turns.length} turns will be sent`
+      : 'No prior turns';
+    const visibleTurns = pendingTurn ? [...turns, pendingTurn] : turns;
+    for (const [index, turn] of visibleTurns.entries()) {
+      const card = document.createElement('article');
+      card.className = 'chat-turn';
+      if (index >= start && index < turns.length) card.classList.add('context-included');
+      if (index === start && index < turns.length) card.classList.add(pinnedChatStart === null ? 'ghost-context-start' : 'context-start');
+      const header = document.createElement('header');
+      const title = document.createElement('span');
+      title.textContent = `Turn ${index + 1}`;
+      const marker = document.createElement('button');
+      marker.type = 'button';
+      marker.className = 'chat-context-marker';
+      const isPinned = pinnedChatStart === index;
+      marker.textContent = isPinned ? '●' : '○';
+      marker.setAttribute('aria-label', isPinned ? 'Unpin context start' : `Use context from turn ${index + 1}`);
+      marker.title = marker.getAttribute('aria-label');
+      marker.disabled = index >= turns.length;
+      marker.addEventListener('click', () => {
+        pinnedChatStart = isPinned ? null : index;
+        renderChatHistory();
+      });
+      header.append(title, marker);
+      const createMessage = (role, text) => {
+        const message = document.createElement('section');
+        message.className = `chat-message chat-${role.toLowerCase()}`;
+        const label = document.createElement('div');
+        label.className = 'chat-message-label';
+        label.textContent = role;
+        const content = document.createElement('div');
+        content.className = 'chat-message-content';
+        new MarkdownRenderer(content).render(text);
+        message.append(label, content);
+        return message;
+      };
+      card.append(header, createMessage('user', turn.input), createMessage('agent', turn.output));
+      chatHistory.append(card);
+    }
+    requestAnimationFrame(() => {
+      const startCard = chatHistory.querySelector('.context-start, .ghost-context-start');
+      if (startCard) chatHistory.style.setProperty('--context-line-top', `${startCard.offsetTop + 10}px`);
+      chatHistory.scrollTop = chatHistory.scrollHeight;
+    });
+  };
+
+  chatHistoryCount.addEventListener('change', async () => {
+    chatHistoryMessageCount = Math.max(0, Number(chatHistoryCount.value) || 0);
+    chatHistoryCount.value = String(chatHistoryMessageCount);
+    await preferences?.set({ chatHistoryMessages: chatHistoryMessageCount });
+    renderChatHistory();
+  });
+  const setChatSending = (sending) => {
+    chatSendButton.hidden = sending;
+    chatCancelButton.hidden = !sending;
+  };
+  chatSendButton.addEventListener('click', async () => {
+    const input = chatPrompt.value.trim();
+    if (!input || !koboldClient || aiStatus.dataset.connected !== 'true') return;
+    const turns = parseChatTurns(models.CHAT.text);
+    const prior = turns.slice(chatContextStart(turns));
+    const prompt = [
+      ...prior.flatMap((turn) => ['{{[INPUT]}}', turn.input, '{{[OUTPUT]}}', turn.output]),
+      '{{[INPUT]}}', input, '{{[OUTPUT]}}',
+    ].join('\n');
+    let output = '';
+    chatAbortController = new AbortController();
+    setChatSending(true);
+    chatPrompt.value = '';
+    chatPrompt.focus();
+    chatContextSummary.textContent = 'Generating…';
+    try {
+      for await (const token of koboldClient.generateStream({ prompt, max_length: generationMaxLength }, { signal: chatAbortController.signal })) {
+        output += token;
+        renderChatHistory({ input, output });
+      }
+      editors.CHAT.replace(0, models.CHAT.text.length, appendChatTurn(models.CHAT.text, input, output), 'chat');
+      pinnedChatStart = null;
+      await persistAfterCommit();
+    } catch (error) {
+      if (!chatPrompt.value) chatPrompt.value = input;
+      chatContextSummary.textContent = error.name === 'AbortError' ? 'Generation canceled' : error.message;
+    } finally {
+      chatAbortController = null;
+      setChatSending(false);
+      renderChatHistory();
+      chatPrompt.focus();
+    }
+  });
+  chatCancelButton.addEventListener('click', () => chatAbortController?.abort());
+  chatPrompt.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      chatSendButton.click();
+    }
+  });
 
   const collapsePassageHistory = () => {
     passageHistoryList.hidden = true;
@@ -1154,7 +1258,8 @@ try {
     versionsView.hidden = !open;
     for (const button of versionToggleButtons) {
       button.setAttribute('aria-expanded', String(open));
-      button.hidden = open && button.classList.contains('versions-reveal');
+      button.setAttribute('aria-label', open ? 'Hide versions' : 'Versions');
+      button.title = open ? 'Hide versions' : 'Versions';
     }
     if (open) {
       renderVersions();

@@ -1,23 +1,19 @@
 # NoirDraft CHAT convention
 
-CHAT remains ordinary Markdown. The application recognizes headings for navigation but does not require a rigid conversation database.
+CHAT remains ordinary Markdown. The chat pane projects complete KoboldCpp-style turns as a history and keeps the composer separate from the stored context.
 
 The default convention is:
 
 ````markdown
-# 2026-09-18 — Chapter 3 / Maria
-
-## User
-
+{{[INPUT]}}
 This reaction explains too much.
-
-## Agent
-
+{{[OUTPUT]}}
 The second sentence states the emotion explicitly.
 
-## User
-
+{{[INPUT]}}
 Rewrite it without naming the emotion.
+{{[OUTPUT]}}
+The second sentence states the emotion explicitly.
 ````
 
-In the complete project file these headings are stored one level deeper beneath `# CHAT`. A top-level visible heading groups a writing task; `## User` and `## Agent` distinguish participants. Authors may freely create other heading structures for brainstorming or general notes. CHAT is stored history, not an instruction to replay every conversation into model context.
+In the complete project file these lines sit below `# CHAT`. The context marker can pin the oldest turn to replay; otherwise the configured recent-turn count is used and its ghost marker shows the range. Authors can edit the stored source in any text editor. Notes outside complete turn pairs are preserved but are not sent to the model.

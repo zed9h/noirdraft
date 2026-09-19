@@ -19,7 +19,6 @@
           <button type="button" data-undo>Undo</button>
           <button type="button" data-redo>Redo</button>
           <button type="button" data-save>Save</button>
-          <button type="button" class="icon-button" data-toggle-right aria-label="Toggle chat sidebar" aria-expanded="true">💬</button>
           <div class="overflow" data-overflow>
             <button type="button" class="icon-button" data-overflow-toggle aria-haspopup="true" aria-expanded="false" aria-label="More actions">⋮</button>
             <div class="overflow-menu" data-overflow-menu hidden>
@@ -32,6 +31,7 @@
               <button type="button" data-app-info>App info…</button>
             </div>
           </div>
+          <button type="button" class="icon-button" data-toggle-right aria-label="Toggle chat sidebar" aria-expanded="true">💬</button>
         </div>
       </header>
       <div class="save-note-popover" data-save-note-popover hidden>
@@ -97,12 +97,14 @@
               <div id="metadata-outline" class="outline fold-outline" data-outline-metadata aria-label="Metadata outline"></div>
             </section>
           </div>
-          <div class="pin-status" data-pin-status aria-label="Context pins"></div>
           <div class="branch-choices" data-branch-choices aria-label="Redo branches"></div>
           <div class="passage-history" data-passage-history aria-label="Passage history" hidden>
             <button type="button" data-passage-history-toggle>Passage history…</button>
             <div class="passage-history-list" data-passage-history-list hidden></div>
             <div class="passage-multi-compare" data-passage-multi-compare aria-label="Compare two revisions" hidden></div>
+          </div>
+          <div class="sidebar-footer">
+            <button type="button" class="icon-button versions-reveal" data-toggle-versions aria-label="Versions" aria-expanded="false" title="Versions">▤</button>
           </div>
         </nav>
         <section class="workspace" aria-labelledby="editor-title">
@@ -144,6 +146,7 @@
           </section>
         </section>
         <aside class="sidebar sidebar-right" data-sidebar-right aria-label="Chat">
+          <div class="pin-status chat-pins" data-pin-status aria-label="Context pins"></div>
           <div class="ai-status" data-ai-status aria-label="AI connection status" hidden>Disconnected</div>
           <div class="context-inspector" data-context-inspector aria-label="Context inspector" hidden>
             <button type="button" data-context-toggle>Preview context…</button>
@@ -160,23 +163,31 @@
             <div class="agent-preview" data-agent-preview aria-label="Streaming proposal" hidden></div>
             <div class="agent-proposals" data-agent-proposals aria-label="Agent proposals"></div>
           </div>
-          <div class="outline chat-outline" data-chat-outline aria-label="Chat outline"></div>
-          <div
-            id="chat-editor"
-            class="story-editor editor-pane chat-editor"
-            role="textbox"
-            aria-label="Chat source"
-            aria-multiline="true"
-            tabindex="0"
-            spellcheck="true"
-          ></div>
+          <div class="chat-history" data-chat-history aria-label="Chat history"></div>
+          <div class="chat-composer" data-chat-composer>
+            <textarea rows="3" data-chat-prompt aria-label="Chat prompt" placeholder="Message the agent…"></textarea>
+            <div class="chat-composer-actions">
+              <label class="chat-context-controls">Previous messages <input type="number" min="0" step="1" value="6" data-chat-history-count aria-label="Previous messages"></label><span data-chat-context-summary aria-live="polite"></span></label>
+              <button type="button" data-chat-cancel hidden>Cancel</button>
+              <button type="button" data-chat-send>Send</button>
+            </div>
+            <div
+              id="chat-editor"
+              class="story-editor editor-pane chat-editor"
+              role="textbox"
+              aria-label="Chat source"
+              aria-multiline="true"
+              tabindex="0"
+              spellcheck="true"
+              hidden
+            ></div>
+          </div>
         </aside>
       </div>
       <section id="versions-view" class="versions-view" aria-label="Versions graph" hidden>
         <div class="version-graph-panel" data-version-graph-panel>
           <div class="versions-heading">
             <div><p class="eyebrow">Versions</p><h3>Revision graph</h3></div>
-            <button type="button" data-toggle-versions aria-expanded="true">Hide</button>
           </div>
           <input type="text" data-version-search aria-label="Search revisions" placeholder="Search revisions (id, note, origin)…">
           <div class="version-search-results" data-version-search-results hidden></div>
@@ -186,7 +197,6 @@
           <p>Explore with arrow keys. Pin revisions to compare their variations.</p>
         </aside>
       </section>
-      <button type="button" class="versions-reveal" data-toggle-versions aria-expanded="false">Versions</button>
     </div>
     <script type="module" src="./app.js"></script>
   </body>

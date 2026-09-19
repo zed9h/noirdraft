@@ -4,6 +4,7 @@ import path from 'node:path';
 export const DEFAULT_PREFERENCES = Object.freeze({
   koboldUrl: 'http://localhost:5001',
   autoNotes: false,
+  chatHistoryMessages: 6,
   generationDefaults: Object.freeze({
     max_length: 200,
     temperature: 0.7,
