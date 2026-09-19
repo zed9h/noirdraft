@@ -19,6 +19,7 @@ export class EditContextEditor {
     this.model = model;
     this.renderer = new MarkdownRenderer(element);
     this.mapping = new OffsetMapping(element);
+    this.highlights = [];
     this.context = new EditContext(model.snapshot());
     this.renderer.render(model.text);
     this.mapping.refresh();
@@ -54,6 +55,14 @@ export class EditContextEditor {
     const rect = this.mapping.rangeRect(selectionStart, selectionEnd);
     this.context.updateSelectionBounds(asDOMRect(rect));
     this.#updateVisualCaret(rect, selectionStart === selectionEnd);
+  }
+
+  /** Transient, non-document decorations expressed in canonical UTF-16 offsets. */
+  setHighlights(ranges = []) {
+    this.highlights = ranges
+      .filter(({ from, to }) => Number.isSafeInteger(from) && Number.isSafeInteger(to) && from < to)
+      .map(({ from, to, color = 0 }) => ({ from, to, color }));
+    this.#applyHighlights();
   }
 
   #listen() {
@@ -116,6 +125,7 @@ export class EditContextEditor {
   #modelChanged(snapshot, change) {
     if (change.type === 'replace') {
       this.renderer.render(snapshot.text, change);
+      this.#applyHighlights();
       this.mapping.refresh();
     }
     if (change.origin !== 'dom') this.#syncDOMSelection();
@@ -176,5 +186,15 @@ export class EditContextEditor {
     this.element.style.setProperty('--caret-x', `${rect.left - control.left + this.element.scrollLeft}px`);
     this.element.style.setProperty('--caret-y', `${top - control.top + this.element.scrollTop}px`);
     this.element.style.setProperty('--caret-height', `${height}px`);
+  }
+
+  #applyHighlights() {
+    for (const run of this.element.querySelectorAll('.source-run')) {
+      const from = Number(run.dataset.from);
+      const to = Number(run.dataset.to);
+      const highlight = this.highlights.find((range) => range.from < to && range.to > from);
+      run.classList.remove('agent-target-highlight-0', 'agent-target-highlight-1', 'agent-target-highlight-2', 'agent-target-highlight-3');
+      if (highlight) run.classList.add(`agent-target-highlight-${highlight.color % 4}`);
+    }
   }
 }

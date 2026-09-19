@@ -107,6 +107,7 @@
             <button type="button" class="icon-button versions-reveal" data-toggle-versions aria-label="Versions" aria-expanded="false" title="Versions">▤</button>
           </div>
         </nav>
+        <div class="pane-resizer pane-resizer-vertical" data-pane-resizer="navigation" data-resizer-for="sidebar-left" role="separator" aria-label="Resize navigation pane" aria-orientation="vertical" tabindex="0"></div>
         <section class="workspace" aria-labelledby="editor-title">
           <div
             id="story-editor"
@@ -145,6 +146,7 @@
             <div class="composite-provenance" data-composite-provenance aria-label="Composite provenance"></div>
           </section>
         </section>
+        <div class="pane-resizer pane-resizer-vertical" data-pane-resizer="chat" data-resizer-for="sidebar-right" role="separator" aria-label="Resize chat pane" aria-orientation="vertical" tabindex="0"></div>
         <aside class="sidebar sidebar-right" data-sidebar-right aria-label="Chat">
           <div class="pin-status chat-pins" data-pin-status aria-label="Context pins"></div>
           <div class="ai-status" data-ai-status aria-label="AI connection status" hidden>Disconnected</div>
@@ -167,7 +169,7 @@
           <div class="chat-composer" data-chat-composer>
             <textarea rows="3" data-chat-prompt aria-label="Chat prompt" placeholder="Message the agent…"></textarea>
             <div class="chat-composer-actions">
-              <label class="chat-context-controls">Previous messages <input type="number" min="0" step="1" value="6" data-chat-history-count aria-label="Previous messages"></label><span data-chat-context-summary aria-live="polite"></span></label>
+              <label class="chat-context-controls">Context <input type="number" min="0" step="1" value="6" data-chat-history-count aria-label="Context"></label><span data-chat-context-summary aria-live="polite"></span></label>
               <button type="button" data-chat-cancel hidden>Cancel</button>
               <button type="button" data-chat-send>Send</button>
             </div>
@@ -184,6 +186,7 @@
           </div>
         </aside>
       </div>
+      <div class="pane-resizer pane-resizer-horizontal" data-pane-resizer="versions" data-resizer-for="versions-view" role="separator" aria-label="Resize versions pane" aria-orientation="horizontal" tabindex="0" hidden></div>
       <section id="versions-view" class="versions-view" aria-label="Versions graph" hidden>
         <div class="version-graph-panel" data-version-graph-panel>
           <div class="versions-heading">

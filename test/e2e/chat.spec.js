@@ -1,5 +1,6 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import path from 'node:path';
+import { startFakeKoboldServer } from '../support/fake-kobold-server.js';
 
 test('CHAT projects KoboldCpp turns as a history with a visible context range', async () => {
   const application = await electron.launch({
@@ -32,6 +33,164 @@ test('CHAT projects KoboldCpp turns as a history with a visible context range', 
     await window.getByLabel('Toggle chat sidebar').click();
     await expect(history).toBeHidden();
   } finally {
+    await application.close();
+  }
+});
+
+test('CHAT history scrolls independently when its turns exceed the sidebar height', async () => {
+  const application = await electron.launch({
+    args: [path.resolve('.')],
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
+  });
+  try {
+    const window = await application.firstWindow();
+    await window.waitForFunction(() => Boolean(window.__noirDraftTest?.editors?.CHAT));
+    const source = Array.from({ length: 24 }, (_, index) => `{{[INPUT]}}\nQuestion ${index + 1}\n{{[OUTPUT]}}\nA deliberately long answer for turn ${index + 1}.`).join('\n\n');
+    await window.evaluate((text) => {
+      const { editors, models } = window.__noirDraftTest;
+      editors.CHAT.replace(0, models.CHAT.text.length, text);
+    }, source);
+    const history = window.getByLabel('Chat history');
+    await expect(history.locator('.chat-turn')).toHaveCount(24);
+    await expect.poll(() => history.locator('.ghost-context-start').evaluate((turn) => getComputedStyle(turn).borderStyle)).toBe('solid');
+    const metrics = await history.evaluate((history) => {
+      history.scrollTop = history.scrollHeight;
+      return {
+        clientHeight: history.clientHeight,
+        scrollHeight: history.scrollHeight,
+        scrollTop: history.scrollTop,
+        overflowY: getComputedStyle(history).overflowY,
+      };
+    });
+    expect(metrics.overflowY).toBe('auto');
+    expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
+    expect(metrics.scrollTop).toBeGreaterThan(0);
+    const preservedScrollTop = await history.evaluate((element) => {
+      element.scrollTop = Math.floor((element.scrollHeight - element.clientHeight) / 2);
+      return element.scrollTop;
+    });
+    const newlyIncludedLabel = history.locator('.chat-turn').nth(5).locator('.chat-message-label').first();
+    const labelBackground = await newlyIncludedLabel.evaluate((label) => getComputedStyle(label).backgroundColor);
+    expect(labelBackground).not.toBe('rgba(0, 0, 0, 0)');
+    await history.getByRole('button', { name: 'Use context from turn 6' }).evaluate((button) => button.click());
+    await expect.poll(() => history.evaluate((element) => element.scrollTop)).toBe(preservedScrollTop);
+    await expect.poll(() => newlyIncludedLabel.evaluate((label) => getComputedStyle(label).backgroundColor)).toBe(labelBackground);
+  } finally {
+    await application.close();
+  }
+});
+
+test('CHAT anchors a short history to the bottom before it overflows', async () => {
+  const application = await electron.launch({
+    args: [path.resolve('.')],
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
+  });
+  try {
+    const window = await application.firstWindow();
+    await window.waitForFunction(() => Boolean(window.__noirDraftTest?.editors?.CHAT));
+    await window.evaluate(() => {
+      const { editors, models } = window.__noirDraftTest;
+      editors.CHAT.replace(0, models.CHAT.text.length, '{{[INPUT]}}\nQuestion\n{{[OUTPUT]}}\nAnswer');
+    });
+    const history = window.getByLabel('Chat history');
+    await expect(history.locator('.chat-turn')).toHaveCount(1);
+    const gapBelowTurn = await history.evaluate((element) => {
+      const historyBounds = element.getBoundingClientRect();
+      const turnBounds = element.querySelector('.chat-turn').getBoundingClientRect();
+      return historyBounds.bottom - turnBounds.bottom;
+    });
+    expect(gapBelowTurn).toBeLessThan(12);
+  } finally {
+    await application.close();
+  }
+});
+
+test('a selected middle-pane range becomes a queued chat rewrite while Send remains available', async () => {
+  const application = await electron.launch({
+    args: [path.resolve('.')],
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
+  });
+  const server = await startFakeKoboldServer({ tokens: ['The ', 'window ', 'shattered.'], tokenDelayMs: 15 });
+  try {
+    const window = await application.firstWindow();
+    await window.waitForFunction(() => Boolean(window.__noirDraftTest?.getCommitController()));
+    await window.evaluate(() => {
+      const { editors, models } = window.__noirDraftTest;
+      editors.STORY.replace(0, models.STORY.text.length, 'The window broke.\n');
+      editors.STORY.setSelection(0, 'The window broke.'.length);
+    });
+    await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
+    await window.getByLabel('Chat prompt').fill('Make it more dramatic.');
+    await window.getByRole('button', { name: 'Send' }).click();
+    await expect(window.getByRole('button', { name: 'Send' })).toBeVisible();
+    await expect(window.locator('.chat-job')).toContainText('STORY selection');
+    await expect.poll(() => window.evaluate(() => window.__noirDraftTest.models.STORY.text)).toContain('shattered');
+    await expect(window.getByLabel('Chat history')).toContainText('Applied to STORY');
+  } finally {
+    await server.close();
+    await application.close();
+  }
+});
+
+test('retry preserves an applied rewrite as a sibling branch', async () => {
+  const application = await electron.launch({
+    args: [path.resolve('.')],
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
+  });
+  const server = await startFakeKoboldServer({ tokens: ['Rewritten.'] });
+  try {
+    const window = await application.firstWindow();
+    await window.waitForFunction(() => Boolean(window.__noirDraftTest?.getCommitController()));
+    await window.evaluate(() => {
+      const { editors, models } = window.__noirDraftTest;
+      editors.STORY.replace(0, models.STORY.text.length, 'Original.\n');
+      editors.STORY.setSelection(0, 'Original.'.length);
+    });
+    await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
+    await window.getByLabel('Chat prompt').fill('Rewrite it.');
+    await window.getByRole('button', { name: 'Send' }).click();
+    await expect(window.locator('.chat-job').getByRole('button', { name: 'Retry' })).toBeVisible();
+    window.once('dialog', (dialog) => dialog.accept());
+    await window.locator('.chat-job').getByRole('button', { name: 'Retry' }).click();
+    await expect.poll(() => window.evaluate(() => window.__noirDraftTest.getHistory().currentRevision)).toBe(3);
+    const siblings = await window.evaluate(() => {
+      const history = window.__noirDraftTest.getHistory();
+      return [...history.revisions.values()].filter((revision) => revision.parents.includes(1)).map((revision) => revision.id).sort();
+    });
+    expect(siblings).toEqual([2, 3]);
+  } finally {
+    await server.close();
+    await application.close();
+  }
+});
+
+test('a queued rewrite can be cancelled with confirmation and releases its highlight', async () => {
+  const application = await electron.launch({
+    args: [path.resolve('.')],
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
+  });
+  const server = await startFakeKoboldServer({ tokens: ['Too ', 'late.'], tokenDelayMs: 250 });
+  try {
+    const window = await application.firstWindow();
+    await window.waitForFunction(() => Boolean(window.__noirDraftTest?.getCommitController()));
+    await window.evaluate(() => {
+      const { editors, models } = window.__noirDraftTest;
+      editors.STORY.replace(0, models.STORY.text.length, 'Keep this.\n');
+      editors.STORY.setSelection(0, 'Keep this.'.length);
+    });
+    await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
+    await window.getByLabel('Chat prompt').fill('Rewrite it.');
+    await window.getByRole('button', { name: 'Send' }).click();
+    const job = window.locator('.chat-job');
+    await expect(job.getByRole('button', { name: /Cancel queued turn/ })).toBeVisible();
+    await expect(window.locator('#story-editor .agent-target-highlight-1')).toHaveCount(1);
+    window.once('dialog', (dialog) => dialog.accept());
+    await job.getByRole('button', { name: /Cancel queued turn/ }).click();
+    await expect(job).toHaveCount(0);
+    await expect(window.locator('#story-editor [class*="agent-target-highlight"]')).toHaveCount(0);
+    expect(await window.evaluate(() => window.__noirDraftTest.models.STORY.text)).toBe('Keep this.\n');
+  } finally {
+    await server.close();
     await application.close();
   }
 });

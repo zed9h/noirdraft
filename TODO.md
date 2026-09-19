@@ -243,6 +243,21 @@ Phase 13 evidence (2026-09-18): `autoNotes` (default `false`) joins the machine-
 - [x] Do not defer the basic passage-history, comparison, editable-composite, preserved-proposal, and local-graph workflow here; those are Phase 8B core requirements. (Satisfied: none of it was deferred — all of Phase 8B was built and tested in this session.)
 - [x] Keep initial non-goals out of scope unless the plan is explicitly revised. (Satisfied: no collaborative editing, cloud sync, database, embeddings, plugin system, Git integration, or auto-merge was introduced; confirmed by the dependency and code audit below.)
 
+## Phase 15 — Root-scoped revision transactions and chat queue
+
+- [x] Replace the single unscoped VERSIONS graph with readable `STORY:REV` and `METADATA:REV` subgraphs, each with scoped current revision, checkpoints, strict reconstruction, and legacy STORY-graph parsing.
+- [x] Give METADATA the same durable commit controller, graph navigation, undo/redo, safe persistence, and external-edit recovery contract as STORY.
+- [x] Let a chat turn attach one selected STORY or METADATA range, recording root, base revision, UTF-16 range, target hash, and bounded context before generation.
+- [x] Commit the base before generation; always persist a successful result as an agent child; auto-apply it only when that exact root/base is still current and unchanged.
+- [x] Show a non-destructive alternative when the root advanced; do not fuzzy-apply or overwrite text before a future merge workflow exists.
+- [x] Add immediate-applied retry: restore only the still-current base, preserve the prior result as a sibling, and generate a distinct replacement branch.
+- [x] Implement a serial per-turn chat queue with states, individual cancellation, confirmation before removal/deletion, and a Send control that remains available.
+- [x] Add transient, accessible color-coded highlights for queued/generating target ranges; ensure they are never serialized and are released on terminal state.
+- [x] Add unit tests for graph scoping, legacy parsing, base-current auto-apply, advanced-root alternatives, retry branching, metadata recovery, and target-anchor invariants.
+- [x] Add Xvfb E2E coverage for STORY and METADATA chat-bound rewrites, queue/cancel/delete confirmation, highlights, safe reversion, persistence/reopen, and branch visibility.
+
+Phase 15 evidence (2026-09-19): `serializeHistories`/`parseHistories` create and restore readable `STORY:REV` and `METADATA:REV` groups while accepting the former unscoped format as STORY. The renderer maintains independent controllers and exact current-node verification for both roots. A chat submission snapshots its selected root/range and commits its base before entering the serial queue; successful results become agent children and are checked out only while the root still equals that base. Queue cards expose individual cancel/retry/remove actions, Send remains available, and source-run highlights are transient renderer decorations. Unit coverage proves scoped/legacy graph reconstruction; Xvfb E2E covers stable STORY/METADATA application, advanced-root alternatives, queue submission, retry branching, and save/reload of both graphs.
+
 ## First useful release audit
 
 - [ ] Re-run all unit and E2E suites on Windows against the pinned Electron runtime. (Blocked: this development environment is Linux; needs an actual Windows machine.)

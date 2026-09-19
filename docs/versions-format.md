@@ -1,12 +1,14 @@
 # NoirDraft VERSIONS format
 
-This grammar is the Phase 6 canonical history representation inside the visible projection of `# VERSIONS`. When stored in the complete project file, projection serialization shifts each heading one level beneath the reserved root.
+Phase 15 stores two independent graphs inside the visible projection of `# VERSIONS`: `# STORY:REV` and `# METADATA:REV`. Each group has its own revision IDs, checkpoints, and `Current-Revision`. When stored in the complete project file, projection serialization shifts each heading one level beneath the reserved root. Existing unscoped VERSIONS documents remain valid legacy STORY graphs and are read without loss.
 
 `````markdown
+# STORY:REV
+
 Current-Revision: 2
 Checkpoint-Interval: 50
 
-# Revision 0
+## Revision 0
 
 Parents: none
 Origin: import
@@ -19,7 +21,7 @@ Note: "Imported initial STORY state."
 <complete visible STORY snapshot>
 ````
 
-# Revision 1
+## Revision 1
 
 Parents: 0
 Origin: user
@@ -35,17 +37,26 @@ Note: null
 ````
 `````
 
+# METADATA:REV
+
+Current-Revision: 1
+Checkpoint-Interval: 50
+
+## Revision 0
+
+...
+
 Rules:
 
-- Revision IDs are non-negative decimal integers and are never reused.
-- `Current-Revision` explicitly identifies the node represented by current STORY.
+- Revision IDs are non-negative decimal integers and are never reused within their `STORY:REV` or `METADATA:REV` group.
+- Each `Current-Revision` explicitly identifies the node represented by its root's checked-out text.
 - `Parents` is `none` for the initial checkpoint or a comma-separated list. Phase 6 writes one parent but the grammar permits more for future compatibility.
 - `Origin` initially accepts `user`, `agent`, `import`, `recovery`, or `system`.
 - `Time` is an ISO-8601 timestamp.
-- Hashes are lowercase SHA-256 of the exact UTF-8 visible STORY string.
+- Hashes are lowercase SHA-256 of the exact UTF-8 visible root string.
 - `Note` is a JSON string or `null`, keeping escaping deterministic and readable.
 - `Payload-Length` stores the exact JavaScript UTF-16 length so a checkpoint without a trailing newline remains lossless despite fenced-block layout.
 - A revision contains exactly one fenced payload: `markdown` for a full checkpoint or `diff` for a strict unified patch.
 - Fence length is chosen to exceed every backtick run in its payload.
 - Patch application is exact. Context/deletion mismatches, missing parents, hash mismatches, duplicate IDs, or malformed metadata are errors; no fuzzy patching occurs.
-- Checkpoints are ordinary revisions containing a complete STORY snapshot. By default, every 50th committed revision is a checkpoint.
+- Checkpoints are ordinary revisions containing a complete root snapshot. By default, every 50th committed revision is a checkpoint.

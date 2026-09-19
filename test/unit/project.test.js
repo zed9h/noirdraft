@@ -84,7 +84,7 @@ test('serializer replaces projections while preserving unknown roots and order',
 test('serializer creates missing optional roots using the existing line ending', () => {
   const project = parseProjectDocument('# STORY\r\n\r\n## Chapter\r\n');
   const serialized = serializeProjectDocument(project, { CHAT: '# Session\r\n' });
-  assert.equal(serialized, '# STORY\r\n\r\n## Chapter\r\n\r\n# CHAT\r\n\r\n## Session\r\n');
+  assert.equal(serialized, '# STORY\r\n\r\n## Chapter\r\n# CHAT\r\n\r\n## Session\r\n');
 });
 
 test('unknown-only and rootless documents remain byte-identical when untouched', () => {

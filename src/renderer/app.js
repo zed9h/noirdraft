@@ -3,7 +3,8 @@ import { MarkdownRenderer } from './editor/render.js';
 import { StoryModel } from './editor/model.js';
 import { CommitController } from './history/commits.js';
 import { childrenOf, commitRevision, createHistory, recordExternalEdit, reconstructRevision, verifyCurrentStory } from './history/graph.js';
-import { parseHistory, serializeHistory } from './history/serialize.js';
+import { hashStory } from './history/hash.js';
+import { parseHistories, serializeHistories } from './history/serialize.js';
 import { requestRewrite } from './ai/agent.js';
 import { allocateContextBudget, composeContext } from './ai/context.js';
 import { KoboldClient } from './ai/kobold.js';
@@ -23,6 +24,14 @@ const runtime = window.noirDraft?.runtime;
 
 const sidebarLeft = document.querySelector('[data-sidebar-left]');
 const sidebarRight = document.querySelector('[data-sidebar-right]');
+const shell = document.querySelector('.shell');
+const body = document.querySelector('.body');
+const paneResizers = {
+  navigation: document.querySelector('[data-pane-resizer="navigation"]'),
+  chat: document.querySelector('[data-pane-resizer="chat"]'),
+  versions: document.querySelector('[data-pane-resizer="versions"]'),
+};
+let editorsForBounds = null;
 const toggleLeftButton = document.querySelector('[data-toggle-left]');
 const toggleRightButton = document.querySelector('[data-toggle-right]');
 const overflowToggle = document.querySelector('[data-overflow-toggle]');
@@ -69,8 +78,82 @@ document.addEventListener('click', (event) => {
 
 const setSidebarVisible = (sidebar, toggleButton, visible) => {
   sidebar.hidden = !visible;
+  const resizer = sidebar === sidebarLeft ? paneResizers.navigation : paneResizers.chat;
+  resizer.hidden = !visible;
   toggleButton.setAttribute('aria-expanded', String(visible));
 };
+
+const paneLimits = {
+  navigation: { minimum: 9 * 16, workspace: 20 * 16, other: 18 * 16 },
+  chat: { minimum: 18 * 16, workspace: 20 * 16, other: 9 * 16 },
+  versions: { minimum: 13 * 16, workspace: 14 * 16 },
+};
+const clamp = (value, minimum, maximum) => Math.min(Math.max(value, minimum), Math.max(minimum, maximum));
+const updateEditorBounds = () => requestAnimationFrame(() => {
+  for (const editor of Object.values(editorsForBounds ?? {})) editor.updateBounds();
+});
+
+const setPaneSize = (pane, value) => {
+  if (pane === 'navigation' || pane === 'chat') {
+    const limits = paneLimits[pane];
+    const otherVisible = pane === 'navigation' ? !sidebarRight.hidden : !sidebarLeft.hidden;
+    const maximum = body.clientWidth - limits.workspace - (otherVisible ? limits.other : 0);
+    const size = clamp(value, limits.minimum, maximum);
+    shell.style.setProperty(pane === 'navigation' ? '--navigation-pane-width' : '--chat-pane-width', `${size}px`);
+    paneResizers[pane].setAttribute('aria-valuemin', String(limits.minimum));
+    paneResizers[pane].setAttribute('aria-valuemax', String(Math.round(maximum)));
+    paneResizers[pane].setAttribute('aria-valuenow', String(Math.round(size)));
+    return;
+  }
+  const maximum = shell.clientHeight - document.querySelector('.app-header').offsetHeight - paneLimits.versions.workspace;
+  const size = clamp(value, paneLimits.versions.minimum, maximum);
+  shell.style.setProperty('--versions-pane-height', `${size}px`);
+  paneResizers.versions.setAttribute('aria-valuemin', String(paneLimits.versions.minimum));
+  paneResizers.versions.setAttribute('aria-valuemax', String(Math.round(maximum)));
+  paneResizers.versions.setAttribute('aria-valuenow', String(Math.round(size)));
+};
+
+for (const [pane, resizer] of Object.entries(paneResizers)) {
+  resizer.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    resizer.setPointerCapture(event.pointerId);
+    resizer.classList.add('is-resizing');
+    document.body.classList.add('is-resizing-pane');
+    const move = (moveEvent) => {
+      if (pane === 'navigation') setPaneSize(pane, moveEvent.clientX - body.getBoundingClientRect().left);
+      else if (pane === 'chat') setPaneSize(pane, body.getBoundingClientRect().right - moveEvent.clientX);
+      else setPaneSize(pane, shell.getBoundingClientRect().bottom - moveEvent.clientY);
+    };
+    const finish = () => {
+      resizer.classList.remove('is-resizing');
+      document.body.classList.remove('is-resizing-pane');
+      resizer.removeEventListener('pointermove', move);
+      resizer.removeEventListener('pointerup', finish);
+      resizer.removeEventListener('pointercancel', finish);
+      updateEditorBounds();
+    };
+    resizer.addEventListener('pointermove', move);
+    resizer.addEventListener('pointerup', finish);
+    resizer.addEventListener('pointercancel', finish);
+  });
+  resizer.addEventListener('keydown', (event) => {
+    const step = event.shiftKey ? 40 : 10;
+    let delta = 0;
+    if (pane === 'navigation') delta = event.key === 'ArrowRight' ? step : event.key === 'ArrowLeft' ? -step : 0;
+    else if (pane === 'chat') delta = event.key === 'ArrowLeft' ? step : event.key === 'ArrowRight' ? -step : 0;
+    else delta = event.key === 'ArrowUp' ? step : event.key === 'ArrowDown' ? -step : 0;
+    if (!delta) return;
+    event.preventDefault();
+    const current = pane === 'navigation'
+      ? sidebarLeft.getBoundingClientRect().width
+      : pane === 'chat'
+        ? sidebarRight.getBoundingClientRect().width
+        : document.querySelector('#versions-view').getBoundingClientRect().height;
+    setPaneSize(pane, current + delta);
+    updateEditorBounds();
+  });
+}
 
 const byteSize = (text) => new TextEncoder().encode(String(text)).length;
 const formatSize = (bytes) => {
@@ -140,8 +223,9 @@ const updateAppInfo = () => {
   appStoryStats.textContent = contentStats(models.STORY.text, storedSectionSize('STORY'));
   appMetadataStats.textContent = contentStats(models.METADATA.text, storedSectionSize('METADATA'));
   appChatStats.textContent = chatStats(models.CHAT.text, storedSectionSize('CHAT'));
-  const revisionCount = history?.revisions.size ?? 0;
-  appVersionStats.textContent = `${revisionCount} revision${revisionCount === 1 ? '' : 's'} · current ${history?.currentRevision ?? '—'} · ${formatSize(storedSectionSize('VERSIONS'))}`;
+  const storyRevisionCount = history?.revisions.size ?? 0;
+  const metadataRevisionCount = metadataHistory?.revisions.size ?? 0;
+  appVersionStats.textContent = `STORY ${storyRevisionCount} · ${history?.currentRevision ?? '—'}; METADATA ${metadataRevisionCount} · ${metadataHistory?.currentRevision ?? '—'} · ${formatSize(storedSectionSize('VERSIONS'))}`;
   appOtherSections.hidden = otherRoots.length === 0;
   appOtherSectionStats.textContent = `${otherRoots.length} section${otherRoots.length === 1 ? '' : 's'} · ${formatSize(otherBytes)}`;
   appAIConnection.textContent = aiStatus.dataset.connected === 'true' ? 'Connected' : 'Disconnected';
@@ -220,7 +304,7 @@ if (preferences) {
     .catch(() => setAIStatus('Disconnected', 'error'));
 }
 
-const AGENT_PROTOCOL = 'You are assisting an author. Rewrite only the TARGET passage, respecting the REFERENCE material and surrounding STORY CONTEXT. Reply with only the replacement prose, and nothing else.\n\nREPLACEMENT:';
+const AGENT_PROTOCOL = 'You are assisting an author. Rewrite only the TARGET passage, respecting the REFERENCE material and surrounding context. Reply with only the replacement prose, and nothing else.\n\nREPLACEMENT:';
 
 const initialStory = `# Chapter One
 
@@ -288,9 +372,12 @@ const openFolds = new Set(['STORY', 'METADATA']);
 const collapsedSectionPaths = new Set();
 let metadataDirty = false;
 let chatDirty = false;
-let history = null;
-let commitController = null;
+let history = null; // STORY history; retained as the story-specific alias.
+let metadataHistory = null;
+let commitController = null; // STORY controller; retained for story workbench APIs.
+let metadataCommitController = null;
 let historyMismatch = null;
+let metadataHistoryMismatch = null;
 let suppressAutoPersist = false;
 let persistAfterCommit = async () => {};
 
@@ -301,6 +388,7 @@ try {
     CHAT: new EditContextEditor(elements.CHAT, models.CHAT),
     COMPOSITE: new EditContextEditor(elements.COMPOSITE, models.COMPOSITE),
   };
+  editorsForBounds = editors;
   const editor = editors.STORY;
   const model = models.STORY;
 
@@ -319,12 +407,58 @@ try {
 
   let pinnedChatStart = null;
   let chatAbortController = null;
+  let activeChatJob = null;
+  let nextChatJobId = 1;
+  const chatJobs = [];
+  let renderedChatTurnCount = 0;
   const chatContextStart = (turns) => {
     if (pinnedChatStart !== null && pinnedChatStart >= 0 && pinnedChatStart < turns.length) return pinnedChatStart;
     return Math.max(0, turns.length - chatHistoryMessageCount);
   };
+  let chatContextLineFrame = null;
+  const positionChatContextLine = () => {
+    chatContextLineFrame = null;
+    const startCard = chatHistory.querySelector('.context-start, .ghost-context-start');
+    const marker = startCard?.querySelector('.chat-context-marker');
+    const lastCard = chatHistory.querySelector('.chat-turn:last-of-type');
+    if (startCard && marker && lastCard) {
+      const top = startCard.offsetTop + marker.offsetTop + marker.offsetHeight;
+      const bottom = lastCard.offsetTop + lastCard.offsetHeight + Number.parseFloat(getComputedStyle(chatHistory).paddingBottom);
+      chatHistory.style.setProperty('--context-line-top', `${top}px`);
+      chatHistory.style.setProperty('--context-line-height', `${Math.max(0, bottom - top)}px`);
+    }
+  };
+  const scheduleChatContextLinePosition = () => {
+    if (chatContextLineFrame === null) chatContextLineFrame = requestAnimationFrame(positionChatContextLine);
+  };
+  new ResizeObserver(scheduleChatContextLinePosition).observe(chatHistory);
+  const updateChatContextPresentation = () => {
+    const start = pinnedChatStart !== null && pinnedChatStart >= 0 && pinnedChatStart < renderedChatTurnCount
+      ? pinnedChatStart
+      : Math.max(0, renderedChatTurnCount - chatHistoryMessageCount);
+    chatContextSummary.textContent = renderedChatTurnCount
+      ? `${renderedChatTurnCount - start} of ${renderedChatTurnCount} turns will be sent`
+      : 'No prior turns';
+    for (const card of chatHistory.querySelectorAll('.chat-turn')) {
+      const index = Number(card.dataset.turnIndex);
+      const isStoredTurn = index < renderedChatTurnCount;
+      const isPinned = pinnedChatStart === index;
+      card.classList.toggle('context-included', index >= start && isStoredTurn);
+      card.classList.toggle('context-start', index === start && isStoredTurn && pinnedChatStart !== null);
+      card.classList.toggle('ghost-context-start', index === start && isStoredTurn && pinnedChatStart === null);
+      const marker = card.querySelector('.chat-context-marker');
+      marker.textContent = isPinned ? '●' : '○';
+      marker.setAttribute('aria-label', isPinned ? 'Unpin context start' : `Use context from turn ${index + 1}`);
+      marker.title = marker.getAttribute('aria-label');
+      marker.disabled = !isStoredTurn;
+    }
+    scheduleChatContextLinePosition();
+  };
   const renderChatHistory = (pendingTurn = null) => {
+    const previousScrollTop = chatHistory.scrollTop;
+    const wasAtBottom = chatHistory.scrollHeight - chatHistory.clientHeight - previousScrollTop <= 2;
     const turns = parseChatTurns(models.CHAT.text);
+    renderedChatTurnCount = turns.length;
     const start = chatContextStart(turns);
     chatHistory.replaceChildren();
     chatHistory.classList.toggle('has-context', turns.length > 0);
@@ -335,6 +469,7 @@ try {
     for (const [index, turn] of visibleTurns.entries()) {
       const card = document.createElement('article');
       card.className = 'chat-turn';
+      card.dataset.turnIndex = String(index);
       if (index >= start && index < turns.length) card.classList.add('context-included');
       if (index === start && index < turns.length) card.classList.add(pinnedChatStart === null ? 'ghost-context-start' : 'context-start');
       const header = document.createElement('header');
@@ -349,13 +484,13 @@ try {
       marker.title = marker.getAttribute('aria-label');
       marker.disabled = index >= turns.length;
       marker.addEventListener('click', () => {
-        pinnedChatStart = isPinned ? null : index;
-        renderChatHistory();
+        pinnedChatStart = pinnedChatStart === index ? null : index;
+        updateChatContextPresentation();
       });
       header.append(title, marker);
       const createMessage = (role, text) => {
         const message = document.createElement('section');
-        message.className = `chat-message chat-${role.toLowerCase()}`;
+        message.className = `chat-message chat-${role.toLowerCase()} chat-${role === 'user' ? 'input' : 'output'}`;
         const label = document.createElement('div');
         label.className = 'chat-message-label';
         label.textContent = role;
@@ -368,10 +503,12 @@ try {
       card.append(header, createMessage('user', turn.input), createMessage('agent', turn.output));
       chatHistory.append(card);
     }
+    for (const job of chatJobs.filter((job) => job.state !== 'cancelled' && (job.state !== 'complete' || job.kind === 'rewrite'))) {
+      chatHistory.append(renderChatJob(job));
+    }
     requestAnimationFrame(() => {
-      const startCard = chatHistory.querySelector('.context-start, .ghost-context-start');
-      if (startCard) chatHistory.style.setProperty('--context-line-top', `${startCard.offsetTop + 10}px`);
-      chatHistory.scrollTop = chatHistory.scrollHeight;
+      scheduleChatContextLinePosition();
+      chatHistory.scrollTop = wasAtBottom ? chatHistory.scrollHeight : previousScrollTop;
     });
   };
 
@@ -381,44 +518,193 @@ try {
     await preferences?.set({ chatHistoryMessages: chatHistoryMessageCount });
     renderChatHistory();
   });
-  const setChatSending = (sending) => {
-    chatSendButton.hidden = sending;
-    chatCancelButton.hidden = !sending;
+  const setChatSending = () => {
+    chatSendButton.hidden = false;
+    chatCancelButton.hidden = true;
+  };
+  const refreshAgentTargetHighlights = () => {
+    for (const root of ['STORY', 'METADATA']) {
+      editors[root].setHighlights(chatJobs
+        .filter((job) => job.kind === 'rewrite' && job.root === root && ['queued', 'generating'].includes(job.state))
+        .map((job) => ({ from: job.range[0], to: job.range[1], color: job.id })));
+    }
+  };
+  const renderChatJob = (job) => {
+    const card = document.createElement('article');
+    card.className = `chat-turn chat-job chat-job-${job.state}`;
+    const header = document.createElement('header');
+    const title = document.createElement('span');
+    title.textContent = job.kind === 'rewrite' ? `${job.root} selection · ${job.state}` : `Chat · ${job.state}`;
+    header.append(title);
+    const instruction = document.createElement('div');
+    instruction.className = 'chat-message-content';
+    instruction.textContent = job.input;
+    card.append(header, instruction);
+    if (job.output) {
+      const output = document.createElement('div');
+      output.className = 'chat-message-content';
+      output.textContent = job.output;
+      card.append(output);
+    }
+    if (job.state === 'queued' || job.state === 'generating') {
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.textContent = 'Cancel';
+      cancel.setAttribute('aria-label', `Cancel queued turn ${job.id}`);
+      cancel.addEventListener('click', () => cancelChatJob(job));
+      card.append(cancel);
+    }
+    if (job.kind === 'rewrite' && job.state === 'complete') {
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.textContent = 'Retry';
+      retry.addEventListener('click', () => void retryChatJob(job));
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = 'Remove card';
+      remove.addEventListener('click', () => removeChatJob(job));
+      card.append(retry, remove);
+    }
+    return card;
+  };
+  const cancelChatJob = (job) => {
+    if (!window.confirm(`Cancel ${job.kind === 'rewrite' ? 'the selected-text rewrite' : 'this chat turn'}?`)) return;
+    if (job.state === 'generating') job.abortController?.abort();
+    else {
+      job.state = 'cancelled';
+      refreshAgentTargetHighlights();
+      renderChatHistory();
+    }
+  };
+  const removeChatJob = (job) => {
+    if (!window.confirm('Remove this completed rewrite card? Its durable revision and chat transcript will remain available.')) return;
+    job.state = 'cancelled';
+    renderChatHistory();
+  };
+  const retryChatJob = async (job) => {
+    if (!window.confirm('Retry this rewrite? The previous result will remain as a version branch.')) return;
+    const baseText = await reconstructRevision(job.history, job.baseRevisionId);
+    if (job.history.currentRevision === job.revisionId && job.model.text === await reconstructRevision(job.history, job.revisionId)) {
+      await job.controller.checkout(job.baseRevisionId);
+    }
+    chatJobs.push({
+      id: nextChatJobId++, input: job.input, output: '', state: 'queued', kind: 'rewrite',
+      root: job.root, history: job.history, controller: job.controller, model: job.model,
+      baseRevisionId: job.baseRevisionId, range: job.range, baseText,
+    });
+    refreshAgentTargetHighlights();
+    renderChatHistory();
+    void processChatQueue();
+  };
+  const completeChatJob = async (job, output) => {
+    job.state = 'complete';
+    job.output = output;
+    editors.CHAT.replace(0, models.CHAT.text.length, appendChatTurn(models.CHAT.text, job.input, output), 'chat');
+    pinnedChatStart = null;
+    await persistAfterCommit();
+  };
+  const processChatQueue = async () => {
+    if (activeChatJob) return;
+    const job = chatJobs.find(({ state }) => state === 'queued');
+    if (!job) return;
+    activeChatJob = job;
+    job.state = 'generating';
+    job.abortController = new AbortController();
+    chatAbortController = job.abortController;
+    setChatSending();
+    refreshAgentTargetHighlights();
+    renderChatHistory();
+    try {
+      if (job.kind === 'rewrite') {
+        const result = await requestRewrite({
+          client: koboldClient,
+          history: job.history,
+          baseRevisionId: job.baseRevisionId,
+          range: job.range,
+          root: job.root,
+          contextStoryText: models.STORY.text,
+          request: job.input,
+          metadataText: models.METADATA.text,
+          pins: readPins(models.METADATA.text),
+          references: agentReferences,
+          agentProtocol: AGENT_PROTOCOL,
+          generationOptions: { max_length: generationMaxLength },
+          onToken: (text) => { job.output = text; renderChatHistory(); },
+          signal: job.abortController.signal,
+        });
+        const baseText = await reconstructRevision(job.history, job.baseRevisionId);
+        job.revisionId = result.revision.id;
+        if (job.history.currentRevision === job.baseRevisionId && job.model.text === baseText) {
+          await job.controller.checkout(result.revision.id);
+          await completeChatJob(job, `${result.generated}\n\nApplied to ${job.root}; previous revision remains in Versions.`);
+        } else {
+          await completeChatJob(job, `${result.generated}\n\nSaved as an alternative branch for ${job.root}.`);
+        }
+      } else {
+        const turns = parseChatTurns(models.CHAT.text);
+        const prior = turns.slice(chatContextStart(turns));
+        const prompt = [...prior.flatMap((turn) => ['{{[INPUT]}}', turn.input, '{{[OUTPUT]}}', turn.output]), '{{[INPUT]}}', job.input, '{{[OUTPUT]}}'].join('\n');
+        let output = '';
+        for await (const token of koboldClient.generateStream({ prompt, max_length: generationMaxLength }, { signal: job.abortController.signal })) {
+          output += token;
+          job.output = output;
+          renderChatHistory();
+        }
+        await completeChatJob(job, output);
+      }
+    } catch (error) {
+      job.state = error.name === 'AbortError' || error.code === 'ABORTED' ? 'cancelled' : 'failed';
+      job.output = job.state === 'cancelled' ? 'Cancelled.' : error.message;
+    } finally {
+      chatAbortController = null;
+      activeChatJob = null;
+      setChatSending();
+      refreshAgentTargetHighlights();
+      renderChatHistory();
+      void processChatQueue();
+    }
   };
   chatSendButton.addEventListener('click', async () => {
     const input = chatPrompt.value.trim();
     if (!input || !koboldClient || aiStatus.dataset.connected !== 'true') return;
-    const turns = parseChatTurns(models.CHAT.text);
-    const prior = turns.slice(chatContextStart(turns));
-    const prompt = [
-      ...prior.flatMap((turn) => ['{{[INPUT]}}', turn.input, '{{[OUTPUT]}}', turn.output]),
-      '{{[INPUT]}}', input, '{{[OUTPUT]}}',
-    ].join('\n');
-    let output = '';
-    chatAbortController = new AbortController();
-    setChatSending(true);
+    const selectedRoot = ['STORY', 'METADATA'].includes(activeRoot) && models[activeRoot].selectionStart !== models[activeRoot].selectionEnd
+      ? activeRoot
+      : null;
+    let job = { id: nextChatJobId++, input, output: '', state: 'queued', kind: 'chat' };
+    if (selectedRoot) {
+      const controller = selectedRoot === 'STORY' ? commitController : metadataCommitController;
+      const targetHistory = selectedRoot === 'STORY' ? history : metadataHistory;
+      await controller.beforeAgentRequest();
+      const baseRevisionId = targetHistory.currentRevision;
+      const range = [models[selectedRoot].selectionStart, models[selectedRoot].selectionEnd];
+      const baseText = await reconstructRevision(targetHistory, baseRevisionId);
+      job = {
+        ...job,
+        kind: 'rewrite',
+        root: selectedRoot,
+        history: targetHistory,
+        controller,
+        model: models[selectedRoot],
+        baseRevisionId,
+        range,
+        anchor: {
+          root: selectedRoot,
+          baseRevisionId,
+          range,
+          targetHash: await hashStory(baseText.slice(range[0], range[1])),
+          before: baseText.slice(Math.max(0, range[0] - CONTEXT_WINDOW), range[0]),
+          after: baseText.slice(range[1], range[1] + CONTEXT_WINDOW),
+        },
+      };
+    }
+    chatJobs.push(job);
+    refreshAgentTargetHighlights();
     chatPrompt.value = '';
     chatPrompt.focus();
-    chatContextSummary.textContent = 'Generating…';
-    try {
-      for await (const token of koboldClient.generateStream({ prompt, max_length: generationMaxLength }, { signal: chatAbortController.signal })) {
-        output += token;
-        renderChatHistory({ input, output });
-      }
-      editors.CHAT.replace(0, models.CHAT.text.length, appendChatTurn(models.CHAT.text, input, output), 'chat');
-      pinnedChatStart = null;
-      await persistAfterCommit();
-    } catch (error) {
-      if (!chatPrompt.value) chatPrompt.value = input;
-      chatContextSummary.textContent = error.name === 'AbortError' ? 'Generation canceled' : error.message;
-    } finally {
-      chatAbortController = null;
-      setChatSending(false);
-      renderChatHistory();
-      chatPrompt.focus();
-    }
+    renderChatHistory();
+    void processChatQueue();
   });
-  chatCancelButton.addEventListener('click', () => chatAbortController?.abort());
+  chatCancelButton.addEventListener('click', () => activeChatJob && cancelChatJob(activeChatJob));
   chatPrompt.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
@@ -689,20 +975,22 @@ try {
   const CONTEXT_WINDOW = 400;
 
   const updateContextInspectorVisibility = () => {
-    const hasSelection = activeRoot === 'STORY' && model.selectionStart !== model.selectionEnd;
+    const activeModel = models[activeRoot];
+    const hasSelection = ['STORY', 'METADATA'].includes(activeRoot) && activeModel.selectionStart !== activeModel.selectionEnd;
     contextInspectorContainer.hidden = !hasSelection;
     if (!hasSelection) { contextBody.hidden = true; contextBody.replaceChildren(); }
   };
 
   const renderContextPreview = async () => {
-    const range = [model.selectionStart, model.selectionEnd];
+    const activeModel = models[activeRoot];
+    const range = [activeModel.selectionStart, activeModel.selectionEnd];
     const composed = composeContext({
       storyText: model.text,
       metadataText: models.METADATA.text,
       pins: readPins(models.METADATA.text),
-      before: model.text.slice(Math.max(0, range[0] - CONTEXT_WINDOW), range[0]),
-      target: model.text.slice(range[0], range[1]),
-      after: model.text.slice(range[1], Math.min(model.text.length, range[1] + CONTEXT_WINDOW)),
+      before: activeModel.text.slice(Math.max(0, range[0] - CONTEXT_WINDOW), range[0]),
+      target: activeModel.text.slice(range[0], range[1]),
+      after: activeModel.text.slice(range[1], Math.min(activeModel.text.length, range[1] + CONTEXT_WINDOW)),
       request: '',
       agentProtocol: AGENT_PROTOCOL,
       references: agentReferences,
@@ -762,8 +1050,10 @@ try {
   let agentAbortController = null;
 
   const updateAgentPanelVisibility = () => {
-    const canGenerate = activeRoot === 'STORY'
-      && model.selectionStart !== model.selectionEnd
+    const activeModel = models[activeRoot];
+    const canGenerate = ['STORY', 'METADATA'].includes(activeRoot)
+      && activeModel.selectionStart !== activeModel.selectionEnd
+      && Boolean(activeHistory())
       && Boolean(koboldClient)
       && aiStatus.dataset.connected === 'true';
     agentPanel.hidden = !canGenerate;
@@ -779,9 +1069,11 @@ try {
   };
 
   const renderAgentProposals = () => {
-    if (!history) return;
-    const baseId = history.currentRevision;
-    const proposals = childrenOf(history, baseId).filter((revision) => revision.origin === 'agent');
+    const currentHistory = activeHistory();
+    const currentController = activeCommitController();
+    if (!currentHistory) return;
+    const baseId = currentHistory.currentRevision;
+    const proposals = childrenOf(currentHistory, baseId).filter((revision) => revision.origin === 'agent');
     agentProposals.replaceChildren();
     for (const revision of proposals) {
       const card = document.createElement('article');
@@ -793,7 +1085,7 @@ try {
       checkout.type = 'button';
       checkout.textContent = 'Checkout';
       checkout.addEventListener('click', async () => {
-        await commitController.checkout(revision.id);
+        await currentController.checkout(revision.id);
         renderVersions();
         refreshHistoryControls();
         renderAgentProposals();
@@ -806,7 +1098,7 @@ try {
       previewBody.hidden = true;
       preview.addEventListener('click', async () => {
         if (!previewBody.hidden) { previewBody.hidden = true; return; }
-        previewBody.textContent = await reconstructRevision(history, revision.id);
+        previewBody.textContent = await reconstructRevision(currentHistory, revision.id);
         previewBody.hidden = false;
       });
       const referenceId = `proposal:${revision.id}`;
@@ -819,7 +1111,7 @@ try {
       };
       setReferenceLabel();
       useAsReference.addEventListener('click', async () => {
-        const text = await reconstructRevision(history, revision.id);
+        const text = await reconstructRevision(currentHistory, revision.id);
         toggleAgentReference({ id: referenceId, label: `Proposal ${revision.id} (agent)`, text });
         setReferenceLabel();
       });
@@ -829,9 +1121,13 @@ try {
   };
 
   agentGenerateButton.addEventListener('click', async () => {
-    await commitController.beforeAgentRequest();
-    const baseRevisionId = history.currentRevision;
-    const range = [model.selectionStart, model.selectionEnd];
+    const root = activeRoot;
+    const targetModel = models[root];
+    const targetHistory = activeHistory();
+    const targetController = activeCommitController();
+    await targetController.beforeAgentRequest();
+    const baseRevisionId = targetHistory.currentRevision;
+    const range = [targetModel.selectionStart, targetModel.selectionEnd];
     const request = agentInstruction.value.trim();
     agentAbortController = new AbortController();
     agentGenerateButton.hidden = true;
@@ -842,9 +1138,11 @@ try {
     try {
       const result = await requestRewrite({
         client: koboldClient,
-        history,
+        history: targetHistory,
         baseRevisionId,
         range,
+        root,
+        contextStoryText: models.STORY.text,
         request,
         metadataText: models.METADATA.text,
         pins: readPins(models.METADATA.text),
@@ -854,7 +1152,14 @@ try {
         onToken: (text) => { agentPreview.textContent = text; },
         signal: agentAbortController.signal,
       });
-      setAgentStatus('Proposal ready. The checked-out STORY is unchanged until you check it out.');
+      const baseText = await reconstructRevision(targetHistory, baseRevisionId);
+      const remainsCurrent = targetHistory.currentRevision === baseRevisionId && targetModel.text === baseText;
+      if (remainsCurrent) {
+        await targetController.checkout(result.revision.id);
+        setAgentStatus(`Applied to ${root}; the prior state remains reversible in Versions.`);
+      } else {
+        setAgentStatus(`Alternative saved for ${root}; it changed while this request was running.`);
+      }
       renderAgentProposals();
       enqueueNoteGeneration(result.revision);
     } catch (error) {
@@ -873,10 +1178,12 @@ try {
   };
 
   const refreshHistoryControls = () => {
-    const current = history?.revisions.get(history.currentRevision);
-    undoButton.disabled = !commitController || (!commitController.undoOperations.length && !current?.parents.length);
-    const children = history ? childrenOf(history, history.currentRevision) : [];
-    redoButton.disabled = !commitController || (!commitController.redoOperations.length && children.length === 0);
+    const currentHistory = activeHistory();
+    const currentController = activeCommitController();
+    const current = currentHistory?.revisions.get(currentHistory.currentRevision);
+    undoButton.disabled = !currentController || (!currentController.undoOperations.length && !current?.parents.length);
+    const children = currentHistory ? childrenOf(currentHistory, currentHistory.currentRevision) : [];
+    redoButton.disabled = !currentController || (!currentController.redoOperations.length && children.length === 0);
     redoButton.textContent = children.length > 1 ? 'Redo…' : 'Redo';
   };
 
@@ -899,6 +1206,27 @@ try {
     refreshHistoryControls();
   };
 
+  const attachMetadataHistory = (nextHistory) => {
+    metadataCommitController?.destroy();
+    metadataHistory = nextHistory;
+    metadataCommitController = new CommitController({
+      history: metadataHistory,
+      model: models.METADATA,
+      onError: (error) => showStatus(error.message, true),
+      onChange: () => {
+        if (activeRoot === 'METADATA') {
+          refreshHistoryControls();
+          renderVersions();
+        }
+      },
+      onCommit: () => (suppressAutoPersist ? undefined : persistAfterCommit()),
+    });
+    if (activeRoot === 'METADATA') refreshHistoryControls();
+  };
+
+  const activeHistory = () => activeRoot === 'METADATA' ? metadataHistory : history;
+  const activeCommitController = () => activeRoot === 'METADATA' ? metadataCommitController : commitController;
+
   const showStatus = (message, isError = false) => {
     documentStatus.textContent = message;
     documentStatus.classList.toggle('status-error', isError);
@@ -913,7 +1241,8 @@ try {
 
   const revisionDepth = (revisionId, cache = new Map()) => {
     if (cache.has(revisionId)) return cache.get(revisionId);
-    const revision = history.revisions.get(revisionId);
+    const currentHistory = activeHistory();
+    const revision = currentHistory?.revisions.get(revisionId);
     const depth = !revision || revision.parents.length === 0
       ? 0
       : 1 + Math.max(...revision.parents.map((parent) => revisionDepth(parent, cache)));
@@ -954,7 +1283,8 @@ try {
   let renderedGraphNodeIds = [];
 
   const renderPinnedVariations = async () => {
-    if (!history) return;
+    const currentHistory = activeHistory();
+    if (!currentHistory) return;
     versionInspector.replaceChildren();
     const title = document.createElement('h3');
     title.textContent = pinnedRevisionIds.length
@@ -968,7 +1298,7 @@ try {
       versionInspector.append(hint);
       return;
     }
-    const revisions = ids.map((id) => history.revisions.get(id)).filter(Boolean);
+    const revisions = ids.map((id) => currentHistory.revisions.get(id)).filter(Boolean);
     for (const revision of revisions) {
       const section = document.createElement('section');
       section.className = 'pinned-variation';
@@ -984,10 +1314,11 @@ try {
       pin.addEventListener('click', () => togglePinnedRevision(revision.id));
       const checkout = document.createElement('button');
       checkout.type = 'button';
-      checkout.textContent = revision.id === history.currentRevision ? 'Current' : 'Checkout';
-      checkout.disabled = revision.id === history.currentRevision || !commitController;
+      const currentController = activeCommitController();
+      checkout.textContent = revision.id === currentHistory.currentRevision ? 'Current' : 'Checkout';
+      checkout.disabled = revision.id === currentHistory.currentRevision || !currentController;
       checkout.addEventListener('click', async () => {
-        await commitController.checkout(revision.id);
+        await currentController.checkout(revision.id);
         focusedRevisionId = revision.id;
         renderVersions();
         refreshHistoryControls();
@@ -1006,14 +1337,14 @@ try {
       heading.textContent = 'Automatic comparison';
       compare.append(heading);
       const [baseId, ...variationIds] = pinnedRevisionIds;
-      const baseText = await reconstructRevision(history, baseId);
+      const baseText = await reconstructRevision(currentHistory, baseId);
       for (const variationId of variationIds) {
         const row = document.createElement('div');
         row.className = 'variation-diff';
         const label = document.createElement('p');
         label.textContent = `Revision ${baseId} ↔ Revision ${variationId}`;
         row.append(label);
-        const variationText = await reconstructRevision(history, variationId);
+        const variationText = await reconstructRevision(currentHistory, variationId);
         for (const op of wordDiff(baseText, variationText)) {
           const span = document.createElement('span');
           span.className = op.type === 'delete' ? 'diff-delete' : op.type === 'insert' ? 'diff-insert' : '';
@@ -1049,9 +1380,10 @@ try {
   };
 
   const renderLocalGraph = () => {
-    if (!history || !versionGraph) return;
-    const centerId = focusedRevisionId ?? history.currentRevision;
-    const graph = buildLocalGraph(history, centerId, { radius: 2 });
+    const currentHistory = activeHistory();
+    if (!currentHistory || !versionGraph) return;
+    const centerId = focusedRevisionId ?? currentHistory.currentRevision;
+    const graph = buildLocalGraph(currentHistory, centerId, { radius: 2 });
     versionGraph.replaceChildren();
     const nodes = [...graph.nodes].sort((left, right) => left.id - right.id);
     renderedGraphNodeIds = nodes.map(({ id }) => id);
@@ -1107,8 +1439,9 @@ try {
   };
 
   versionSearchInput.addEventListener('input', () => {
-    if (!history) return;
-    const results = searchRevisions(history, versionSearchInput.value);
+    const currentHistory = activeHistory();
+    if (!currentHistory) return;
+    const results = searchRevisions(currentHistory, versionSearchInput.value);
     versionSearchResults.replaceChildren();
     versionSearchResults.hidden = results.length === 0;
     for (const revision of results) {
@@ -1121,7 +1454,7 @@ try {
   });
 
   const renderVersions = () => {
-    if (!history) return;
+    if (!activeHistory()) return;
     renderLocalGraph();
     void renderPinnedVariations();
   };
@@ -1233,6 +1566,13 @@ try {
       return;
     }
     activeRoot = rootName;
+    if (rootName === 'STORY' || rootName === 'METADATA') {
+      focusedRevisionId = null;
+      inspectedRevisionId = null;
+      pinnedRevisionIds = [];
+      refreshHistoryControls();
+      if (versionsOpen) renderVersions();
+    }
     for (const name of ['STORY', 'METADATA']) elements[name].hidden = !['STORY', 'METADATA'].includes(rootName) || name !== rootName;
     compositeView.hidden = rootName !== 'COMPOSITE';
     for (const button of document.querySelectorAll('[data-view]')) {
@@ -1256,6 +1596,7 @@ try {
   const setVersionsOpen = (open) => {
     versionsOpen = open;
     versionsView.hidden = !open;
+    paneResizers.versions.hidden = !open;
     for (const button of versionToggleButtons) {
       button.setAttribute('aria-expanded', String(open));
       button.setAttribute('aria-label', open ? 'Hide versions' : 'Versions');
@@ -1265,6 +1606,7 @@ try {
       renderVersions();
       requestAnimationFrame(() => versionGraph.focus());
     }
+    updateEditorBounds();
   };
 
   for (const button of versionToggleButtons) {
@@ -1305,12 +1647,13 @@ try {
     event.preventDefault();
   });
   versionGraph.addEventListener('keydown', (event) => {
-    if (!history) return;
-    const currentId = focusedRevisionId ?? history.currentRevision;
-    const revision = history.revisions.get(currentId);
+    const currentHistory = activeHistory();
+    if (!currentHistory) return;
+    const currentId = focusedRevisionId ?? currentHistory.currentRevision;
+    const revision = currentHistory.revisions.get(currentId);
     let nextId = null;
     if (event.key === 'ArrowLeft') nextId = revision?.parents[0] ?? null;
-    if (event.key === 'ArrowRight') nextId = childrenOf(history, currentId)[0]?.id ?? null;
+    if (event.key === 'ArrowRight') nextId = childrenOf(currentHistory, currentId)[0]?.id ?? null;
     if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
       const index = renderedGraphNodeIds.indexOf(currentId);
       const offset = event.key === 'ArrowUp' ? -1 : 1;
@@ -1334,9 +1677,9 @@ try {
       if (activeRoot === name) updateSelectionStatus(detail);
       if (name === 'CHAT') refreshChatOutline();
       else refreshSidebar();
-      if (name === 'STORY') {
+      if (name === 'STORY' || name === 'METADATA') {
         refreshHistoryControls();
-        updatePassageHistoryVisibility();
+        if (name === 'STORY') updatePassageHistoryVisibility();
         updateContextInspectorVisibility();
         updateAgentPanelVisibility();
       }
@@ -1371,26 +1714,36 @@ try {
     editors.METADATA.replace(0, models.METADATA.text.length, metadata?.text ?? '', 'open');
     editors.CHAT.replace(0, models.CHAT.text.length, chat?.text ?? '', 'open');
     const versions = projectRoot(parsed, 'VERSIONS');
-    const nextHistory = versions?.text.trim()
-      ? parseHistory(versions.text)
-      : await createHistory(story.text);
-    const verification = await verifyCurrentStory(nextHistory, story.text);
-    historyMismatch = verification.matches ? null : verification;
-    if (historyMismatch) {
+    const parsedHistories = versions?.text.trim()
+      ? parseHistories(versions.text)
+      : { STORY: await createHistory(story.text), METADATA: await createHistory(metadata?.text ?? '') };
+    const nextHistory = parsedHistories.STORY;
+    const nextMetadataHistory = parsedHistories.METADATA ?? await createHistory(metadata?.text ?? '');
+    const [storyVerification, metadataVerification] = await Promise.all([
+      verifyCurrentStory(nextHistory, story.text),
+      verifyCurrentStory(nextMetadataHistory, metadata?.text ?? ''),
+    ]);
+    historyMismatch = storyVerification.matches ? null : storyVerification;
+    metadataHistoryMismatch = metadataVerification.matches ? null : metadataVerification;
+    if (historyMismatch || metadataHistoryMismatch) {
       commitController?.destroy();
       commitController = null;
+      metadataCommitController?.destroy();
+      metadataCommitController = null;
       history = nextHistory;
+      metadataHistory = nextMetadataHistory;
       recordExternalButton.hidden = false;
-      showStatus('STORY differs from recorded history. Record the external edit before continuing.', true);
+      showStatus('STORY or METADATA differs from recorded history. Record the external edit before continuing.', true);
     } else {
       recordExternalButton.hidden = true;
       attachHistory(nextHistory);
+      attachMetadataHistory(nextMetadataHistory);
     }
     metadataDirty = false;
     chatDirty = false;
     currentDocument = openedDocument;
     editorTitle.textContent = openedDocument.filePath.split(/[\\/]/).at(-1);
-    if (!historyMismatch) showStatus('Saved');
+    if (!historyMismatch && !metadataHistoryMismatch) showStatus('Saved');
     refreshSidebar();
     refreshChatOutline();
   };
@@ -1399,13 +1752,13 @@ try {
     const replacements = new Map([['STORY', models.STORY.text]]);
     if (project.roots.METADATA || metadataDirty || models.METADATA.text) replacements.set('METADATA', models.METADATA.text);
     if (project.roots.CHAT || chatDirty || models.CHAT.text) replacements.set('CHAT', models.CHAT.text);
-    replacements.set('VERSIONS', serializeHistory(history));
+    replacements.set('VERSIONS', serializeHistories({ STORY: history, METADATA: metadataHistory }));
     return serializeProjectDocument(project, replacements);
   };
   getStorageContents = buildProjectContents;
 
   persistAfterCommit = async () => {
-    if (!currentDocument || historyMismatch) return;
+    if (!currentDocument || historyMismatch || metadataHistoryMismatch) return;
     const contents = buildProjectContents();
     const result = await window.noirDraft.documents.save({
       filePath: currentDocument.filePath,
@@ -1424,11 +1777,14 @@ try {
   };
 
   const saveDocument = async (saveAs = false, note = null) => {
-    if (!commitController) return showStatus('Record the external STORY edit before saving.', true);
+    if (!commitController || !metadataCommitController) return showStatus('Record the external STORY or METADATA edit before saving.', true);
     showStatus('Saving…');
     suppressAutoPersist = true;
     try {
-      await commitController.explicitSave(note);
+      await Promise.all([
+        commitController.explicitSave(note),
+        metadataCommitController.explicitSave(note),
+      ]);
     } finally {
       suppressAutoPersist = false;
     }
@@ -1445,7 +1801,7 @@ try {
   };
 
   document.querySelector('[data-open]').addEventListener('click', async () => {
-    await commitController?.closeOrSwitch();
+    await Promise.all([commitController?.closeOrSwitch(), metadataCommitController?.closeOrSwitch()]);
     const result = await window.noirDraft.documents.open();
     if (result.canceled) return;
     if (result.error) return showStatus(result.error.message, true);
@@ -1477,22 +1833,27 @@ try {
   });
 
   recordExternalButton.addEventListener('click', async () => {
-    await recordExternalEdit(history, models.STORY.text);
+    if (historyMismatch) await recordExternalEdit(history, models.STORY.text);
+    if (metadataHistoryMismatch) await recordExternalEdit(metadataHistory, models.METADATA.text);
     historyMismatch = null;
+    metadataHistoryMismatch = null;
     recordExternalButton.hidden = true;
     attachHistory(history);
-    showStatus('External STORY edit recorded as a recovery revision.');
+    attachMetadataHistory(metadataHistory);
+    showStatus('External STORY/METADATA edit recorded as a recovery revision.');
   });
 
   const runUndo = async () => {
-    if (!commitController) return;
+    const currentController = activeCommitController();
+    if (!currentController) return;
     branchChoices.replaceChildren();
-    await commitController.undo();
+    await currentController.undo();
     refreshHistoryControls();
   };
   const runRedo = async (revisionId = null) => {
-    if (!commitController) return;
-    const result = await commitController.redo(revisionId);
+    const currentController = activeCommitController();
+    if (!currentController) return;
+    const result = await currentController.redo(revisionId);
     branchChoices.replaceChildren();
     if (result.type === 'choose') {
       // Reuse the bounded local graph as the branch chooser instead of a
@@ -1537,6 +1898,7 @@ try {
 
   appSelection.textContent = `${model.text.length} UTF-16 units · caret 0`;
   attachHistory(await createHistory(model.text));
+  attachMetadataHistory(await createHistory(models.METADATA.text));
   refreshSidebar();
   refreshChatOutline();
   updatePassageHistoryVisibility();
@@ -1553,12 +1915,17 @@ try {
     renderPassageHistory,
     renderContextPreview,
     getHistory: () => history,
+    getMetadataHistory: () => metadataHistory,
     getCommitController: () => commitController,
+    getMetadataCommitController: () => metadataCommitController,
+    getActiveHistory: activeHistory,
+    getChatJobs: () => chatJobs.map((job) => ({ id: job.id, kind: job.kind, root: job.root, state: job.state })),
     connectToKobold,
     getKoboldClient: () => koboldClient,
     getKoboldContextLength: () => koboldContextLength,
     getCompositeState: () => compositeState,
     buildProjectContents,
+    loadDocument,
     getAgentReferences: () => agentReferences,
   });
 } catch (error) {

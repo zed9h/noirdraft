@@ -35,7 +35,7 @@ test('launches the secure, menu-free compact shell', async () => {
     const info = window.getByRole('dialog', { name: 'NoirDraft' });
     await expect(info).toBeVisible();
     await expect(info.getByText(/words · .* characters ·/)).toHaveCount(3);
-    await expect(info.getByText('1 revision · current 0', { exact: false })).toBeVisible();
+    await expect(info.getByText('STORY 1 · 0; METADATA 1 · 0', { exact: false })).toBeVisible();
     await expect(info.getByText(/current Markdown/)).toBeVisible();
     await expect(info.getByText('Electron', { exact: false })).toBeVisible();
     await expect(info.getByText('0.1.0', { exact: false })).toBeVisible();
@@ -55,6 +55,41 @@ test('launches the secure, menu-free compact shell', async () => {
     await window.getByLabel('Toggle chat sidebar').click();
     await expect(sidebarLeft).toBeVisible();
     await expect(sidebarRight).toBeVisible();
+  } finally {
+    await application.close();
+  }
+});
+
+test('navigation, chat, and Versions panes resize from their editor borders', async () => {
+  const application = await electron.launch({
+    args: [path.resolve('.')],
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
+  });
+  try {
+    const window = await application.firstWindow();
+    const drag = async (resizer, delta) => {
+      const box = await resizer.boundingBox();
+      await window.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await window.mouse.down();
+      await window.mouse.move(box.x + box.width / 2 + delta.x, box.y + box.height / 2 + delta.y);
+      await window.mouse.up();
+    };
+
+    const navigation = window.getByLabel('Project views');
+    const chat = window.getByRole('complementary', { name: 'Chat' });
+    const navigationWidth = (await navigation.boundingBox()).width;
+    await drag(window.getByLabel('Resize navigation pane'), { x: 80, y: 0 });
+    expect((await navigation.boundingBox()).width).toBeGreaterThan(navigationWidth + 60);
+
+    const chatWidth = (await chat.boundingBox()).width;
+    await drag(window.getByLabel('Resize chat pane'), { x: -80, y: 0 });
+    expect((await chat.boundingBox()).width).toBeGreaterThan(chatWidth + 60);
+
+    await window.getByRole('button', { name: 'Versions', exact: true }).click();
+    const versions = window.getByLabel('Versions graph');
+    const versionsHeight = (await versions.boundingBox()).height;
+    await drag(window.getByLabel('Resize versions pane'), { x: 0, y: -80 });
+    expect((await versions.boundingBox()).height).toBeGreaterThan(versionsHeight + 60);
   } finally {
     await application.close();
   }

@@ -1,6 +1,7 @@
 import { composeContext } from './context.js';
 import { KoboldError } from './kobold.js';
 import { commitRevision, reconstructRevision } from '../history/graph.js';
+import { hashStory } from '../history/hash.js';
 
 export class AgentError extends Error {
   constructor(message, { code, cause, rawText } = {}) {
@@ -12,9 +13,9 @@ export class AgentError extends Error {
 }
 
 /**
- * Streams a bounded rewrite of `range` in the exact base revision's STORY
- * text. This never mutates the checked-out STORY: on success the result is
- * materialized as an agent-origin sibling revision from the exact base
+ * Streams a bounded rewrite of `range` in an exact root revision. This never
+ * mutates the checked-out root: on success the result is materialized as an
+ * agent-origin sibling revision from the exact base
  * (`setCurrent: false`), so multiple proposals from one base survive as
  * preserved branches even when none of them is ever checked out. On failure,
  * the raw generated text is preserved on the thrown AgentError and no
@@ -25,6 +26,8 @@ export async function requestRewrite({
   history,
   baseRevisionId,
   range,
+  root = 'STORY',
+  contextStoryText,
   request,
   metadataText = '',
   pins = [],
@@ -34,16 +37,20 @@ export async function requestRewrite({
   onToken,
   signal,
 }) {
-  const baseStory = await reconstructRevision(history, baseRevisionId);
+  const baseText = await reconstructRevision(history, baseRevisionId);
   const [from, to] = range;
+  if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to < from || to > baseText.length) {
+    throw new AgentError('The selected range is invalid for its base revision.', { code: 'INVALID_RANGE' });
+  }
+  const target = baseText.slice(from, to);
   const composed = composeContext({
-    storyText: baseStory,
+    storyText: contextStoryText ?? (root === 'STORY' ? baseText : ''),
     metadataText,
     pins,
     references,
-    before: baseStory.slice(0, from),
-    target: baseStory.slice(from, to),
-    after: baseStory.slice(to),
+    before: baseText.slice(0, from),
+    target,
+    after: baseText.slice(to),
     request,
     agentProtocol,
   });
@@ -70,12 +77,18 @@ export async function requestRewrite({
     throw new AgentError('KoboldCpp returned an empty proposal.', { code: 'EMPTY_RESPONSE', rawText: generated });
   }
 
-  const proposedStory = `${baseStory.slice(0, from)}${replacement}${baseStory.slice(to)}`;
-  const revision = await commitRevision(history, baseStory, proposedStory, {
+  const proposedText = `${baseText.slice(0, from)}${replacement}${baseText.slice(to)}`;
+  const revision = await commitRevision(history, baseText, proposedText, {
     origin: 'agent',
     parentId: baseRevisionId,
     setCurrent: false,
     note: null,
   });
-  return { revision, generated: replacement, prompt: composed.prompt, unresolvedPins: composed.unresolvedPins };
+  return {
+    revision,
+    generated: replacement,
+    prompt: composed.prompt,
+    unresolvedPins: composed.unresolvedPins,
+    anchor: { root, baseRevisionId, range: [from, to], targetHash: await hashStory(target), before: baseText.slice(Math.max(0, from - 400), from), after: baseText.slice(to, to + 400) },
+  };
 }

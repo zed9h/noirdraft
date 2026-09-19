@@ -34,7 +34,6 @@ export function serializeProjectDocument(project, replacements = new Map()) {
     if (written.has(name)) continue;
     const visible = String(visibleValue);
     if (output && !output.endsWith(project.lineEnding)) output += project.lineEnding;
-    if (output && !output.endsWith(project.lineEnding + project.lineEnding)) output += project.lineEnding;
     output += `# ${name}${project.lineEnding}${project.lineEnding}${demoteVisibleHeadings(visible)}`;
   }
   return output;

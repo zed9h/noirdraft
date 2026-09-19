@@ -8,14 +8,14 @@ function fenceFor(payload) {
   return '`'.repeat(Math.max(3, longest + 1));
 }
 
-function serializeRevision(revision) {
+function serializeRevision(revision, headingPrefix = '#') {
   const fence = fenceFor(revision.payload);
   const language = revision.payloadType === 'checkpoint' ? 'markdown' : 'diff';
   const parents = revision.parents.length ? revision.parents.join(', ') : 'none';
   const note = revision.note === null ? 'null' : JSON.stringify(revision.note);
   const payloadSeparator = revision.payload.endsWith('\n') ? '' : '\n';
   return [
-    `# Revision ${revision.id}\n\n`,
+    `${headingPrefix} Revision ${revision.id}\n\n`,
     `Parents: ${parents}\n`,
     `Origin: ${revision.origin}\n`,
     `Time: ${revision.timestamp}\n`,
@@ -30,13 +30,40 @@ function serializeRevision(revision) {
   ].join('');
 }
 
-export function serializeHistory(history) {
+export function serializeHistory(history, { revisionHeadingLevel = 1 } = {}) {
+  if (!Number.isInteger(revisionHeadingLevel) || revisionHeadingLevel < 1 || revisionHeadingLevel > 6) {
+    throw new TypeError('revisionHeadingLevel must be an integer between 1 and 6.');
+  }
   const revisions = [...history.revisions.values()].sort((left, right) => left.id - right.id);
   return [
     `Current-Revision: ${history.currentRevision}\n`,
     `Checkpoint-Interval: ${history.checkpointInterval}\n\n`,
-    revisions.map(serializeRevision).join('\n'),
+    revisions.map((revision) => serializeRevision(revision, '#'.repeat(revisionHeadingLevel))).join('\n'),
   ].join('');
+}
+
+function findHeadingsAtLevel(source, level) {
+  const pattern = new RegExp(`^( {0,3})#{${level}}(?!#)[ \\t]+(.*?)(?:\\r?\\n|$)`, 'gm');
+  const headings = [];
+  let fence = null;
+  let lineStart = 0;
+  for (const lineMatch of String(source).matchAll(/.*(?:\r\n|\n|$)/g)) {
+    const line = lineMatch[0];
+    if (line === '' && lineStart === source.length) break;
+    if (fence) {
+      if (new RegExp(`^ {0,3}${fence}{3,}[ \\t]*(?:\\r?\\n)?$`).test(line)) fence = null;
+    } else {
+      const opening = line.match(/^ {0,3}(`{3,}|~{3,})/);
+      if (opening) fence = opening[1][0];
+      else {
+        pattern.lastIndex = 0;
+        const match = pattern.exec(line);
+        if (match) headings.push({ name: match[2].trim(), from: lineStart, to: lineStart + line.length });
+      }
+    }
+    lineStart += line.length;
+  }
+  return headings;
 }
 
 function requiredField(metadata, name, revisionId) {
@@ -59,14 +86,14 @@ function parsePayload(section, revisionId, length) {
   return { payloadType, payload: rest.slice(0, length), metadata: section.slice(0, opening.index) };
 }
 
-export function parseHistory(source) {
+export function parseHistory(source, { revisionHeadingLevel = 1 } = {}) {
   const text = String(source);
   const currentMatch = text.match(/^Current-Revision: (\d+)$/m);
   const intervalMatch = text.match(/^Checkpoint-Interval: (\d+)$/m);
   if (!currentMatch || !intervalMatch || Number(intervalMatch[1]) < 1) {
     throw new HistoryError('VERSIONS header is missing or malformed.', { code: 'MALFORMED_HISTORY' });
   }
-  const headings = findTopLevelHeadings(text)
+  const headings = (revisionHeadingLevel === 1 ? findTopLevelHeadings(text) : findHeadingsAtLevel(text, revisionHeadingLevel))
     .map((heading) => ({ ...heading, match: heading.name.match(/^Revision (\d+)$/) }))
     .filter(({ match }) => match);
   const revisions = new Map();
@@ -129,4 +156,33 @@ export function parseHistory(source) {
     checkpointInterval: Number(intervalMatch[1]),
     revisions,
   };
+}
+
+const ROOTS = Object.freeze(['STORY', 'METADATA']);
+
+/**
+ * Serializes the two independently recoverable document graphs. The legacy
+ * unscoped form remains accepted by parseHistories() as STORY history.
+ */
+export function serializeHistories(histories) {
+  const groups = ROOTS.filter((root) => histories?.[root]);
+  if (groups.length === 0) throw new TypeError('At least one root history is required.');
+  return groups.map((root) => `# ${root}:REV\n\n${serializeHistory(histories[root], { revisionHeadingLevel: 2 })}`).join('\n');
+}
+
+export function parseHistories(source) {
+  const text = String(source);
+  const groups = findTopLevelHeadings(text)
+    .map((heading) => ({ ...heading, root: heading.name.match(/^(STORY|METADATA):REV$/)?.[1] }))
+    .filter(({ root }) => root);
+  if (groups.length === 0) return { STORY: parseHistory(text), METADATA: null, legacy: true };
+  const histories = { STORY: null, METADATA: null, legacy: false };
+  for (let index = 0; index < groups.length; index += 1) {
+    const group = groups[index];
+    if (histories[group.root]) throw new HistoryError(`Duplicate ${group.root}:REV group.`, { code: 'DUPLICATE_HISTORY_ROOT' });
+    const end = groups[index + 1]?.from ?? text.length;
+    histories[group.root] = parseHistory(text.slice(group.to, end), { revisionHeadingLevel: 2 });
+  }
+  if (!histories.STORY) throw new HistoryError('VERSIONS is missing STORY:REV.', { code: 'MISSING_HISTORY_ROOT' });
+  return histories;
 }

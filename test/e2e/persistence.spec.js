@@ -58,3 +58,39 @@ test('restricted IPC saves, backs up, and rejects an external overwrite', async 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('STORY:REV and METADATA:REV persist and reload as independent current graphs', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'noirdraft-e2e-root-history-'));
+  const filePath = path.join(directory, 'roots.md');
+  const application = await electron.launch({
+    args: [path.resolve('.')],
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true', NOIRDRAFT_E2E_ALLOWED_PATH: filePath },
+  });
+  try {
+    const window = await application.firstWindow();
+    await window.waitForFunction(() => Boolean(window.__noirDraftTest?.getMetadataCommitController()));
+    const saved = await window.evaluate(async (target) => {
+      const app = window.__noirDraftTest;
+      app.editors.STORY.replace(0, app.models.STORY.text.length, 'Story revision.\n');
+      app.editors.METADATA.replace(0, app.models.METADATA.text.length, '# Notes\n\nMetadata revision.\n');
+      await app.getCommitController().explicitSave('Story checkpoint');
+      await app.getMetadataCommitController().explicitSave('Metadata checkpoint');
+      const contents = app.buildProjectContents();
+      const result = await window.noirDraft.documents.save({ filePath: target, contents });
+      await app.loadDocument(result.document);
+      return {
+        contents,
+        story: { current: app.getHistory().currentRevision, text: app.models.STORY.text },
+        metadata: { current: app.getMetadataHistory().currentRevision, text: app.models.METADATA.text },
+      };
+    }, filePath);
+    expect(saved.contents).toContain('# STORY:REV');
+    expect(saved.contents).toContain('# METADATA:REV');
+    expect(saved.story).toEqual({ current: 1, text: 'Story revision.\n' });
+    expect(saved.metadata).toEqual({ current: 1, text: '# Notes\n\nMetadata revision.\n' });
+    expect(await readFile(filePath, 'utf8')).toBe(saved.contents);
+  } finally {
+    await application.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

@@ -11,7 +11,7 @@ import {
   verifyCurrentStory,
 } from '../../src/renderer/history/graph.js';
 import { hashStory } from '../../src/renderer/history/hash.js';
-import { parseHistory, serializeHistory } from '../../src/renderer/history/serialize.js';
+import { parseHistories, parseHistory, serializeHistories, serializeHistory } from '../../src/renderer/history/serialize.js';
 
 test('SHA-256 hashes exact UTF-8 STORY contents deterministically', async () => {
   assert.equal(await hashStory('abc'), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
@@ -95,6 +95,25 @@ test('history serialization round-trips exact checkpoints, patches, notes, and c
   assert.equal(serializeHistory(parsed), serialized);
 });
 
+test('root-scoped VERSIONS graphs round-trip independently and legacy history remains STORY', async () => {
+  const story = await createHistory('Story base\n');
+  const metadata = await createHistory('# Characters\n');
+  await commitRevision(story, 'Story base\n', 'Story changed\n');
+  await commitRevision(metadata, '# Characters\n', '# Characters\n\nMaria\n');
+  const source = serializeHistories({ STORY: story, METADATA: metadata });
+  assert.match(source, /^# STORY:REV$/m);
+  assert.match(source, /^# METADATA:REV$/m);
+  assert.match(source, /^## Revision 0$/m);
+  const parsed = parseHistories(source);
+  assert.equal(parsed.legacy, false);
+  assert.equal(await reconstructRevision(parsed.STORY, 1), 'Story changed\n');
+  assert.equal(await reconstructRevision(parsed.METADATA, 1), '# Characters\n\nMaria\n');
+  const legacy = parseHistories(serializeHistory(story));
+  assert.equal(legacy.legacy, true);
+  assert.equal(await reconstructRevision(legacy.STORY, 1), 'Story changed\n');
+  assert.equal(legacy.METADATA, null);
+});
+
 test('reconstruction detects corrupted patches and result hashes', async () => {
   const history = await createHistory('base\n');
   await commitRevision(history, 'base\n', 'result\n');
@@ -126,6 +145,16 @@ test('current STORY verification distinguishes legitimate external edits', async
   assert.equal(revision.origin, 'recovery');
   assert.equal(await reconstructRevision(history, revision.id), mismatch.externalStory);
   assert.equal((await verifyCurrentStory(history, mismatch.externalStory)).matches, true);
+});
+
+test('metadata-root recovery uses the same strict graph contract', async () => {
+  const history = await createHistory('# Characters\n\nMaria.\n');
+  const external = '# Characters\n\nMaria, an archivist.\n';
+  const mismatch = await verifyCurrentStory(history, external);
+  assert.equal(mismatch.matches, false);
+  const revision = await recordExternalEdit(history, external);
+  assert.equal(revision.origin, 'recovery');
+  assert.equal(await reconstructRevision(history, history.currentRevision), external);
 });
 
 test('parser rejects duplicate IDs and missing parents', async () => {

@@ -12,7 +12,7 @@ Because `# STORY` is only a storage container and is hidden in the Story pane, h
 
 KoboldCpp remains an external dependency. The application communicates with it to provide the AI/chat/agent functionality, especially with Gemma-family models. The model should receive clearly structured context distinguishing reference material, the surrounding story, the current passage, and the current instruction. The purpose is to let the AI rewrite selected parts while still understanding relevant surrounding material and permanently pinned references.
 
-Versioning should operate on the entire `# STORY` content rather than independently tracking individual sections. Both human and AI edits belong to the same change history. `# VERSIONS` can store human-readable unified-diff patches forming a graph of STORY states, allowing earlier states to be revisited and new branches to be created without losing abandoned alternatives.
+Versioning operates independently on the complete visible contents of `# STORY` and `# METADATA`. Both human and AI edits belong to their root's history graph. `# VERSIONS` stores the two human-readable unified-diff graphs, allowing earlier states to be revisited and new branches to be created without losing abandoned alternatives. CHAT remains a transparent conversation log, not a canonical document-history root.
 
 Persistent history nodes should represent meaningful editing intervals rather than individual keystrokes. Natural boundaries include the transition from user editing to an agent request, the transition back from an agent change to user editing, an explicit save, or a substantial configurable idle period ranging from several seconds to potentially a few minutes. Explicit saves can optionally carry a user-written note.
 
@@ -948,7 +948,23 @@ revision N
 
 # 25. Unified diff storage
 
-Store changes in `# VERSIONS` as human-readable unified diff patches or a closely related textual patch form.
+Store changes in `# VERSIONS` as human-readable unified diff patches or a closely related textual patch form. Keep one explicitly named graph per mutable canonical root:
+
+````markdown
+# STORY:REV
+Current-Revision: 42
+
+## Revision 42
+...
+
+# METADATA:REV
+Current-Revision: 17
+
+## Revision 17
+...
+````
+
+`STORY:REV` and `METADATA:REV` are headings inside the visible VERSIONS projection (therefore H2 headings in the physical project file). Revision IDs are scoped to their graph. A reader can consequently identify both the target root and the graph state without opaque side data. A loader must treat the existing unscoped VERSIONS grammar as legacy `STORY:REV`, so opening an older project never loses history.
 
 A revision should include enough metadata to validate deterministic reconstruction.
 
@@ -989,7 +1005,7 @@ Important requirements:
 
 Do not require replaying an unlimited number of patches to reconstruct a historical node.
 
-Periodically create a full STORY checkpoint.
+Periodically create a full checkpoint for each graph root.
 
 For example every configurable number of revisions:
 
@@ -1140,7 +1156,13 @@ This establishes an exact base revision for the AI operation.
 
 ### Agent → User
 
-When AI generation successfully produces a valid alternative, preserve that alternative immediately as an agent-origin revision branch from the exact base. Do not require it to become the checked-out STORY first. If the author chooses it, checks it out, or builds a composite from it, that later action is separate from preserving the proposal itself.
+An agent request records its root (`STORY` or `METADATA`), exact base revision, UTF-16 target range, target text hash, and bounded before/after context before generation begins. The base becomes a durable checkpoint boundary immediately.
+
+When a valid replacement arrives, always preserve it immediately as an agent-origin child of that exact base. If that root is still exactly at the same base revision with no pending local edit, apply the replacement immediately as the checked-out result and make that child current. This is an explicit, reversible graph transition rather than a silent unrecorded mutation.
+
+If the root has moved to another revision, leave the generated child as a visible pending alternative. Do not fuzzy-apply it or overwrite newer text; later comparison/merge tools handle it. No temporary Markdown marker is necessary: exact revision ancestry and range mapping provide the anchor. Transient in-memory highlights may show protected in-flight ranges, but they are never serialized or allowed to enter the manuscript.
+
+Retry is also graph-safe: when an immediately applied agent change is still current and has no later work, retry returns the working root to its recorded base and submits a new request, preserving the first result as a sibling. Once later work exists, retry creates a new alternative instead of discarding or rewinding it.
 
 ### Explicit Save
 
@@ -1178,7 +1200,7 @@ Eventually allow configuration, possibly including periods of several minutes.
 
 ### Document close/switch
 
-Commit pending story edits before unloading the current document.
+Commit pending STORY and METADATA edits before unloading the current document.
 
 ### Significant structural action
 
@@ -2059,6 +2081,14 @@ The Markdown hierarchy should accommodate those naturally.
 
 When the sidebar needs more room, it may expand or take the main workspace, but the default writing flow should not require switching away from STORY just to issue an instruction.
 
+## 54A. Chat-bound revision queue
+
+The chat composer can attach a currently selected STORY or METADATA range as a restricted `replace selection` operation. The visible turn must identify its target root and show a stable colored range highlight while queued or generating; the color is in-memory presentation only. The model receives the bounded target and context, never a general file-editing capability.
+
+Sending must remain available while work is pending. Each submitted operation is a separate, persisted chat turn/card with its own state: `queued`, `generating`, `applied`, `alternative`, `cancelled`, or `failed`. Use a serial dispatcher initially so cancellation is unambiguous with KoboldCpp's server-wide abort behavior; queued turns can be cancelled individually, while the active turn has its own cancel control. Do not replace the global Send button with Cancel.
+
+Removing a queued turn requires confirmation and simply drops its in-memory job plus its visible chat record. Deleting a completed chat record also requires confirmation, but never deletes the durable STORY/METADATA revision it produced. Retrying creates another graph node/branch; it never mutates or erases an old revision.
+
 ---
 
 # 55. History graph view
@@ -2122,9 +2152,9 @@ Distinguish project data from application preferences.
 
 ---
 
-# 57. Current revision
+# 57. Current revisions
 
-Because STORY represents the currently checked-out state, VERSIONS needs enough information to know which graph node corresponds to it.
+Because STORY and METADATA each represent a currently checked-out state, their VERSIONS subgraphs need enough information to know which graph node corresponds to each root.
 
 Store this explicitly in human-readable project metadata or version metadata.
 
@@ -2135,7 +2165,8 @@ Example direction:
 ```markdown
 ## Application
 
-Current-Revision: 42
+STORY:REV Current-Revision: 42
+METADATA:REV Current-Revision: 17
 ```
 
 Exact syntax may change.
@@ -2553,8 +2584,6 @@ Every successful proposal becomes a preserved agent-origin revision branch from 
 
 The author may explicitly check out a proposal, use only parts of it in a composite, include it as context for another AI pass, or leave it as an unselected alternative.
 
----
-
 ## Phase 13 — Automatic revision notes
 
 After commits:
@@ -2592,6 +2621,27 @@ more Markdown extensions
 Do not postpone the basic comparison/composite/passage-history workflow to this phase; that is core functionality and belongs in Phase 8B.
 
 Do not build optional refinements merely because they are possible.
+
+---
+
+## Phase 15 — Root-scoped revision transactions and chat queue
+
+Extend the graph and rewrite contract beyond STORY without weakening its safety guarantees:
+
+```text
+separate STORY:REV and METADATA:REV graphs in VERSIONS
+legacy unscoped VERSIONS reads as STORY:REV
+per-root checkpoint, undo/redo, graph view, persistence, and external-edit recovery
+chat turn attaches an exact STORY or METADATA selection transaction
+commit base before generation; retain root/range/hash/context anchor
+always materialize the generated result as an agent graph child
+auto-apply only when its base remains the current, unchanged root
+otherwise label it an alternative for a later merge/composite tool
+serial visible queue, per-turn cancel/remove/delete confirmations, retry branches
+transient color-coded in-flight selection highlights, never serialized
+```
+
+Initial conflict handling is intentionally crude: a moved root produces an alternative and no automatic text change. A future explicit merge operation may map or reconcile ranges, but no fuzzy replacement is permitted before then.
 
 ---
 

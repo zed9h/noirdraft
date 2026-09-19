@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { startFakeKoboldServer } from '../support/fake-kobold-server.js';
 
-test('generating a rewrite preserves it as a proposal without touching the checked-out STORY until checkout', async () => {
+test('generating a stable rewrite applies it immediately as a reversible STORY revision', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'noirdraft-e2e-prefs-'));
   const preferencesPath = path.join(directory, 'preferences.json');
   await writeFile(preferencesPath, JSON.stringify({ koboldUrl: 'http://127.0.0.1:1' }), 'utf8');
@@ -37,8 +37,6 @@ test('generating a rewrite preserves it as a proposal without touching the check
     await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
     await expect(agentPanel).toBeVisible();
 
-    const originalStory = await window.evaluate(() => window.__noirDraftTest.model.text);
-
     await window.getByLabel('Instruction to the agent').fill('Make it colder.');
     await window.getByRole('button', { name: 'Generate' }).click();
 
@@ -46,36 +44,16 @@ test('generating a rewrite preserves it as a proposal without touching the check
     await expect(preview).toBeVisible();
     await expect(preview).toContainText('freezing', { timeout: 5000 });
 
-    // The proposal must be preserved even though it was never checked out.
-    // (The setup edit above was itself committed as revision 1 by the
-    // user->agent commit boundary, so the proposal is revision 2.)
-    await expect(window.locator('.agent-proposal')).toHaveCount(1);
-    const currentDuringProposal = await window.evaluate(() => window.__noirDraftTest.model.text);
-    expect(currentDuringProposal).toBe(originalStory);
+    // The setup edit above is revision 1; because it stayed stable while the
+    // request ran, the agent child becomes current revision 2 immediately.
+    await expect.poll(() => window.evaluate(() => window.__noirDraftTest.model.text)).toContain('freezing');
     const graph = await window.evaluate(() => {
       const history = window.__noirDraftTest.getHistory();
-      return { currentRevision: history.currentRevision, proposal: history.revisions.get(2) };
+      return { currentRevision: history.currentRevision, applied: history.revisions.get(2) };
     });
-    expect(graph.currentRevision).toBe(1);
-    expect(graph.proposal.origin).toBe('agent');
-    expect(graph.proposal.parents).toEqual([1]);
-
-    const proposalCard = window.locator('.agent-proposal').first();
-    await proposalCard.getByRole('button', { name: 'Preview' }).click();
-    await expect(proposalCard.locator('pre')).toContainText('The room was freezing.');
-
-    // An unselected proposal can still be explicitly included as a reference
-    // for another generation, per the workbench/context integration.
-    await proposalCard.getByRole('button', { name: 'Include as AI reference' }).click();
-    const references = await window.evaluate(() => window.__noirDraftTest.getAgentReferences());
-    expect(references).toHaveLength(1);
-    expect(references[0].text).toContain('The room was freezing.');
-    await expect(window.locator('[data-agent-references]')).toContainText('Proposal 2');
-
-    await proposalCard.getByRole('button', { name: 'Checkout' }).click();
-    await expect.poll(() => window.evaluate(() => window.__noirDraftTest.model.text)).toContain('The room was freezing.');
-    const finalCurrentRevision = await window.evaluate(() => window.__noirDraftTest.getHistory().currentRevision);
-    expect(finalCurrentRevision).toBe(2);
+    expect(graph.currentRevision).toBe(2);
+    expect(graph.applied.origin).toBe('agent');
+    expect(graph.applied.parents).toEqual([1]);
   } finally {
     await server.close();
     await application.close();
@@ -117,6 +95,86 @@ test('a disconnected/failed generation shows a clean error and never touches STO
     // boundary); the failed generation itself must add nothing further.
     const revisionCount = await window.evaluate(() => window.__noirDraftTest.getHistory().revisions.size);
     expect(revisionCount).toBe(2);
+  } finally {
+    await server.close();
+    await application.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a stable METADATA selection is rewritten into its own revision graph', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'noirdraft-e2e-prefs-'));
+  const preferencesPath = path.join(directory, 'preferences.json');
+  await writeFile(preferencesPath, JSON.stringify({ koboldUrl: 'http://127.0.0.1:1' }), 'utf8');
+  const application = await electron.launch({
+    args: [path.resolve('.')],
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true', NOIRDRAFT_E2E_PREFERENCES_PATH: preferencesPath },
+  });
+  const server = await startFakeKoboldServer({ tokens: ['A retired detective.'] });
+  try {
+    const window = await application.firstWindow();
+    await window.waitForFunction(() => Boolean(window.__noirDraftTest?.getMetadataCommitController()));
+    await window.evaluate(() => {
+      const { editors, models, switchView } = window.__noirDraftTest;
+      editors.METADATA.replace(0, models.METADATA.text.length, '# Character\n\nA detective.\n');
+      switchView('METADATA');
+      const from = models.METADATA.text.indexOf('A detective.');
+      editors.METADATA.setSelection(from, from + 'A detective.'.length);
+    });
+    await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
+    await expect(window.getByLabel('Agent rewrite')).toBeVisible();
+    await window.getByLabel('Instruction to the agent').fill('Make the character older.');
+    await window.getByRole('button', { name: 'Generate' }).click();
+    await expect.poll(() => window.evaluate(() => window.__noirDraftTest.models.METADATA.text)).toContain('retired detective');
+    const state = await window.evaluate(() => {
+      const history = window.__noirDraftTest.getMetadataHistory();
+      return { current: history.currentRevision, origin: history.revisions.get(history.currentRevision).origin };
+    });
+    expect(state).toEqual({ current: 2, origin: 'agent' });
+  } finally {
+    await server.close();
+    await application.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('an advanced root leaves its completed rewrite as a merge-later alternative', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'noirdraft-e2e-prefs-'));
+  const preferencesPath = path.join(directory, 'preferences.json');
+  await writeFile(preferencesPath, JSON.stringify({ koboldUrl: 'http://127.0.0.1:1' }), 'utf8');
+  const application = await electron.launch({
+    args: [path.resolve('.')],
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true', NOIRDRAFT_E2E_PREFERENCES_PATH: preferencesPath },
+  });
+  const server = await startFakeKoboldServer({ tokens: ['Replacement.'], tokenDelayMs: 120 });
+  try {
+    const window = await application.firstWindow();
+    await window.waitForFunction(() => Boolean(window.__noirDraftTest?.getCommitController()));
+    await window.evaluate(() => {
+      const { editors, models } = window.__noirDraftTest;
+      editors.STORY.replace(0, models.STORY.text.length, 'Original.\n');
+      editors.STORY.setSelection(0, 'Original.'.length);
+    });
+    await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
+    await window.getByLabel('Instruction to the agent').fill('Rewrite it.');
+    await window.getByRole('button', { name: 'Generate' }).click();
+    await window.evaluate(async () => {
+      const { editors, models, getCommitController } = window.__noirDraftTest;
+      editors.STORY.replace(models.STORY.text.length, models.STORY.text.length, 'Author continuation.\n');
+      await getCommitController().explicitSave('Author continued.');
+    });
+    await expect(window.getByLabel('Agent rewrite')).toContainText('Alternative saved for STORY');
+    const state = await window.evaluate(() => {
+      const history = window.__noirDraftTest.getHistory();
+      return {
+        current: history.currentRevision,
+        text: window.__noirDraftTest.models.STORY.text,
+        agentChildren: [...history.revisions.values()].filter((revision) => revision.origin === 'agent').map((revision) => ({ id: revision.id, parent: revision.parents[0] })),
+      };
+    });
+    expect(state.current).toBe(2);
+    expect(state.text).toContain('Author continuation.');
+    expect(state.agentChildren).toEqual([{ id: 3, parent: 1 }]);
   } finally {
     await server.close();
     await application.close();
