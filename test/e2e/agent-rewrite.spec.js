@@ -31,18 +31,10 @@ test('generating a stable rewrite applies it immediately as a reversible STORY r
     });
     await window.evaluate(({ from, to }) => window.__noirDraftTest.editors.STORY.setSelection(from, to), positions);
 
-    const agentPanel = window.locator('[data-agent-panel]');
-    await expect(agentPanel).toBeHidden(); // not connected yet
-
     await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
-    await expect(agentPanel).toBeVisible();
-
-    await window.getByLabel('Instruction to the agent').fill('Make it colder.');
-    await window.getByRole('button', { name: 'Generate' }).click();
-
-    const preview = window.locator('[data-agent-preview]');
-    await expect(preview).toBeVisible();
-    await expect(preview).toContainText('freezing', { timeout: 5000 });
+    await window.getByLabel('Chat prompt').fill('Make it colder.');
+    await window.getByRole('button', { name: 'Send' }).click();
+    await expect(window.getByLabel('Chat history')).toContainText('freezing', { timeout: 5000 });
 
     // The setup edit above is revision 1; because it stayed stable while the
     // request ran, the agent child becomes current revision 2 immediately.
@@ -61,7 +53,7 @@ test('generating a stable rewrite applies it immediately as a reversible STORY r
   }
 });
 
-test('a disconnected/failed generation shows a clean error and never touches STORY history', async () => {
+test('an empty chat rewrite shows a failed call row and never applies text', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'noirdraft-e2e-prefs-'));
   const preferencesPath = path.join(directory, 'preferences.json');
   await writeFile(preferencesPath, JSON.stringify({ koboldUrl: 'http://127.0.0.1:1' }), 'utf8');
@@ -86,11 +78,9 @@ test('a disconnected/failed generation shows a clean error and never touches STO
     });
     await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
 
-    await window.getByRole('button', { name: 'Generate' }).click();
-
-    const status = window.locator('[data-agent-status]');
-    await expect(status).toContainText('empty proposal', { timeout: 5000 });
-    await expect(window.locator('.agent-proposal')).toHaveCount(0);
+    await window.getByLabel('Chat prompt').fill('Rewrite this.');
+    await window.getByRole('button', { name: 'Send' }).click();
+    await expect(window.locator('.chat-call-failed')).toContainText('failed', { timeout: 5000 });
     // The setup edit was committed as revision 1 (the user->agent commit
     // boundary); the failed generation itself must add nothing further.
     const revisionCount = await window.evaluate(() => window.__noirDraftTest.getHistory().revisions.size);
@@ -122,9 +112,8 @@ test('a stable METADATA selection is rewritten into its own revision graph', asy
       editors.METADATA.setSelection(from, from + 'A detective.'.length);
     });
     await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
-    await expect(window.getByLabel('Agent rewrite')).toBeVisible();
-    await window.getByLabel('Instruction to the agent').fill('Make the character older.');
-    await window.getByRole('button', { name: 'Generate' }).click();
+    await window.getByLabel('Chat prompt').fill('Make the character older.');
+    await window.getByRole('button', { name: 'Send' }).click();
     await expect.poll(() => window.evaluate(() => window.__noirDraftTest.models.METADATA.text)).toContain('retired detective');
     const state = await window.evaluate(() => {
       const history = window.__noirDraftTest.getMetadataHistory();
@@ -156,14 +145,14 @@ test('an advanced root leaves its completed rewrite as a merge-later alternative
       editors.STORY.setSelection(0, 'Original.'.length);
     });
     await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
-    await window.getByLabel('Instruction to the agent').fill('Rewrite it.');
-    await window.getByRole('button', { name: 'Generate' }).click();
+    await window.getByLabel('Chat prompt').fill('Rewrite it.');
+    await window.getByRole('button', { name: 'Send' }).click();
     await window.evaluate(async () => {
       const { editors, models, getCommitController } = window.__noirDraftTest;
       editors.STORY.replace(models.STORY.text.length, models.STORY.text.length, 'Author continuation.\n');
       await getCommitController().explicitSave('Author continued.');
     });
-    await expect(window.getByLabel('Agent rewrite')).toContainText('Alternative saved for STORY');
+    await expect(window.getByLabel('Chat history')).toContainText('alternative branch for STORY');
     const state = await window.evaluate(() => {
       const history = window.__noirDraftTest.getHistory();
       return {

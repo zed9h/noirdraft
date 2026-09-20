@@ -148,25 +148,15 @@
         </section>
         <div class="pane-resizer pane-resizer-vertical" data-pane-resizer="chat" data-resizer-for="sidebar-right" role="separator" aria-label="Resize chat pane" aria-orientation="vertical" tabindex="0"></div>
         <aside class="sidebar sidebar-right" data-sidebar-right aria-label="Chat">
-          <div class="pin-status chat-pins" data-pin-status aria-label="Context pins"></div>
           <div class="ai-status" data-ai-status aria-label="AI connection status" hidden>Disconnected</div>
-          <div class="context-inspector" data-context-inspector aria-label="Context inspector" hidden>
-            <button type="button" data-context-toggle>Preview context…</button>
-            <div class="context-inspector-body" data-context-inspector-body hidden></div>
-          </div>
-          <div class="agent-panel" data-agent-panel aria-label="Agent rewrite" hidden>
-            <div class="agent-references" data-agent-references aria-label="Included references" hidden></div>
-            <textarea data-agent-instruction rows="2" aria-label="Instruction to the agent" placeholder="Ask the agent to rewrite the selection…"></textarea>
-            <div class="agent-controls">
-              <button type="button" data-agent-generate>Generate</button>
-              <button type="button" data-agent-cancel hidden>Cancel</button>
-            </div>
-            <div class="agent-status" data-agent-status aria-live="polite"></div>
-            <div class="agent-preview" data-agent-preview aria-label="Streaming proposal" hidden></div>
-            <div class="agent-proposals" data-agent-proposals aria-label="Agent proposals"></div>
-          </div>
           <div class="chat-history" data-chat-history aria-label="Chat history"></div>
           <div class="chat-composer" data-chat-composer>
+            <div class="pin-status chat-pins" data-pin-status aria-label="Context pins"></div>
+            <div class="chat-selection-summary" data-chat-selection-summary aria-live="polite"></div>
+            <div class="context-inspector" data-context-inspector aria-label="Context inspector" hidden>
+              <button type="button" data-context-toggle>Preview context…</button>
+              <div class="context-inspector-body" data-context-inspector-body hidden></div>
+            </div>
             <textarea rows="3" data-chat-prompt aria-label="Chat prompt" placeholder="Message the agent…"></textarea>
             <div class="chat-composer-actions">
               <label class="chat-context-controls">Context <input type="number" min="0" step="1" value="6" data-chat-history-count aria-label="Context"></label><span data-chat-context-summary aria-live="polite"></span></label>

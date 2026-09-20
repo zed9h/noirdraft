@@ -39,6 +39,18 @@ export function parseChatTurns(chat) {
   return turns;
 }
 
+/** Exact source ranges for the compact INPUT/OUTPUT turns, used only for an
+ * explicit author-confirmed deletion. Surrounding free-form CHAT Markdown is
+ * left byte-for-byte alone. */
+export function findChatTurnRanges(chat) {
+  const source = String(chat);
+  const matcher = /\{\{\[INPUT\]\}\}\s*\r?\n([\s\S]*?)\r?\n?\{\{\[OUTPUT\]\}\}\s*\r?\n([\s\S]*?)(?=\r?\n?\{\{\[INPUT\]\}\}|$)/g;
+  const ranges = [];
+  let match;
+  while ((match = matcher.exec(source))) ranges.push({ from: match.index, to: match.index + match[0].length });
+  return ranges;
+}
+
 export function appendChatTurn(chat, input, output) {
   const source = String(chat);
   const eol = lineEndingOf(source);

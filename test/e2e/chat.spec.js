@@ -123,7 +123,7 @@ test('a selected middle-pane range becomes a queued chat rewrite while Send rema
     await window.getByLabel('Chat prompt').fill('Make it more dramatic.');
     await window.getByRole('button', { name: 'Send' }).click();
     await expect(window.getByRole('button', { name: 'Send' })).toBeVisible();
-    await expect(window.locator('.chat-job')).toContainText('STORY selection');
+    await expect(window.locator('.chat-call')).toContainText('Replace STORY selection');
     await expect.poll(() => window.evaluate(() => window.__noirDraftTest.models.STORY.text)).toContain('shattered');
     await expect(window.getByLabel('Chat history')).toContainText('Applied to STORY');
   } finally {
@@ -149,9 +149,9 @@ test('retry preserves an applied rewrite as a sibling branch', async () => {
     await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
     await window.getByLabel('Chat prompt').fill('Rewrite it.');
     await window.getByRole('button', { name: 'Send' }).click();
-    await expect(window.locator('.chat-job').getByRole('button', { name: 'Retry' })).toBeVisible();
+    await expect(window.getByRole('button', { name: 'Retry call' })).toBeVisible();
     window.once('dialog', (dialog) => dialog.accept());
-    await window.locator('.chat-job').getByRole('button', { name: 'Retry' }).click();
+    await window.getByRole('button', { name: 'Retry call' }).click();
     await expect.poll(() => window.evaluate(() => window.__noirDraftTest.getHistory().currentRevision)).toBe(3);
     const siblings = await window.evaluate(() => {
       const history = window.__noirDraftTest.getHistory();
@@ -164,7 +164,7 @@ test('retry preserves an applied rewrite as a sibling branch', async () => {
   }
 });
 
-test('a queued rewrite can be cancelled with confirmation and releases its highlight', async () => {
+test('a queued rewrite can be cancelled from its call row and releases its highlight', async () => {
   const application = await electron.launch({
     args: [path.resolve('.')],
     env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
@@ -181,12 +181,11 @@ test('a queued rewrite can be cancelled with confirmation and releases its highl
     await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
     await window.getByLabel('Chat prompt').fill('Rewrite it.');
     await window.getByRole('button', { name: 'Send' }).click();
-    const job = window.locator('.chat-job');
-    await expect(job.getByRole('button', { name: /Cancel queued turn/ })).toBeVisible();
+    const job = window.locator('.chat-call');
+    await expect(job.getByRole('button', { name: /Cancel call in turn/ })).toBeVisible();
     await expect(window.locator('#story-editor .agent-target-highlight-1')).toHaveCount(1);
-    window.once('dialog', (dialog) => dialog.accept());
-    await job.getByRole('button', { name: /Cancel queued turn/ }).click();
-    await expect(job).toHaveCount(0);
+    await job.getByRole('button', { name: /Cancel call in turn/ }).click();
+    await expect(job).toContainText('cancelled');
     await expect(window.locator('#story-editor [class*="agent-target-highlight"]')).toHaveCount(0);
     expect(await window.evaluate(() => window.__noirDraftTest.models.STORY.text)).toBe('Keep this.\n');
   } finally {

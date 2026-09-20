@@ -18,7 +18,7 @@ import { parseProjectDocument } from './project/parse.js';
 import { readPins, writePins } from './project/pins.js';
 import { projectRoot } from './project/projection.js';
 import { serializeProjectDocument } from './project/serialize.js';
-import { appendChatTurn, parseChatTurns } from './project/chat.js';
+import { appendChatTurn, findChatTurnRanges, parseChatTurns } from './project/chat.js';
 
 const runtime = window.noirDraft?.runtime;
 
@@ -44,6 +44,7 @@ const chatSendButton = document.querySelector('[data-chat-send]');
 const chatCancelButton = document.querySelector('[data-chat-cancel]');
 const chatHistoryCount = document.querySelector('[data-chat-history-count]');
 const chatContextSummary = document.querySelector('[data-chat-context-summary]');
+const chatSelectionSummary = document.querySelector('[data-chat-selection-summary]');
 const appInfoButton = document.querySelector('[data-app-info]');
 const appInfoDialog = document.querySelector('[data-app-info-dialog]');
 const appVersion = document.querySelector('[data-app-version]');
@@ -337,14 +338,6 @@ const passageMultiCompare = document.querySelector('[data-passage-multi-compare]
 const contextInspectorContainer = document.querySelector('[data-context-inspector]');
 const contextToggle = document.querySelector('[data-context-toggle]');
 const contextBody = document.querySelector('[data-context-inspector-body]');
-const agentPanel = document.querySelector('[data-agent-panel]');
-const agentReferencesContainer = document.querySelector('[data-agent-references]');
-const agentInstruction = document.querySelector('[data-agent-instruction]');
-const agentGenerateButton = document.querySelector('[data-agent-generate]');
-const agentCancelButton = document.querySelector('[data-agent-cancel]');
-const agentStatus = document.querySelector('[data-agent-status]');
-const agentPreview = document.querySelector('[data-agent-preview]');
-const agentProposals = document.querySelector('[data-agent-proposals]');
 const versionsView = document.querySelector('#versions-view');
 const versionList = document.querySelector('[data-version-list]');
 const versionInspector = document.querySelector('[data-version-inspector]');
@@ -454,6 +447,23 @@ try {
     }
     scheduleChatContextLinePosition();
   };
+  const updateChatSelectionSummary = () => {
+    const selectedRoot = ['STORY', 'METADATA'].includes(activeRoot)
+      && models[activeRoot].selectionStart !== models[activeRoot].selectionEnd
+      ? activeRoot
+      : null;
+    if (selectedRoot) {
+      const selection = models[selectedRoot].text.slice(models[selectedRoot].selectionStart, models[selectedRoot].selectionEnd);
+      const references = agentReferences.length
+        ? ` · ${agentReferences.length} context reference${agentReferences.length === 1 ? '' : 's'}`
+        : '';
+      chatSelectionSummary.textContent = `${selectedRoot} selection · ${selection.length} characters${references} — next message will request a replacement`;
+    } else if (agentReferences.length) {
+      chatSelectionSummary.textContent = `${agentReferences.length} context reference${agentReferences.length === 1 ? '' : 's'} selected`;
+    } else {
+      chatSelectionSummary.textContent = 'Select STORY or METADATA text to request a replacement';
+    }
+  };
   const renderChatHistory = (pendingTurn = null) => {
     const previousScrollTop = chatHistory.scrollTop;
     const wasAtBottom = chatHistory.scrollHeight - chatHistory.clientHeight - previousScrollTop <= 2;
@@ -467,6 +477,7 @@ try {
       : 'No prior turns';
     const visibleTurns = pendingTurn ? [...turns, pendingTurn] : turns;
     for (const [index, turn] of visibleTurns.entries()) {
+      const job = chatJobs.find((candidate) => candidate.turnIndex === index && candidate.state !== 'removed');
       const card = document.createElement('article');
       card.className = 'chat-turn';
       card.dataset.turnIndex = String(index);
@@ -475,6 +486,13 @@ try {
       const header = document.createElement('header');
       const title = document.createElement('span');
       title.textContent = `Turn ${index + 1}`;
+      const deleteTurn = document.createElement('button');
+      deleteTurn.type = 'button';
+      deleteTurn.className = 'chat-turn-delete';
+      deleteTurn.textContent = '×';
+      deleteTurn.setAttribute('aria-label', `Delete turn ${index + 1}`);
+      deleteTurn.title = 'Delete turn';
+      deleteTurn.addEventListener('click', () => deleteChatTurn(index, job));
       const marker = document.createElement('button');
       marker.type = 'button';
       marker.className = 'chat-context-marker';
@@ -487,7 +505,7 @@ try {
         pinnedChatStart = pinnedChatStart === index ? null : index;
         updateChatContextPresentation();
       });
-      header.append(title, marker);
+      header.append(deleteTurn, title, marker);
       const createMessage = (role, text) => {
         const message = document.createElement('section');
         message.className = `chat-message chat-${role.toLowerCase()} chat-${role === 'user' ? 'input' : 'output'}`;
@@ -500,11 +518,14 @@ try {
         message.append(label, content);
         return message;
       };
-      card.append(header, createMessage('user', turn.input), createMessage('agent', turn.output));
+      card.append(header, createMessage('user', turn.input));
+      if (job) card.append(renderChatCall(job));
+      card.append(createMessage('agent', turn.output));
       chatHistory.append(card);
     }
-    for (const job of chatJobs.filter((job) => job.state !== 'cancelled' && (job.state !== 'complete' || job.kind === 'rewrite'))) {
-      chatHistory.append(renderChatJob(job));
+    const pendingJobs = chatJobs.filter((job) => ['queued', 'generating', 'failed', 'cancelled'].includes(job.state));
+    for (const [pendingIndex, job] of pendingJobs.entries()) {
+      chatHistory.append(renderPendingChatTurn(job, turns.length + pendingIndex));
     }
     requestAnimationFrame(() => {
       scheduleChatContextLinePosition();
@@ -529,46 +550,76 @@ try {
         .map((job) => ({ from: job.range[0], to: job.range[1], color: job.id })));
     }
   };
-  const renderChatJob = (job) => {
-    const card = document.createElement('article');
-    card.className = `chat-turn chat-job chat-job-${job.state}`;
-    const header = document.createElement('header');
-    const title = document.createElement('span');
-    title.textContent = job.kind === 'rewrite' ? `${job.root} selection · ${job.state}` : `Chat · ${job.state}`;
-    header.append(title);
-    const instruction = document.createElement('div');
-    instruction.className = 'chat-message-content';
-    instruction.textContent = job.input;
-    card.append(header, instruction);
-    if (job.output) {
-      const output = document.createElement('div');
-      output.className = 'chat-message-content';
-      output.textContent = job.output;
-      card.append(output);
+  const renderChatCall = (job) => {
+    const call = document.createElement('div');
+    call.className = `chat-call chat-call-${job.state}`;
+    const label = document.createElement('span');
+    label.textContent = job.kind === 'rewrite'
+      ? `↳ Replace ${job.root} selection · ${job.state}`
+      : `↳ Model call · ${job.state}`;
+    call.append(label);
+    if (job.kind === 'rewrite') {
+      const selection = document.createElement('details');
+      selection.className = 'chat-call-selection';
+      const summary = document.createElement('summary');
+      summary.textContent = `Selection · ${job.anchor.target.length} characters`;
+      const excerpt = document.createElement('pre');
+      excerpt.textContent = job.anchor.target;
+      selection.append(summary, excerpt);
+      const context = document.createElement('button');
+      context.type = 'button';
+      context.className = 'chat-call-icon';
+      context.textContent = '⌘';
+      context.title = 'Preview exact context';
+      context.setAttribute('aria-label', 'Preview exact context');
+      context.addEventListener('click', () => void renderContextPreview(job));
+      call.append(selection, context);
     }
     if (job.state === 'queued' || job.state === 'generating') {
       const cancel = document.createElement('button');
       cancel.type = 'button';
-      cancel.textContent = 'Cancel';
-      cancel.setAttribute('aria-label', `Cancel queued turn ${job.id}`);
+      cancel.className = 'chat-call-icon';
+      cancel.textContent = '⊘';
+      cancel.title = 'Cancel call';
+      cancel.setAttribute('aria-label', `Cancel call in turn ${job.turnIndex ?? 'pending'}`);
       cancel.addEventListener('click', () => cancelChatJob(job));
-      card.append(cancel);
-    }
-    if (job.kind === 'rewrite' && job.state === 'complete') {
+      call.append(cancel);
+    } else if (job.kind === 'rewrite' && job.state === 'complete') {
       const retry = document.createElement('button');
       retry.type = 'button';
-      retry.textContent = 'Retry';
+      retry.className = 'chat-call-icon';
+      retry.textContent = '↻';
+      retry.title = 'Retry call';
+      retry.setAttribute('aria-label', 'Retry call');
       retry.addEventListener('click', () => void retryChatJob(job));
-      const remove = document.createElement('button');
-      remove.type = 'button';
-      remove.textContent = 'Remove card';
-      remove.addEventListener('click', () => removeChatJob(job));
-      card.append(retry, remove);
+      call.append(retry);
     }
+    return call;
+  };
+  const renderPendingChatTurn = (job, index) => {
+    const card = document.createElement('article');
+    card.className = 'chat-turn chat-turn-pending';
+    card.dataset.turnIndex = String(index);
+    const header = document.createElement('header');
+    const deleteTurn = document.createElement('button');
+    deleteTurn.type = 'button';
+    deleteTurn.className = 'chat-turn-delete';
+    deleteTurn.textContent = '×';
+    deleteTurn.setAttribute('aria-label', `Delete turn ${index + 1}`);
+    deleteTurn.addEventListener('click', () => deleteChatTurn(index, job));
+    const title = document.createElement('span');
+    title.textContent = `Turn ${index + 1}`;
+    header.append(deleteTurn, title);
+    const input = document.createElement('section');
+    input.className = 'chat-message chat-user chat-input';
+    input.textContent = job.input;
+    const output = document.createElement('section');
+    output.className = 'chat-message chat-agent chat-output';
+    output.textContent = job.output || 'Waiting for the model…';
+    card.append(header, input, renderChatCall(job), output);
     return card;
   };
   const cancelChatJob = (job) => {
-    if (!window.confirm(`Cancel ${job.kind === 'rewrite' ? 'the selected-text rewrite' : 'this chat turn'}?`)) return;
     if (job.state === 'generating') job.abortController?.abort();
     else {
       job.state = 'cancelled';
@@ -576,10 +627,23 @@ try {
       renderChatHistory();
     }
   };
-  const removeChatJob = (job) => {
-    if (!window.confirm('Remove this completed rewrite card? Its durable revision and chat transcript will remain available.')) return;
-    job.state = 'cancelled';
-    renderChatHistory();
+  const deleteChatTurn = async (index, job = null) => {
+    if (!window.confirm(`Delete turn ${index + 1}? This cannot be undone from CHAT history.`)) return;
+    if (job && ['queued', 'generating'].includes(job.state)) cancelChatJob(job);
+    if (job && job.turnIndex === undefined) {
+      job.state = 'removed';
+      refreshAgentTargetHighlights();
+      renderChatHistory();
+      return;
+    }
+    const range = findChatTurnRanges(models.CHAT.text)[index];
+    if (!range) return;
+    editors.CHAT.replace(range.from, range.to, '', 'chat');
+    if (job) job.state = 'removed';
+    for (const candidate of chatJobs) {
+      if (candidate.turnIndex > index) candidate.turnIndex -= 1;
+    }
+    await persistAfterCommit();
   };
   const retryChatJob = async (job) => {
     if (!window.confirm('Retry this rewrite? The previous result will remain as a version branch.')) return;
@@ -590,7 +654,7 @@ try {
     chatJobs.push({
       id: nextChatJobId++, input: job.input, output: '', state: 'queued', kind: 'rewrite',
       root: job.root, history: job.history, controller: job.controller, model: job.model,
-      baseRevisionId: job.baseRevisionId, range: job.range, baseText,
+      baseRevisionId: job.baseRevisionId, range: job.range, baseText, anchor: job.anchor,
     });
     refreshAgentTargetHighlights();
     renderChatHistory();
@@ -599,6 +663,7 @@ try {
   const completeChatJob = async (job, output) => {
     job.state = 'complete';
     job.output = output;
+    job.turnIndex = parseChatTurns(models.CHAT.text).length;
     editors.CHAT.replace(0, models.CHAT.text.length, appendChatTurn(models.CHAT.text, job.input, output), 'chat');
     pinnedChatStart = null;
     await persistAfterCommit();
@@ -692,6 +757,7 @@ try {
           baseRevisionId,
           range,
           targetHash: await hashStory(baseText.slice(range[0], range[1])),
+          target: baseText.slice(range[0], range[1]),
           before: baseText.slice(Math.max(0, range[0] - CONTEXT_WINDOW), range[0]),
           after: baseText.slice(range[1], range[1] + CONTEXT_WINDOW),
         },
@@ -846,6 +912,7 @@ try {
             label: `Revision ${entry.revisionId} passage (${entry.origin})`,
             text: historicalPassage,
           });
+          updateChatSelectionSummary();
           setReferenceLabel();
         });
         const isSelected = selectedForCompare.some((selection) => selection.entry.revisionId === entry.revisionId);
@@ -879,34 +946,11 @@ try {
 
   let agentReferences = []; // [{ id, label, text }] — explicit references for the next AI pass
 
-  const renderAgentReferences = () => {
-    agentReferencesContainer.replaceChildren();
-    agentReferencesContainer.hidden = agentReferences.length === 0;
-    for (const reference of agentReferences) {
-      const row = document.createElement('div');
-      row.className = 'agent-reference';
-      row.dataset.referenceId = reference.id;
-      const label = document.createElement('span');
-      label.textContent = `Included: ${reference.label}`;
-      const remove = document.createElement('button');
-      remove.type = 'button';
-      remove.textContent = '✕';
-      remove.setAttribute('aria-label', `Remove reference ${reference.label}`);
-      remove.addEventListener('click', () => {
-        agentReferences = agentReferences.filter((existing) => existing.id !== reference.id);
-        renderAgentReferences();
-      });
-      row.append(label, remove);
-      agentReferencesContainer.append(row);
-    }
-  };
-
   const toggleAgentReference = (reference) => {
     const exists = agentReferences.some((existing) => existing.id === reference.id);
     agentReferences = exists
       ? agentReferences.filter((existing) => existing.id !== reference.id)
       : [...agentReferences, reference];
-    renderAgentReferences();
   };
 
   let compositeState = null; // { baseRevisionId, provenance, activeRange }
@@ -981,17 +1025,17 @@ try {
     if (!hasSelection) { contextBody.hidden = true; contextBody.replaceChildren(); }
   };
 
-  const renderContextPreview = async () => {
-    const activeModel = models[activeRoot];
-    const range = [activeModel.selectionStart, activeModel.selectionEnd];
+  const renderContextPreview = async (call = null) => {
+    const targetModel = call?.model ?? models[activeRoot];
+    const range = call?.range ?? [targetModel.selectionStart, targetModel.selectionEnd];
     const composed = composeContext({
-      storyText: model.text,
+    storyText: models.STORY.text,
       metadataText: models.METADATA.text,
       pins: readPins(models.METADATA.text),
-      before: activeModel.text.slice(Math.max(0, range[0] - CONTEXT_WINDOW), range[0]),
-      target: activeModel.text.slice(range[0], range[1]),
-      after: activeModel.text.slice(range[1], Math.min(activeModel.text.length, range[1] + CONTEXT_WINDOW)),
-      request: '',
+      before: call?.anchor?.before ?? targetModel.text.slice(Math.max(0, range[0] - CONTEXT_WINDOW), range[0]),
+      target: call ? await reconstructRevision(call.history, call.baseRevisionId).then((text) => text.slice(range[0], range[1])) : targetModel.text.slice(range[0], range[1]),
+      after: call?.anchor?.after ?? targetModel.text.slice(range[1], Math.min(targetModel.text.length, range[1] + CONTEXT_WINDOW)),
+      request: call?.input ?? '',
       agentProtocol: AGENT_PROTOCOL,
       references: agentReferences,
     });
@@ -1047,134 +1091,8 @@ try {
     void renderContextPreview();
   });
 
-  let agentAbortController = null;
-
-  const updateAgentPanelVisibility = () => {
-    const activeModel = models[activeRoot];
-    const canGenerate = ['STORY', 'METADATA'].includes(activeRoot)
-      && activeModel.selectionStart !== activeModel.selectionEnd
-      && Boolean(activeHistory())
-      && Boolean(koboldClient)
-      && aiStatus.dataset.connected === 'true';
-    agentPanel.hidden = !canGenerate;
-    if (canGenerate) {
-      renderAgentProposals();
-      renderAgentReferences();
-    }
-  };
-
-  const setAgentStatus = (text, isError = false) => {
-    agentStatus.textContent = text;
-    agentStatus.dataset.error = String(isError);
-  };
-
-  const renderAgentProposals = () => {
-    const currentHistory = activeHistory();
-    const currentController = activeCommitController();
-    if (!currentHistory) return;
-    const baseId = currentHistory.currentRevision;
-    const proposals = childrenOf(currentHistory, baseId).filter((revision) => revision.origin === 'agent');
-    agentProposals.replaceChildren();
-    for (const revision of proposals) {
-      const card = document.createElement('article');
-      card.className = 'agent-proposal';
-      card.dataset.revisionId = String(revision.id);
-      const summary = document.createElement('p');
-      summary.textContent = `Proposal ${revision.id} · ${revision.timestamp}`;
-      const checkout = document.createElement('button');
-      checkout.type = 'button';
-      checkout.textContent = 'Checkout';
-      checkout.addEventListener('click', async () => {
-        await currentController.checkout(revision.id);
-        renderVersions();
-        refreshHistoryControls();
-        renderAgentProposals();
-      });
-      const preview = document.createElement('button');
-      preview.type = 'button';
-      preview.textContent = 'Preview';
-      const previewBody = document.createElement('pre');
-      previewBody.className = 'agent-preview';
-      previewBody.hidden = true;
-      preview.addEventListener('click', async () => {
-        if (!previewBody.hidden) { previewBody.hidden = true; return; }
-        previewBody.textContent = await reconstructRevision(currentHistory, revision.id);
-        previewBody.hidden = false;
-      });
-      const referenceId = `proposal:${revision.id}`;
-      const useAsReference = document.createElement('button');
-      useAsReference.type = 'button';
-      const setReferenceLabel = () => {
-        useAsReference.textContent = agentReferences.some((existing) => existing.id === referenceId)
-          ? 'Remove from AI reference'
-          : 'Include as AI reference';
-      };
-      setReferenceLabel();
-      useAsReference.addEventListener('click', async () => {
-        const text = await reconstructRevision(currentHistory, revision.id);
-        toggleAgentReference({ id: referenceId, label: `Proposal ${revision.id} (agent)`, text });
-        setReferenceLabel();
-      });
-      card.append(summary, checkout, preview, previewBody, useAsReference);
-      agentProposals.append(card);
-    }
-  };
-
-  agentGenerateButton.addEventListener('click', async () => {
-    const root = activeRoot;
-    const targetModel = models[root];
-    const targetHistory = activeHistory();
-    const targetController = activeCommitController();
-    await targetController.beforeAgentRequest();
-    const baseRevisionId = targetHistory.currentRevision;
-    const range = [targetModel.selectionStart, targetModel.selectionEnd];
-    const request = agentInstruction.value.trim();
-    agentAbortController = new AbortController();
-    agentGenerateButton.hidden = true;
-    agentCancelButton.hidden = false;
-    agentPreview.hidden = false;
-    agentPreview.textContent = '';
-    setAgentStatus('Generating…');
-    try {
-      const result = await requestRewrite({
-        client: koboldClient,
-        history: targetHistory,
-        baseRevisionId,
-        range,
-        root,
-        contextStoryText: models.STORY.text,
-        request,
-        metadataText: models.METADATA.text,
-        pins: readPins(models.METADATA.text),
-        references: agentReferences,
-        agentProtocol: AGENT_PROTOCOL,
-        generationOptions: { max_length: generationMaxLength },
-        onToken: (text) => { agentPreview.textContent = text; },
-        signal: agentAbortController.signal,
-      });
-      const baseText = await reconstructRevision(targetHistory, baseRevisionId);
-      const remainsCurrent = targetHistory.currentRevision === baseRevisionId && targetModel.text === baseText;
-      if (remainsCurrent) {
-        await targetController.checkout(result.revision.id);
-        setAgentStatus(`Applied to ${root}; the prior state remains reversible in Versions.`);
-      } else {
-        setAgentStatus(`Alternative saved for ${root}; it changed while this request was running.`);
-      }
-      renderAgentProposals();
-      enqueueNoteGeneration(result.revision);
-    } catch (error) {
-      setAgentStatus(error.message, true);
-    } finally {
-      agentGenerateButton.hidden = false;
-      agentCancelButton.hidden = true;
-      agentAbortController = null;
-    }
-  });
-  agentCancelButton.addEventListener('click', () => agentAbortController?.abort());
-
   onConnectionChange = () => {
     updateContextInspectorVisibility();
-    updateAgentPanelVisibility();
   };
 
   const refreshHistoryControls = () => {
@@ -1558,6 +1476,7 @@ try {
       warning.textContent = `${result.status}: ${result.path}`;
       pinStatus.append(warning);
     }
+    updateChatSelectionSummary();
   };
 
   const switchView = (rootName) => {
@@ -1587,7 +1506,6 @@ try {
     refreshSidebar();
     updatePassageHistoryVisibility();
     updateContextInspectorVisibility();
-    updateAgentPanelVisibility();
     if (rootName === 'STORY' || rootName === 'METADATA' || rootName === 'COMPOSITE') {
       requestAnimationFrame(() => editors[rootName].updateBounds());
     }
@@ -1681,7 +1599,6 @@ try {
         refreshHistoryControls();
         if (name === 'STORY') updatePassageHistoryVisibility();
         updateContextInspectorVisibility();
-        updateAgentPanelVisibility();
       }
     });
   }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { appendChatMessage, appendChatTurn, appendConversation, parseChatTurns } from '../../src/renderer/project/chat.js';
+import { appendChatMessage, appendChatTurn, appendConversation, findChatTurnRanges, parseChatTurns } from '../../src/renderer/project/chat.js';
 import { extractHeadings } from '../../src/renderer/project/headings.js';
 import { parseProjectDocument } from '../../src/renderer/project/parse.js';
 import { projectRoot } from '../../src/renderer/project/projection.js';
@@ -43,4 +43,11 @@ test('KoboldCpp INPUT/OUTPUT turns remain readable and preserve CRLF', () => {
     { input: 'What does she see?', output: 'Only rain.' },
   ]);
   assert.match(chat, /\{\{\[INPUT\]\}\}\r\nWhere is Maria\?\r\n\{\{\[OUTPUT\]\}\}/);
+});
+
+test('chat turn ranges isolate only complete compact turns for confirmed deletion', () => {
+  const chat = 'Unrelated note.\n\n{{[INPUT]}}\nFirst\n{{[OUTPUT]}}\nOne\n\n{{[INPUT]}}\nSecond\n{{[OUTPUT]}}\nTwo\n';
+  const [first, second] = findChatTurnRanges(chat);
+  assert.equal(chat.slice(first.from, first.to), '{{[INPUT]}}\nFirst\n{{[OUTPUT]}}\nOne\n');
+  assert.equal(chat.slice(second.from, second.to), '{{[INPUT]}}\nSecond\n{{[OUTPUT]}}\nTwo\n');
 });

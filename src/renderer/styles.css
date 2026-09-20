@@ -194,28 +194,6 @@ button { font: inherit; }
 .context-usage-row { display: flex; justify-content: space-between; padding: .1rem 0; color: #948a7f; }
 .context-prompt { margin-top: .35rem; padding: .4rem; max-height: 12rem; overflow: auto; white-space: pre-wrap; color: #cfc6bb; background: #100e0c; border-radius: .2rem; }
 
-.agent-panel { margin-bottom: .5rem; }
-.agent-panel[hidden] { display: none; }
-[data-agent-instruction] {
-  width: 100%;
-  padding: .4rem .5rem;
-  border: 1px solid #33302a;
-  border-radius: .25rem;
-  color: #ddd4ca;
-  background: #12100e;
-  font: inherit;
-  font-size: .78rem;
-  resize: vertical;
-}
-.agent-controls { display: flex; gap: .35rem; margin-top: .3rem; }
-.agent-controls button {
-  padding: .3rem .6rem;
-  border: 1px solid #3a342e;
-  border-radius: .25rem;
-  color: #e8ad70;
-  background: #26221d;
-  font-size: .78rem;
-}
 .agent-references { display: flex; flex-direction: column; gap: .25rem; margin-bottom: .4rem; }
 .agent-references[hidden] { display: none; }
 .agent-reference {
@@ -351,11 +329,16 @@ button { font: inherit; }
 .chat-history.has-context::after { content: ''; position: absolute; z-index: 2; right: 1rem; top: var(--context-line-top); width: 0.5rem; height: var(--context-line-height); border-radius: 999px; background: #302b26; pointer-events: none; }
 .chat-turn { flex: 0 0 auto; position: relative; margin-left: .8rem; padding: .45rem .55rem; border: 1px solid #302b26; border-radius: .25rem; background: transparent; }
 .chat-turn.context-included { border-color: #6f5843; }
-.chat-job { border-style: dashed; }
-.chat-job-queued { border-color: #806346; }
-.chat-job-generating { border-color: #bd8f61; }
-.chat-job-failed { border-color: #9d5555; }
-.chat-job button { margin-top: .35rem; }
+.chat-turn-pending { border-style: dashed; border-color: #806346; }
+.chat-call { display: flex; align-items: center; gap: .35rem; margin: .32rem 0; padding: .18rem .3rem; border-left: 2px solid #806346; color: #b8aea2; font: 600 .66rem/1.25 Inter, sans-serif; letter-spacing: .03em; }
+.chat-call-generating { border-color: #bd8f61; color: #e8ad70; }
+.chat-call-failed { border-color: #9d5555; }
+.chat-call-selection { min-width: 0; color: #948a7f; font-weight: 400; letter-spacing: 0; }
+.chat-call-selection summary { max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.chat-call-selection pre { max-height: 7rem; overflow: auto; margin: .3rem 0 0; padding: .3rem; color: #cfc6bb; background: #17140f; font: .72rem/1.35 ui-monospace, monospace; white-space: pre-wrap; }
+.chat-call-icon, .chat-turn-delete { margin-left: auto; width: 1.25rem; height: 1.25rem; padding: 0; border: 0; border-radius: .2rem; color: #a99e91; background: transparent; font: inherit; line-height: 1; }
+.chat-call-icon:hover, .chat-turn-delete:hover { color: #e8ad70; background: #302b26; }
+.chat-turn-delete { margin-left: -.2rem; margin-right: .1rem; color: #806346; font-size: 1rem; }
 .agent-target-highlight-0 { background: color-mix(in srgb, #bd8f61 30%, transparent); }
 .agent-target-highlight-1 { background: color-mix(in srgb, #6c93b8 30%, transparent); }
 .agent-target-highlight-2 { background: color-mix(in srgb, #8b9b62 30%, transparent); }
@@ -372,6 +355,7 @@ button { font: inherit; }
 .chat-turn.context-start .chat-context-marker { color: #bd8f61; }
 .chat-turn.ghost-context-start .chat-context-marker { color: #8d6a48; }
 .chat-composer { position: relative; flex: 0 0 auto; padding-top: .45rem; border-top: 1px solid #302b26; }
+.chat-selection-summary { margin: .3rem 0; color: #948a7f; font: .68rem/1.3 Inter, sans-serif; }
 .chat-history.has-context + .chat-composer::before { content: ''; position: absolute; right: 1.15rem; top: -.5rem; width: 3px; height: .7rem; border-radius: 999px; background: rgba(141, 106, 72, .42); pointer-events: none; }
 .chat-context-controls, .chat-composer-actions { display: flex; align-items: center; gap: .4rem; color: #948a7f; font-size: .7rem; }
 .chat-context-controls input { width: 3.5rem; padding: .18rem .25rem; border: 1px solid #3a342e; border-radius: .18rem; color: #ddd4ca; background: #12100e; }
