@@ -1,8 +1,9 @@
 export class KoboldError extends Error {
-  constructor(message, { code, cause } = {}) {
+  constructor(message, { code, cause, rawText = null } = {}) {
     super(message, { cause });
     this.name = 'KoboldError';
     this.code = code;
+    this.rawText = rawText;
   }
 }
 
@@ -130,6 +131,43 @@ export class KoboldClient {
     } catch {
       // Best-effort: if the server is unreachable there is nothing left to abort.
     }
+  }
+
+  /** OpenAI-compatible chat completion. When tools are supplied, KoboldCpp
+   * applies the loaded model's native tool template and returns tool_calls. */
+  async chatCompletion({ messages, tools = [], toolChoice = 'auto', maxTokens = 200, signal }) {
+    let response;
+    try {
+      const payload = { model: 'koboldcpp', messages, max_tokens: maxTokens, temperature: 0 };
+      if (tools.length > 0) {
+        payload.tools = tools;
+        payload.tool_choice = toolChoice;
+      }
+      response = await this.fetch(`${this.baseUrl}/v1/chat/completions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload), signal,
+      });
+    } catch (cause) {
+      if (cause?.name === 'AbortError') throw cause;
+      throw new KoboldError('Could not reach KoboldCpp chat completions.', { code: 'UNAVAILABLE', cause });
+    }
+    let raw;
+    try {
+      raw = await response.text();
+    } catch (cause) {
+      throw new KoboldError('KoboldCpp returned an unreadable chat response.', { code: 'MALFORMED_RESPONSE', cause });
+    }
+    if (!response.ok) throw new KoboldError('KoboldCpp rejected the chat completion.', { code: 'CHAT_COMPLETION_FAILED', rawText: raw });
+    let body;
+    try {
+      body = JSON.parse(raw);
+    } catch (cause) {
+      throw new KoboldError('KoboldCpp returned a malformed chat response.', { code: 'MALFORMED_RESPONSE', cause, rawText: raw });
+    }
+    const choice = body?.choices?.[0];
+    const message = choice?.message;
+    if (!message || !Array.isArray(message.tool_calls ?? [])) throw new KoboldError('KoboldCpp returned a malformed chat response.', { code: 'MALFORMED_RESPONSE', rawText: raw });
+    return { message, finishReason: choice.finish_reason ?? null, raw };
   }
 
   async #readJSON(response) {

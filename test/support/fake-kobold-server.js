@@ -12,6 +12,7 @@ export function startFakeKoboldServer(options = {}) {
     tokenDelayMs = 5,
     malformedStream = false,
     malformedJSON = false,
+    toolCalls = null,
   } = options;
 
   const abortedKeys = new Set();
@@ -52,6 +53,22 @@ export function startFakeKoboldServer(options = {}) {
       const prompt = JSON.parse(body || '{}').prompt ?? '';
       const value = prompt.split(/\s+/).filter(Boolean).length;
       return sendJSON(response, 200, { value });
+    }
+    if (method === 'POST' && url.pathname === '/v1/chat/completions') {
+      const payload = JSON.parse(body || '{}');
+      const replacements = toolCalls ?? (tokens.join('') ? [tokens.join('')] : []);
+      const currentPacket = payload.messages?.at(-1)?.content?.slice(payload.messages.at(-1)?.content?.lastIndexOf('<noirdraft_context>')) ?? '';
+      const isCursorContext = currentPacket.includes('<insert_here/>');
+      const reply = !payload.tools?.length || isCursorContext
+        ? { choices: [{ message: { role: 'assistant', content: tokens.join(''), tool_calls: [] }, finish_reason: 'stop' }] }
+        : payload.tool_choice === 'none' || payload.messages?.some((message) => message.role === 'tool')
+        ? { choices: [{ message: { role: 'assistant', content: 'Done.', tool_calls: [] } }] }
+        : { choices: [{ message: {
+          role: 'assistant', content: null,
+          tool_calls: replacements.map((replacement, index) => ({ id: `call_${index + 1}`, type: 'function', function: { name: 'submit_change', arguments: JSON.stringify({ operation: isCursorContext ? 'insert' : 'replace', text: replacement }) } })),
+        } }] };
+      if (tokenDelayMs > 0) return setTimeout(() => sendJSON(response, 200, reply), tokenDelayMs);
+      return sendJSON(response, 200, reply);
     }
     if (method === 'POST' && url.pathname === '/api/extra/generate/stream') {
       const requestPayload = JSON.parse(body || '{}');

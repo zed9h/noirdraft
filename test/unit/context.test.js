@@ -18,17 +18,18 @@ test('composeContext resolves pins and lays out clearly delimited, ordered secti
   });
   assert.deepEqual(result.unresolvedPins, []);
   assert.deepEqual(result.components.map((component) => component.label), [
+    'AGENT PROTOCOL',
     'REFERENCE METADATA/Characters/Maria',
     'STORY CONTEXT BEFORE TARGET',
     'TARGET',
     'STORY CONTEXT AFTER TARGET',
     'CURRENT REQUEST',
-    'AGENT PROTOCOL',
   ]);
-  assert.ok(result.prompt.startsWith('REFERENCE METADATA/Characters/Maria\n## Maria'));
+  assert.ok(result.staticPrompt.startsWith('<noirdraft_static>\n  <instructions><![CDATA[Reply with only the replacement prose.]]></instructions>'));
+  assert.ok(result.staticPrompt.includes('<reference><![CDATA[## Maria'));
   assert.ok(result.prompt.includes('A cautious investigator.'));
-  assert.ok(result.prompt.includes('TARGET\nThe room was cold.'));
-  assert.ok(result.prompt.includes('CURRENT REQUEST\nMake the room colder.'));
+  assert.ok(result.turnPrompt.includes('<context><![CDATA[Maria walked in.]]><selection><![CDATA[The room was cold.]]></selection><![CDATA[She sat down slowly.]]></context>'));
+  assert.ok(result.turnPrompt.endsWith('<request><![CDATA[Make the room colder.]]></request>\n</noirdraft_context>'));
 });
 
 test('composeContext reports an unresolved pin explicitly instead of silently dropping it', () => {
@@ -56,12 +57,18 @@ test('composeContext never includes chat history or rejected variants unless pas
     request: 'Rewrite.',
     references: [{ label: 'STORY/Chapter/Earlier scene', text: 'It had rained all week.' }],
   });
-  assert.ok(withReference.prompt.includes('REFERENCE STORY/Chapter/Earlier scene\nIt had rained all week.'));
+  assert.ok(withReference.staticPrompt.includes('<reference><![CDATA[It had rained all week.]]></reference>'));
 });
 
 test('composeContext omits empty optional sections rather than emitting blank labels', () => {
   const result = composeContext({ storyText, target: 'The room was cold.', request: '' });
   assert.deepEqual(result.components.map((component) => component.id), ['target']);
+});
+
+test('composeContext uses a cursor marker for ordinary contextual chat', () => {
+  const result = composeContext({ storyText, request: 'Test the chat.' });
+  assert.equal(result.turnPrompt, '<noirdraft_context>\n  <context><![CDATA[]]>\n<insert_here/>\n<![CDATA[]]></context>\n  <request><![CDATA[Test the chat.]]></request>\n</noirdraft_context>');
+  assert.ok(!result.turnPrompt.includes('<selection>'));
 });
 
 test('allocateContextBudget sums deterministic token counts and reports fit against the reserved budget', async () => {

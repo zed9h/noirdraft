@@ -62,3 +62,24 @@ export function appendChatTurn(chat, input, output) {
   ].join(eol);
   return appendSeparated(source, addition, eol);
 }
+
+/** The stored INPUT is the complete model packet; CHAT shows only the author’s
+ * current request when it was composed by NoirDraft. Old handwritten turns
+ * remain untouched and display as-is. */
+export function displayChatInput(input) {
+  const value = String(input);
+  const match = value.match(/<request><!\[CDATA\[([\s\S]*?)\]\]><\/request>/);
+  return match ? match[1].trim() : value;
+}
+
+/** Structured agent output keeps tool calls out of the reading transcript;
+ * the unmodified stored OUTPUT remains available from the AGENT header. */
+export function displayChatOutput(output) {
+  const value = String(output);
+  const records = value.split('\n').map((line) => {
+    try { return JSON.parse(line); } catch { return null; }
+  }).filter(Boolean);
+  const native = records.at(-1)?.choices?.[0]?.message?.content;
+  if (typeof native === 'string') return native;
+  return value;
+}

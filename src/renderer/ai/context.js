@@ -36,7 +36,11 @@ export function composeContext({
     else unresolvedPins.push(result);
   }
 
+  // Keep the cacheable instruction and project reference prefix stable.  The
+  // volatile passage and request are deliberately last, so consecutive turns
+  // can share KoboldCpp's prompt prefix.
   const components = [
+    { id: 'protocol', label: 'AGENT PROTOCOL', text: agentProtocol },
     ...resolvedPins.map((pin) => ({ id: `pin:${pin.path}`, label: `REFERENCE ${pin.path}`, text: pin.text })),
     ...references.map((reference, index) => ({
       id: reference.id ?? `reference:${index}`,
@@ -47,11 +51,22 @@ export function composeContext({
     { id: 'target', label: 'TARGET', text: target },
     { id: 'after', label: 'STORY CONTEXT AFTER TARGET', text: after },
     { id: 'request', label: 'CURRENT REQUEST', text: request },
-    { id: 'protocol', label: 'AGENT PROTOCOL', text: agentProtocol },
   ].filter((component) => component.text !== '' && component.text != null);
 
-  const prompt = components.map((component) => `${component.label}\n${component.text}`).join('\n\n');
-  return { components, prompt, unresolvedPins };
+  const cdata = (value) => String(value).replaceAll(']]>', ']]]]><![CDATA[>');
+  const referenceXML = components
+    .filter((component) => component.id.startsWith('pin:') || component.id.startsWith('reference:'))
+    .map((component) => `  <reference><![CDATA[${cdata(component.text)}]]></reference>`)
+    .join('\n');
+  const staticPrompt = `<noirdraft_static>\n  <instructions><![CDATA[${cdata(agentProtocol)}]]></instructions>\n${referenceXML ? `${referenceXML}\n` : ''}</noirdraft_static>`;
+  const context = `${before}${target}${after}`;
+  // Every turn is contextual. The one structural marker identifies either a
+  // selected passage or a zero-width insertion point inside the same text.
+  const contextBody = target
+    ? `<![CDATA[${cdata(before)}]]><selection><![CDATA[${cdata(target)}]]></selection><![CDATA[${cdata(after)}]]>`
+    : `<![CDATA[${cdata(before)}]]>\n<insert_here/>\n<![CDATA[${cdata(after)}]]>`;
+  const turnPrompt = `<noirdraft_context>\n  <context>${contextBody}</context>\n  <request><![CDATA[${cdata(request)}]]></request>\n</noirdraft_context>`;
+  return { components, staticPrompt, turnPrompt, prompt: `${staticPrompt}\n\n${turnPrompt}`, unresolvedPins };
 }
 
 /**

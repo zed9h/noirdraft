@@ -25,8 +25,8 @@ test('selecting a STORY passage previews the exact composed model input with tok
     await window.waitForFunction(() => Boolean(window.__noirDraftTest?.getCommitController()));
     await expect(window.getByLabel('AI connection status')).toContainText('Disconnected');
 
-    const preview = window.getByRole('button', { name: 'Preview context…' });
-    await expect(preview).toBeHidden();
+    const preview = window.getByRole('button', { name: 'Preview context for draft message' });
+    await expect(preview).toBeVisible();
 
     await window.evaluate(() => {
       const { editors, models } = window.__noirDraftTest;
@@ -40,29 +40,30 @@ test('selecting a STORY passage previews the exact composed model input with tok
       editors.STORY.setSelection(from, from + 'The room was cold.'.length);
     });
 
-    await expect(preview).toBeVisible();
+    await window.getByLabel('Chat prompt').fill('Make the room colder.');
     await preview.click();
 
-    const body = window.locator('[data-context-inspector-body]');
-    await expect(body).toBeVisible();
-    await expect(body).toContainText('(estimated, not connected)');
-    const promptText = await body.locator('.context-prompt').textContent();
-    expect(promptText).toContain('REFERENCE METADATA/Characters/Maria');
+    const dialog = window.locator('[data-context-dialog]');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('[data-context-dialog-summary]')).toContainText('(estimated)');
+    const promptText = await dialog.locator('.context-prompt').textContent();
+    expect(promptText).toContain('<noirdraft_static>');
+    expect(promptText).toContain('<reference><![CDATA[## Maria');
     expect(promptText).toContain('A cautious investigator.');
-    expect(promptText).toContain('TARGET\nThe room was cold.');
-    expect(promptText).toContain('STORY CONTEXT BEFORE TARGET');
-    expect(promptText).toContain('STORY CONTEXT AFTER TARGET');
-    expect(promptText).toContain('AGENT PROTOCOL');
+    expect(promptText).toContain('<noirdraft_context>');
+    expect(promptText).toContain('<context><![CDATA[');
+    expect(promptText).toContain('<selection><![CDATA[The room was cold.]]></selection>');
+    expect(promptText).toContain('<request><![CDATA[Make the room colder.]]></request>');
+    expect(promptText).toContain('<instructions><![CDATA[');
 
     // Now connect to a real fake server and confirm the estimate note goes away
     // and token counts come from the server's actual tokenizer.
     const server = await startFakeKoboldServer({ model: 'gemma-fake', contextLength: 4096 });
     try {
       await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
+      await dialog.getByRole('button', { name: 'Close context' }).click();
       await preview.click();
-      await preview.click();
-      await expect(body).not.toContainText('estimated');
-      await expect(body.locator('.context-budget')).toBeVisible();
+      await expect(dialog.locator('[data-context-dialog-summary]')).not.toContainText('estimated');
     } finally {
       await server.close();
     }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { appendChatMessage, appendChatTurn, appendConversation, findChatTurnRanges, parseChatTurns } from '../../src/renderer/project/chat.js';
+import { appendChatMessage, appendChatTurn, appendConversation, displayChatInput, displayChatOutput, findChatTurnRanges, parseChatTurns } from '../../src/renderer/project/chat.js';
 import { extractHeadings } from '../../src/renderer/project/headings.js';
 import { parseProjectDocument } from '../../src/renderer/project/parse.js';
 import { projectRoot } from '../../src/renderer/project/projection.js';
@@ -50,4 +50,15 @@ test('chat turn ranges isolate only complete compact turns for confirmed deletio
   const [first, second] = findChatTurnRanges(chat);
   assert.equal(chat.slice(first.from, first.to), '{{[INPUT]}}\nFirst\n{{[OUTPUT]}}\nOne\n');
   assert.equal(chat.slice(second.from, second.to), '{{[INPUT]}}\nSecond\n{{[OUTPUT]}}\nTwo\n');
+});
+
+test('CHAT displays the author request while preserving the complete stored model input', () => {
+  const packet = '<noirdraft><request><![CDATA[Give me three versions.]]></request></noirdraft>';
+  assert.equal(displayChatInput(packet), 'Give me three versions.');
+  assert.equal(displayChatInput('Old handwritten question?'), 'Old handwritten question?');
+});
+
+test('CHAT displays native protocol response chat while retaining raw response separately', () => {
+  assert.equal(displayChatOutput('{"choices":[{"message":{"content":"Two versions below."}}]}'), 'Two versions below.');
+  assert.equal(displayChatOutput('A response.'), 'A response.');
 });

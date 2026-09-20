@@ -35,6 +35,11 @@ Keep deterministic logic in its focused subsystem, then wire it through `app.js`
 - AI output is a proposal until explicit application; a missing KoboldCpp server must not block editing/saving.
 - History records meaningful editing intervals. Adopted-text provenance is not history ancestry.
 
+## Prototype protocol policy
+
+- Prefer one direct, current protocol over compatibility layers during this prototype. Do not retain legacy prompt formats, parsers, fallbacks, or migrations unless the user explicitly asks for them.
+- Native KoboldCpp/OpenAI tool calls are the only agent mutation protocol. Keep long context as XML input data and function-call arguments as schema-validated JSON.
+
 ## Develop and verify
 
 Requires Node.js 22+:

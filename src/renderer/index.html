@@ -79,6 +79,16 @@
           </dl>
         </form>
       </dialog>
+      <dialog class="context-dialog" data-context-dialog aria-labelledby="context-dialog-title">
+        <form method="dialog">
+          <div class="app-info-heading">
+            <h2 id="context-dialog-title">Raw model context</h2>
+            <button type="submit" class="icon-button" aria-label="Close context">×</button>
+          </div>
+          <div class="context-budget" data-context-dialog-summary></div>
+          <pre class="context-prompt" data-context-dialog-prompt></pre>
+        </form>
+      </dialog>
       <div class="body">
         <nav class="sidebar sidebar-left" data-sidebar-left aria-label="Project views">
           <div class="project-folds" aria-label="Project outline">
@@ -151,15 +161,14 @@
           <div class="ai-status" data-ai-status aria-label="AI connection status" hidden>Disconnected</div>
           <div class="chat-history" data-chat-history aria-label="Chat history"></div>
           <div class="chat-composer" data-chat-composer>
-            <div class="pin-status chat-pins" data-pin-status aria-label="Context pins"></div>
-            <div class="chat-selection-summary" data-chat-selection-summary aria-live="polite"></div>
-            <div class="context-inspector" data-context-inspector aria-label="Context inspector" hidden>
-              <button type="button" data-context-toggle>Preview context…</button>
-              <div class="context-inspector-body" data-context-inspector-body hidden></div>
+            <div data-pin-status hidden></div>
+            <div class="chat-context-preview">
+              <button type="button" data-context-toggle aria-label="Preview context for draft message">USER</button>
+              <span data-chat-context-summary aria-live="polite"></span>
             </div>
             <textarea rows="3" data-chat-prompt aria-label="Chat prompt" placeholder="Message the agent…"></textarea>
             <div class="chat-composer-actions">
-              <label class="chat-context-controls">Context <input type="number" min="0" step="1" value="6" data-chat-history-count aria-label="Context"></label><span data-chat-context-summary aria-live="polite"></span></label>
+              <label class="chat-context-controls">Context <input type="number" min="0" step="1" value="6" data-chat-history-count aria-label="Context"></label>
               <button type="button" data-chat-cancel hidden>Cancel</button>
               <button type="button" data-chat-send>Send</button>
             </div>

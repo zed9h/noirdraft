@@ -6,7 +6,7 @@ import { childrenOf, commitRevision, createHistory, recordExternalEdit, reconstr
 import { hashStory } from './history/hash.js';
 import { parseHistories, serializeHistories } from './history/serialize.js';
 import { requestRewrite } from './ai/agent.js';
-import { allocateContextBudget, composeContext } from './ai/context.js';
+import { composeContext } from './ai/context.js';
 import { KoboldClient } from './ai/kobold.js';
 import { generateNote } from './ai/notes.js';
 import { adoptIntoComposite } from './history/composite.js';
@@ -18,7 +18,7 @@ import { parseProjectDocument } from './project/parse.js';
 import { readPins, writePins } from './project/pins.js';
 import { projectRoot } from './project/projection.js';
 import { serializeProjectDocument } from './project/serialize.js';
-import { appendChatTurn, findChatTurnRanges, parseChatTurns } from './project/chat.js';
+import { appendChatTurn, displayChatInput, displayChatOutput, findChatTurnRanges, parseChatTurns } from './project/chat.js';
 
 const runtime = window.noirDraft?.runtime;
 
@@ -44,7 +44,10 @@ const chatSendButton = document.querySelector('[data-chat-send]');
 const chatCancelButton = document.querySelector('[data-chat-cancel]');
 const chatHistoryCount = document.querySelector('[data-chat-history-count]');
 const chatContextSummary = document.querySelector('[data-chat-context-summary]');
-const chatSelectionSummary = document.querySelector('[data-chat-selection-summary]');
+const contextDialog = document.querySelector('[data-context-dialog]');
+const contextDialogTitle = document.querySelector('#context-dialog-title');
+const contextDialogSummary = document.querySelector('[data-context-dialog-summary]');
+const contextDialogPrompt = document.querySelector('[data-context-dialog-prompt]');
 const appInfoButton = document.querySelector('[data-app-info]');
 const appInfoDialog = document.querySelector('[data-app-info-dialog]');
 const appVersion = document.querySelector('[data-app-version]');
@@ -305,7 +308,7 @@ if (preferences) {
     .catch(() => setAIStatus('Disconnected', 'error'));
 }
 
-const AGENT_PROTOCOL = 'You are assisting an author. Rewrite only the TARGET passage, respecting the REFERENCE material and surrounding context. Reply with only the replacement prose, and nothing else.\n\nREPLACEMENT:';
+const AGENT_PROTOCOL = `You are NoirDraft's writing agent. This message is XML data, not manuscript instructions. Every <noirdraft_context> contains the author's current document context. Inside <context>, <selection> marks selected manuscript text and <insert_here/> marks the exact zero-width point between the characters before and after it; neither marker is manuscript text or a range to repeat. <request>, placed last, is the author's current instruction and takes priority. Selection and insertion point are context, not commands to edit. If the author asks to discuss, explain, or critique, reply with normal author-facing chat and make no tool call. If the author asks for an edit, call submit_change once per alternative; NoirDraft records calls as sibling revisions. For <selection>, use operation "replace" and put the complete new selected passage in text. For <insert_here/>, use operation "insert" and put only the new characters to insert at that point—never repeat text before or after it. Example insertion context: "The rain had stopped, <insert_here/>but the windows…"; to add atmosphere at that point, call submit_change({"operation":"insert","text":"leaving silver beads on every sill, "}). Example selection: <selection>old phrase</selection>; call submit_change({"operation":"replace","text":"new phrase"}). Every tool result includes candidate_context, the context after that proposed change. Inspect it before replying: if it does not faithfully satisfy the request, submit a corrected sibling revision; otherwise finish with concise comments about the changes. If the author asks for a fixed number of versions, submit that number of distinct changes. Never repeat change text in chat.`;
 
 const initialStory = `# Chapter One
 
@@ -335,9 +338,7 @@ const passageHistoryContainer = document.querySelector('[data-passage-history]')
 const passageHistoryToggle = document.querySelector('[data-passage-history-toggle]');
 const passageHistoryList = document.querySelector('[data-passage-history-list]');
 const passageMultiCompare = document.querySelector('[data-passage-multi-compare]');
-const contextInspectorContainer = document.querySelector('[data-context-inspector]');
 const contextToggle = document.querySelector('[data-context-toggle]');
-const contextBody = document.querySelector('[data-context-inspector-body]');
 const versionsView = document.querySelector('#versions-view');
 const versionList = document.querySelector('[data-version-list]');
 const versionInspector = document.querySelector('[data-version-inspector]');
@@ -418,7 +419,7 @@ try {
       const top = startCard.offsetTop + marker.offsetTop + marker.offsetHeight;
       const bottom = lastCard.offsetTop + lastCard.offsetHeight + Number.parseFloat(getComputedStyle(chatHistory).paddingBottom);
       chatHistory.style.setProperty('--context-line-top', `${top}px`);
-      chatHistory.style.setProperty('--context-line-height', `${Math.max(0, bottom - top)}px`);
+      chatHistory.style.setProperty('--context-line-height', `${Math.max(0, bottom - top - 8)}px`);
     }
   };
   const scheduleChatContextLinePosition = () => {
@@ -429,9 +430,7 @@ try {
     const start = pinnedChatStart !== null && pinnedChatStart >= 0 && pinnedChatStart < renderedChatTurnCount
       ? pinnedChatStart
       : Math.max(0, renderedChatTurnCount - chatHistoryMessageCount);
-    chatContextSummary.textContent = renderedChatTurnCount
-      ? `${renderedChatTurnCount - start} of ${renderedChatTurnCount} turns will be sent`
-      : 'No prior turns';
+    updateDraftContextSummary();
     for (const card of chatHistory.querySelectorAll('.chat-turn')) {
       const index = Number(card.dataset.turnIndex);
       const isStoredTurn = index < renderedChatTurnCount;
@@ -447,22 +446,63 @@ try {
     }
     scheduleChatContextLinePosition();
   };
-  const updateChatSelectionSummary = () => {
-    const selectedRoot = ['STORY', 'METADATA'].includes(activeRoot)
-      && models[activeRoot].selectionStart !== models[activeRoot].selectionEnd
-      ? activeRoot
-      : null;
-    if (selectedRoot) {
-      const selection = models[selectedRoot].text.slice(models[selectedRoot].selectionStart, models[selectedRoot].selectionEnd);
-      const references = agentReferences.length
-        ? ` · ${agentReferences.length} context reference${agentReferences.length === 1 ? '' : 's'}`
-        : '';
-      chatSelectionSummary.textContent = `${selectedRoot} selection · ${selection.length} characters${references} — next message will request a replacement`;
-    } else if (agentReferences.length) {
-      chatSelectionSummary.textContent = `${agentReferences.length} context reference${agentReferences.length === 1 ? '' : 's'} selected`;
-    } else {
-      chatSelectionSummary.textContent = 'Select STORY or METADATA text to request a replacement';
+  const staticChatPreamble = () => composeContext({
+    storyText: models.STORY.text, metadataText: models.METADATA.text,
+    pins: readPins(models.METADATA.text), references: agentReferences, agentProtocol: AGENT_PROTOCOL,
+  }).staticPrompt;
+  const formatChatPacket = (turns, input) => [staticChatPreamble(), ...turns.flatMap((turn) => ['{{[INPUT]}}', turn.input, '{{[OUTPUT]}}', turn.output]), '{{[INPUT]}}', input, '{{[OUTPUT]}}'].join('\n');
+  const updateDraftContextSummary = () => {
+    const input = chatPrompt.value.trim();
+    const hasTarget = ['STORY', 'METADATA'].includes(activeRoot) && models[activeRoot].selectionStart !== models[activeRoot].selectionEnd;
+    contextToggle.dataset.targetColor = hasTarget ? String(nextChatJobId % 4) : '';
+    if (!input) { chatContextSummary.textContent = 'Draft context'; return; }
+    const turns = parseChatTurns(models.CHAT.text);
+    const roughPacket = formatChatPacket(turns.slice(chatContextStart(turns)), input);
+    chatContextSummary.textContent = `~${Math.ceil(roughPacket.length / 4)} / ${(koboldContextLength ?? 4096) - generationMaxLength} tokens`;
+  };
+  let contextDialogRequestId = 0;
+  const openContextDialog = async (prompt, title = 'Raw model context') => {
+    const requestId = ++contextDialogRequestId;
+    const source = String(prompt);
+    const connected = Boolean(koboldClient) && aiStatus.dataset.connected === 'true';
+    const maximum = koboldContextLength ?? 4096;
+    contextDialogTitle.textContent = title;
+    contextDialogPrompt.textContent = source;
+    const estimate = Math.ceil(source.length / 4);
+    contextDialogSummary.textContent = `~${estimate} tokens${connected ? '' : ' (estimated)'}`;
+    contextDialogSummary.dataset.over = 'false';
+    contextDialog.showModal();
+    if (!connected) return;
+    try {
+      const tokens = await koboldClient.countTokens(source);
+      if (requestId !== contextDialogRequestId || !contextDialog.open) return;
+      contextDialogSummary.textContent = `${tokens} / ${maximum - generationMaxLength} tokens`;
+      contextDialogSummary.dataset.over = String(tokens > maximum - generationMaxLength);
+    } catch {
+      // The raw payload must remain inspectable even when token counting fails.
     }
+  };
+  const composeJobInput = async (input, selectedRoot = null, anchor = null) => {
+    const targetText = anchor?.target ?? '';
+    return composeContext({
+      storyText: models.STORY.text, metadataText: models.METADATA.text,
+      pins: readPins(models.METADATA.text), references: agentReferences,
+      before: anchor?.before ?? '', target: targetText, after: anchor?.after ?? '',
+      request: input, agentProtocol: AGENT_PROTOCOL,
+    }).turnPrompt;
+  };
+  const previewDraftContext = async () => {
+    const input = chatPrompt.value.trim();
+    if (!input) return;
+    const selectedRoot = ['STORY', 'METADATA'].includes(activeRoot) ? activeRoot : null;
+    let anchor = null;
+    if (selectedRoot) {
+      const range = [models[selectedRoot].selectionStart, models[selectedRoot].selectionEnd];
+      const text = models[selectedRoot].text;
+      anchor = { target: text.slice(...range), before: text.slice(Math.max(0, range[0] - CONTEXT_WINDOW), range[0]), after: text.slice(range[1], range[1] + CONTEXT_WINDOW) };
+    }
+    const packet = await composeJobInput(input, selectedRoot, anchor);
+    await openContextDialog(formatChatPacket(parseChatTurns(models.CHAT.text).slice(chatContextStart(parseChatTurns(models.CHAT.text))), packet));
   };
   const renderChatHistory = (pendingTurn = null) => {
     const previousScrollTop = chatHistory.scrollTop;
@@ -472,9 +512,7 @@ try {
     const start = chatContextStart(turns);
     chatHistory.replaceChildren();
     chatHistory.classList.toggle('has-context', turns.length > 0);
-    chatContextSummary.textContent = turns.length
-      ? `${turns.length - start} of ${turns.length} turns will be sent`
-      : 'No prior turns';
+    updateDraftContextSummary();
     const visibleTurns = pendingTurn ? [...turns, pendingTurn] : turns;
     for (const [index, turn] of visibleTurns.entries()) {
       const job = chatJobs.find((candidate) => candidate.turnIndex === index && candidate.state !== 'removed');
@@ -506,21 +544,69 @@ try {
         updateChatContextPresentation();
       });
       header.append(deleteTurn, title, marker);
-      const createMessage = (role, text) => {
+      const createMessage = (role, text, call = null) => {
         const message = document.createElement('section');
         message.className = `chat-message chat-${role.toLowerCase()} chat-${role === 'user' ? 'input' : 'output'}`;
         const label = document.createElement('div');
         label.className = 'chat-message-label';
-        label.textContent = role;
+        const labelTitle = document.createElement('button');
+        labelTitle.type = 'button';
+        labelTitle.className = 'chat-role-action';
+        labelTitle.textContent = role;
+        label.append(labelTitle);
+        if (role === 'user') {
+          labelTitle.title = 'Show this turn’s raw request';
+          labelTitle.setAttribute('aria-label', `Show raw request for turn ${index + 1}`);
+          labelTitle.addEventListener('click', () => void openContextDialog(turn.input, 'Raw user request'));
+          const tokens = document.createElement('span');
+          tokens.className = 'chat-token-count';
+          tokens.textContent = `~${Math.ceil(turn.input.length / 4)} tokens`;
+          label.append(tokens);
+          if (call?.kind === 'rewrite' && call.anchor.target) {
+            const selection = document.createElement('details');
+            selection.className = 'chat-call-selection';
+            const summary = document.createElement('summary');
+            summary.textContent = call.anchor.target;
+            selection.append(summary);
+            message.append(label, selection);
+          }
+        } else {
+          labelTitle.setAttribute('aria-label', `Show raw response for turn ${index + 1}`);
+          labelTitle.addEventListener('click', () => void openContextDialog(call?.rawResponse ?? 'Raw response is available only during this session.', 'Raw model response'));
+          if (call) label.append(renderChatCall(call));
+        }
         const content = document.createElement('div');
         content.className = 'chat-message-content';
-        new MarkdownRenderer(content).render(text);
-        message.append(label, content);
+        new MarkdownRenderer(content).render(String(text));
+        const citationPattern = /\[#(\d+)\]\(noirdraft:\/\/version\/(STORY|METADATA)\/(\d+)\)/g;
+        const citationNodes = [];
+        const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) citationNodes.push(walker.currentNode);
+        for (const node of citationNodes) {
+          const source = node.nodeValue;
+          if (!citationPattern.test(source)) continue;
+          citationPattern.lastIndex = 0;
+          const fragment = document.createDocumentFragment();
+          let cursor = 0;
+          for (const match of source.matchAll(citationPattern)) {
+            fragment.append(document.createTextNode(source.slice(cursor, match.index)));
+            const version = document.createElement('button');
+            version.type = 'button';
+            version.className = `chat-version-reference chat-version-reference-${match[2].toLowerCase()}`;
+            version.textContent = `#${match[3]}`;
+            version.title = `${match[2]} revision ${match[3]}`;
+            version.addEventListener('click', () => openVersionCitation(match[2], Number(match[3])));
+            fragment.append(version);
+            cursor = match.index + match[0].length;
+          }
+          fragment.append(document.createTextNode(source.slice(cursor)));
+          node.replaceWith(fragment);
+        }
+        if (!message.contains(label)) message.append(label);
+        message.append(content);
         return message;
       };
-      card.append(header, createMessage('user', turn.input));
-      if (job) card.append(renderChatCall(job));
-      card.append(createMessage('agent', turn.output));
+      card.append(header, createMessage('user', displayChatInput(turn.input), job), createMessage('agent', displayChatOutput(turn.output), job));
       chatHistory.append(card);
     }
     const pendingJobs = chatJobs.filter((job) => ['queued', 'generating', 'failed', 'cancelled'].includes(job.state));
@@ -553,28 +639,6 @@ try {
   const renderChatCall = (job) => {
     const call = document.createElement('div');
     call.className = `chat-call chat-call-${job.state}`;
-    const label = document.createElement('span');
-    label.textContent = job.kind === 'rewrite'
-      ? `↳ Replace ${job.root} selection · ${job.state}`
-      : `↳ Model call · ${job.state}`;
-    call.append(label);
-    if (job.kind === 'rewrite') {
-      const selection = document.createElement('details');
-      selection.className = 'chat-call-selection';
-      const summary = document.createElement('summary');
-      summary.textContent = `Selection · ${job.anchor.target.length} characters`;
-      const excerpt = document.createElement('pre');
-      excerpt.textContent = job.anchor.target;
-      selection.append(summary, excerpt);
-      const context = document.createElement('button');
-      context.type = 'button';
-      context.className = 'chat-call-icon';
-      context.textContent = '⌘';
-      context.title = 'Preview exact context';
-      context.setAttribute('aria-label', 'Preview exact context');
-      context.addEventListener('click', () => void renderContextPreview(job));
-      call.append(selection, context);
-    }
     if (job.state === 'queued' || job.state === 'generating') {
       const cancel = document.createElement('button');
       cancel.type = 'button';
@@ -612,11 +676,40 @@ try {
     header.append(deleteTurn, title);
     const input = document.createElement('section');
     input.className = 'chat-message chat-user chat-input';
-    input.textContent = job.input;
+    const inputLabel = document.createElement('div');
+    inputLabel.className = 'chat-message-label';
+    inputLabel.textContent = 'user';
+    inputLabel.classList.add('chat-role-action');
+    inputLabel.setAttribute('role', 'button');
+    inputLabel.tabIndex = 0;
+    inputLabel.setAttribute('aria-label', `Show raw request for pending turn ${index + 1}`);
+    inputLabel.addEventListener('click', () => void openContextDialog(job.packet ?? job.input, 'Raw user request'));
+    const inputTokens = document.createElement('span');
+    inputTokens.className = 'chat-token-count';
+    inputTokens.textContent = `~${Math.ceil((job.packet ?? job.input).length / 4)} tokens`;
+    inputLabel.append(inputTokens);
+    const inputContent = document.createElement('div');
+    inputContent.className = 'chat-message-content';
+    inputContent.textContent = job.input;
+    input.append(inputLabel, inputContent);
     const output = document.createElement('section');
     output.className = 'chat-message chat-agent chat-output';
-    output.textContent = job.output || 'Waiting for the model…';
-    card.append(header, input, renderChatCall(job), output);
+    const outputLabel = document.createElement('div');
+    outputLabel.className = 'chat-message-label';
+    const outputTitle = document.createElement('button');
+    outputTitle.type = 'button';
+    outputTitle.className = 'chat-role-action';
+    outputTitle.textContent = 'agent';
+    outputTitle.title = 'Show raw model response';
+    outputTitle.setAttribute('aria-label', `Show raw response for pending turn ${index + 1}`);
+    outputTitle.addEventListener('click', () => void openContextDialog(job.rawResponse ?? 'Raw response is available only during this session.', 'Raw model response'));
+    outputLabel.append(outputTitle);
+    outputLabel.append(renderChatCall(job));
+    const outputContent = document.createElement('div');
+    outputContent.className = 'chat-message-content';
+    outputContent.textContent = job.output || 'Waiting for the model…';
+    output.append(outputLabel, outputContent);
+    card.append(header, input, output);
     return card;
   };
   const cancelChatJob = (job) => {
@@ -654,17 +747,19 @@ try {
     chatJobs.push({
       id: nextChatJobId++, input: job.input, output: '', state: 'queued', kind: 'rewrite',
       root: job.root, history: job.history, controller: job.controller, model: job.model,
-      baseRevisionId: job.baseRevisionId, range: job.range, baseText, anchor: job.anchor,
+      baseRevisionId: job.baseRevisionId, range: job.range, baseText, anchor: job.anchor, packet: job.packet,
+      protocolPrompt: job.protocolPrompt,
     });
     refreshAgentTargetHighlights();
     renderChatHistory();
     void processChatQueue();
   };
-  const completeChatJob = async (job, output) => {
+  const completeChatJob = async (job, output, rawResponse = output) => {
     job.state = 'complete';
     job.output = output;
+    job.rawResponse = rawResponse;
     job.turnIndex = parseChatTurns(models.CHAT.text).length;
-    editors.CHAT.replace(0, models.CHAT.text.length, appendChatTurn(models.CHAT.text, job.input, output), 'chat');
+    editors.CHAT.replace(0, models.CHAT.text.length, appendChatTurn(models.CHAT.text, job.packet ?? job.input, output), 'chat');
     pinnedChatStart = null;
     await persistAfterCommit();
   };
@@ -692,34 +787,38 @@ try {
           metadataText: models.METADATA.text,
           pins: readPins(models.METADATA.text),
           references: agentReferences,
+          chatTurns: parseChatTurns(models.CHAT.text).slice(chatContextStart(parseChatTurns(models.CHAT.text))),
+          promptOverride: job.protocolPrompt,
           agentProtocol: AGENT_PROTOCOL,
           generationOptions: { max_length: generationMaxLength },
           onToken: (text) => { job.output = text; renderChatHistory(); },
           signal: job.abortController.signal,
         });
-        const baseText = await reconstructRevision(job.history, job.baseRevisionId);
-        job.revisionId = result.revision.id;
-        if (job.history.currentRevision === job.baseRevisionId && job.model.text === baseText) {
-          await job.controller.checkout(result.revision.id);
-          await completeChatJob(job, `${result.generated}\n\nApplied to ${job.root}; previous revision remains in Versions.`);
-        } else {
-          await completeChatJob(job, `${result.generated}\n\nSaved as an alternative branch for ${job.root}.`);
-        }
+        job.revisionId = result.revision?.id ?? null;
+        job.revisionIds = result.revisions.map(({ id }) => id);
+        await completeChatJob(job, result.chat, result.rawResponse);
       } else {
         const turns = parseChatTurns(models.CHAT.text);
         const prior = turns.slice(chatContextStart(turns));
-        const prompt = [...prior.flatMap((turn) => ['{{[INPUT]}}', turn.input, '{{[OUTPUT]}}', turn.output]), '{{[INPUT]}}', job.input, '{{[OUTPUT]}}'].join('\n');
-        let output = '';
-        for await (const token of koboldClient.generateStream({ prompt, max_length: generationMaxLength }, { signal: job.abortController.signal })) {
-          output += token;
-          job.output = output;
-          renderChatHistory();
+        const prompt = formatChatPacket(prior, job.packet);
+        const result = await koboldClient.chatCompletion({
+          messages: [{ role: 'user', content: prompt }], maxTokens: generationMaxLength, signal: job.abortController.signal,
+        });
+        const output = result.message.content ?? '';
+        if (result.finishReason === 'length' || /\bsubmit_change\s*\(/i.test(output)) {
+          const error = new Error(result.finishReason === 'length'
+            ? 'KoboldCpp stopped before completing the chat response. Increase the output limit and retry.'
+            : 'KoboldCpp attempted an edit even though no passage was selected. Select text for a change, or retry the chat request.');
+          error.code = result.finishReason === 'length' ? 'TRUNCATED_CHAT_RESPONSE' : 'UNEXPECTED_TOOL_TEXT';
+          error.rawText = result.raw;
+          throw error;
         }
-        await completeChatJob(job, output);
+        await completeChatJob(job, output, result.raw);
       }
     } catch (error) {
       job.state = error.name === 'AbortError' || error.code === 'ABORTED' ? 'cancelled' : 'failed';
       job.output = job.state === 'cancelled' ? 'Cancelled.' : error.message;
+      job.rawResponse = error.rawText ?? null;
     } finally {
       chatAbortController = null;
       activeChatJob = null;
@@ -732,9 +831,7 @@ try {
   chatSendButton.addEventListener('click', async () => {
     const input = chatPrompt.value.trim();
     if (!input || !koboldClient || aiStatus.dataset.connected !== 'true') return;
-    const selectedRoot = ['STORY', 'METADATA'].includes(activeRoot) && models[activeRoot].selectionStart !== models[activeRoot].selectionEnd
-      ? activeRoot
-      : null;
+    const selectedRoot = ['STORY', 'METADATA'].includes(activeRoot) ? activeRoot : null;
     let job = { id: nextChatJobId++, input, output: '', state: 'queued', kind: 'chat' };
     if (selectedRoot) {
       const controller = selectedRoot === 'STORY' ? commitController : metadataCommitController;
@@ -763,6 +860,8 @@ try {
         },
       };
     }
+    job.packet = await composeJobInput(input, selectedRoot, job.anchor);
+    job.protocolPrompt = formatChatPacket(parseChatTurns(models.CHAT.text).slice(chatContextStart(parseChatTurns(models.CHAT.text))), job.packet);
     chatJobs.push(job);
     refreshAgentTargetHighlights();
     chatPrompt.value = '';
@@ -777,6 +876,7 @@ try {
       chatSendButton.click();
     }
   });
+  chatPrompt.addEventListener('input', updateDraftContextSummary);
 
   const collapsePassageHistory = () => {
     passageHistoryList.hidden = true;
@@ -912,7 +1012,7 @@ try {
             label: `Revision ${entry.revisionId} passage (${entry.origin})`,
             text: historicalPassage,
           });
-          updateChatSelectionSummary();
+          updateDraftContextSummary();
           setReferenceLabel();
         });
         const isSelected = selectedForCompare.some((selection) => selection.entry.revisionId === entry.revisionId);
@@ -1018,81 +1118,11 @@ try {
 
   const CONTEXT_WINDOW = 400;
 
-  const updateContextInspectorVisibility = () => {
-    const activeModel = models[activeRoot];
-    const hasSelection = ['STORY', 'METADATA'].includes(activeRoot) && activeModel.selectionStart !== activeModel.selectionEnd;
-    contextInspectorContainer.hidden = !hasSelection;
-    if (!hasSelection) { contextBody.hidden = true; contextBody.replaceChildren(); }
-  };
-
-  const renderContextPreview = async (call = null) => {
-    const targetModel = call?.model ?? models[activeRoot];
-    const range = call?.range ?? [targetModel.selectionStart, targetModel.selectionEnd];
-    const composed = composeContext({
-    storyText: models.STORY.text,
-      metadataText: models.METADATA.text,
-      pins: readPins(models.METADATA.text),
-      before: call?.anchor?.before ?? targetModel.text.slice(Math.max(0, range[0] - CONTEXT_WINDOW), range[0]),
-      target: call ? await reconstructRevision(call.history, call.baseRevisionId).then((text) => text.slice(range[0], range[1])) : targetModel.text.slice(range[0], range[1]),
-      after: call?.anchor?.after ?? targetModel.text.slice(range[1], Math.min(targetModel.text.length, range[1] + CONTEXT_WINDOW)),
-      request: call?.input ?? '',
-      agentProtocol: AGENT_PROTOCOL,
-      references: agentReferences,
-    });
-
-    contextBody.replaceChildren();
-    for (const pin of composed.unresolvedPins) {
-      const warning = document.createElement('p');
-      warning.className = 'unresolved-pin';
-      warning.textContent = `${pin.status}: ${pin.path}`;
-      contextBody.append(warning);
-    }
-
-    const connected = Boolean(koboldClient) && aiStatus.dataset.connected === 'true';
-    const countTokens = connected
-      ? (text) => koboldClient.countTokens(text)
-      : (text) => Math.ceil(text.length / 4);
-    const contextLength = koboldContextLength ?? 4096;
-    let budget;
-    try {
-      budget = await allocateContextBudget(composed.components, {
-        contextLength,
-        reservedGeneration: generationMaxLength,
-        countTokens,
-      });
-    } catch {
-      budget = null;
-    }
-
-    if (budget) {
-      const summary = document.createElement('div');
-      summary.className = 'context-budget';
-      summary.dataset.over = String(!budget.fits);
-      const estimateNote = connected ? '' : ' (estimated, not connected)';
-      summary.textContent = `${budget.total} / ${budget.available} tokens${estimateNote}`;
-      contextBody.append(summary);
-      for (const row of budget.usage) {
-        const usageRow = document.createElement('div');
-        usageRow.className = 'context-usage-row';
-        usageRow.textContent = `${row.label}: ${row.tokens}`;
-        contextBody.append(usageRow);
-      }
-    }
-
-    const prompt = document.createElement('pre');
-    prompt.className = 'context-prompt';
-    prompt.textContent = composed.prompt;
-    contextBody.append(prompt);
-    contextBody.hidden = false;
-  };
-
-  contextToggle.addEventListener('click', () => {
-    if (!contextBody.hidden) { contextBody.hidden = true; return; }
-    void renderContextPreview();
-  });
+  // The same raw-context dialog is used for both an already-sent USER turn
+  // and the draft still in the composer.
+  contextToggle.addEventListener('click', () => void previewDraftContext());
 
   onConnectionChange = () => {
-    updateContextInspectorVisibility();
   };
 
   const refreshHistoryControls = () => {
@@ -1297,6 +1327,16 @@ try {
     renderVersions();
   };
 
+  const openVersionCitation = (root, revisionId) => {
+    if (!['STORY', 'METADATA'].includes(root)) return;
+    switchView(root);
+    const targetHistory = root === 'STORY' ? history : metadataHistory;
+    if (!targetHistory?.revisions.has(revisionId)) return;
+    focusedRevisionId = revisionId;
+    inspectedRevisionId = revisionId;
+    switchView('VERSIONS');
+  };
+
   const renderLocalGraph = () => {
     const currentHistory = activeHistory();
     if (!currentHistory || !versionGraph) return;
@@ -1476,7 +1516,7 @@ try {
       warning.textContent = `${result.status}: ${result.path}`;
       pinStatus.append(warning);
     }
-    updateChatSelectionSummary();
+    updateDraftContextSummary();
   };
 
   const switchView = (rootName) => {
@@ -1505,7 +1545,7 @@ try {
     }
     refreshSidebar();
     updatePassageHistoryVisibility();
-    updateContextInspectorVisibility();
+    updateDraftContextSummary();
     if (rootName === 'STORY' || rootName === 'METADATA' || rootName === 'COMPOSITE') {
       requestAnimationFrame(() => editors[rootName].updateBounds());
     }
@@ -1598,7 +1638,7 @@ try {
       if (name === 'STORY' || name === 'METADATA') {
         refreshHistoryControls();
         if (name === 'STORY') updatePassageHistoryVisibility();
-        updateContextInspectorVisibility();
+        updateDraftContextSummary();
       }
     });
   }
@@ -1819,7 +1859,7 @@ try {
   refreshSidebar();
   refreshChatOutline();
   updatePassageHistoryVisibility();
-  updateContextInspectorVisibility();
+  updateDraftContextSummary();
   renderVersions();
   window.__noirDraftTest = Object.freeze({
     model,
@@ -1830,7 +1870,7 @@ try {
     refreshSidebar,
     refreshChatOutline,
     renderPassageHistory,
-    renderContextPreview,
+    previewDraftContext,
     getHistory: () => history,
     getMetadataHistory: () => metadataHistory,
     getCommitController: () => commitController,

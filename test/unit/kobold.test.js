@@ -21,6 +21,25 @@ test('checkAvailability, context length, and token count succeed against the fak
   }
 });
 
+test('ordinary chat completions keep the literal JSON response alongside plain assistant content', async () => {
+  const server = await startFakeKoboldServer({ tokens: ['A concise reply.'] });
+  try {
+    const result = await new KoboldClient(server.url).chatCompletion({ messages: [{ role: 'user', content: 'Hello.' }] });
+    assert.equal(result.message.content, 'A concise reply.');
+    assert.equal(JSON.parse(result.raw).choices[0].message.content, 'A concise reply.');
+  } finally {
+    await server.close();
+  }
+});
+
+test('a rejected chat completion retains its literal error body for session inspection', async () => {
+  const client = new KoboldClient('http://fake.invalid', { fetch: async () => new Response('{"error":"context exhausted"}', { status: 400 }) });
+  await assert.rejects(
+    client.chatCompletion({ messages: [{ role: 'user', content: 'Hello.' }] }),
+    (error) => error instanceof KoboldError && error.code === 'CHAT_COMPLETION_FAILED' && error.rawText === '{"error":"context exhausted"}',
+  );
+});
+
 test('generateStream yields exactly the fake server tokens in order', async () => {
   const server = await startFakeKoboldServer({ tokens: ['One', ' ', 'Two', ' ', 'Three'], tokenDelayMs: 1 });
   try {
