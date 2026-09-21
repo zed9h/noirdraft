@@ -5,9 +5,16 @@
   "description": "A transparent, agentic Markdown story editor.",
   "type": "module",
   "main": "src/main/app.js",
+  "files": [
+    "src/",
+    "scripts/make-icons.sh",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "start": "electron .",
     "dev": "node dev-electron.js",
+    "make:icon": "bash scripts/make-icons.sh",
     "test": "node --test test/unit/*.test.js",
     "test:e2e": "playwright test",
     "test:e2e:virtual": "xvfb-run -a playwright test",

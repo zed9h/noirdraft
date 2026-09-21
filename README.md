@@ -48,6 +48,9 @@ npm run test:e2e:virtual
 npm pack --dry-run
 ```
 
+`icon.png` is the canonical application icon. After changing it, run
+`npm run make:icon` to regenerate the Electron window asset.
+
 Electron E2E tests open real windows. On Linux, use `npm run test:e2e:virtual` or `xvfb-run -a npx playwright test <file>` so they stay off the active desktop. `npm run test:e2e` and `npm run validate` are headed; see [AGENTS.md](AGENTS.md) for the repository rules. There is no release-packaging build script yet; `npm pack --dry-run` checks package contents.
 
 ## Architecture

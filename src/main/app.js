@@ -5,6 +5,7 @@ import { readDocument, safeSaveDocument } from './files.js';
 import { readPreferences, writePreferences } from './preferences.js';
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
+const windowIconPath = path.join(sourceDirectory, 'assets', 'icon.png');
 const authorizedDocumentPaths = new Set();
 if (process.env.NOIRDRAFT_E2E_ALLOWED_PATH) {
   authorizedDocumentPaths.add(path.resolve(process.env.NOIRDRAFT_E2E_ALLOWED_PATH));
@@ -81,6 +82,7 @@ function createWindow() {
     minWidth: 720,
     minHeight: 480,
     backgroundColor: '#171513',
+    icon: windowIconPath,
     show: false,
     webPreferences: {
       preload: path.join(sourceDirectory, 'preload.cjs'),
