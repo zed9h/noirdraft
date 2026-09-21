@@ -932,11 +932,26 @@ try {
     void processChatQueue();
   };
   const completeChatJob = async (job, output, rawResponse = output) => {
+    // Updating the hidden CHAT editor synchronizes its DOM selection, which
+    // otherwise steals focus from the composer before the history refresh can
+    // observe where the author was typing.
+    const restorePromptFocus = document.activeElement === chatPrompt;
     job.state = 'complete';
     job.output = output;
     job.rawResponse = rawResponse;
     job.turnIndex = parseChatTurns(models.CHAT.text).length;
     editors.CHAT.replace(0, models.CHAT.text.length, appendChatTurn(models.CHAT.text, job.packet ?? job.input, output), 'chat');
+    if (restorePromptFocus) {
+      chatPrompt.focus({ preventScroll: true });
+      // EditContext clears its selection-sync guard on the next frame. In
+      // some Chromium builds that last sync can focus the hidden CHAT editor
+      // after the synchronous restoration above.
+      requestAnimationFrame(() => {
+        if (document.activeElement === elements.CHAT || document.activeElement === document.body) {
+          chatPrompt.focus({ preventScroll: true });
+        }
+      });
+    }
     pinnedChatStart = null;
     await persistAfterCommit();
   };
@@ -1072,10 +1087,15 @@ try {
   });
   chatCancelButton.addEventListener('click', () => activeChatJob && cancelChatJob(activeChatJob));
   chatPrompt.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+    if (event.key !== 'Enter') return;
+    if (!event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
       event.preventDefault();
       chatSendButton.click();
+      return;
     }
+    event.preventDefault();
+    chatPrompt.setRangeText('\n', chatPrompt.selectionStart, chatPrompt.selectionEnd, 'end');
+    chatPrompt.dispatchEvent(new Event('input', { bubbles: true }));
   });
   chatPrompt.addEventListener('input', updateDraftContextSummary);
 

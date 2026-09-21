@@ -156,6 +156,39 @@ test('the draft USER header opens its context preview even when the prompt is em
   }
 });
 
+test('CHAT prompt sends with Enter and adds line breaks with Shift+Enter or Ctrl+Enter', async () => {
+  const application = await electron.launch({
+    args: [path.resolve('.')],
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
+  });
+  const server = await startFakeKoboldServer({ tokens: ['Received.'] });
+  try {
+    const window = await application.firstWindow();
+    await window.waitForFunction(() => Boolean(window.__noirDraftTest?.connectToKobold));
+    await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
+    const prompt = window.getByLabel('Chat prompt');
+    const send = window.getByRole('button', { name: 'Send' });
+    await expect(send).toHaveAttribute('title', 'Enter sends. Shift+Enter or Ctrl+Enter adds a line break.');
+
+    await prompt.fill('First');
+    await prompt.press('Shift+Enter');
+    await prompt.press('Control+Enter');
+    expect(await prompt.inputValue()).toBe('First\n\n');
+    await prompt.fill('Send this.');
+    await prompt.press('Enter');
+
+    await expect(window.getByLabel('Chat history')).toContainText('Done.');
+    await expect(prompt).toHaveValue('');
+    await window.waitForTimeout(100);
+    await expect(prompt).toBeFocused();
+    await prompt.pressSequentially('Next message');
+    await expect(prompt).toHaveValue('Next message');
+  } finally {
+    await server.close();
+    await application.close();
+  }
+});
+
 test('a selected middle-pane range becomes a queued chat rewrite while Send remains available', async () => {
   const application = await electron.launch({
     args: [path.resolve('.')],
@@ -177,6 +210,8 @@ test('a selected middle-pane range becomes a queued chat rewrite while Send rema
     await expect(window.locator('.chat-call')).toHaveClass(/chat-call-(queued|generating|complete)/);
     await expect.poll(() => window.evaluate(() => window.__noirDraftTest.models.STORY.text)).toContain('The window broke.');
     await expect(window.getByLabel('Chat history')).toContainText('Done.');
+    await window.waitForTimeout(100);
+    await expect(window.getByLabel('Chat prompt')).toBeFocused();
     await expect(window.getByRole('button', { name: '#2' })).toHaveClass(/chat-version-reference-story/);
     const selection = window.locator('.chat-call-selection');
     await expect(selection.locator('summary')).toContainText('The window broke.');

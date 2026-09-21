@@ -134,6 +134,11 @@ export class EditContextEditor {
   }
 
   #syncDOMSelection() {
+    // A document Selection belongs to the active native text control. Updating
+    // an offscreen editor while the chat composer (or another input) is being
+    // used must not replace that control's caret with an editor selection.
+    const activeElement = this.element.ownerDocument.activeElement;
+    if (activeElement !== this.element && activeElement?.matches?.('input, textarea, [contenteditable="true"]')) return;
     const write = ++this.#selectionWrite;
     this.#ignoreDOMSelection = true;
     writeDOMSelection(this.element, this.mapping, this.model.selectionStart, this.model.selectionEnd);
