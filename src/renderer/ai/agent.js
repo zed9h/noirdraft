@@ -69,8 +69,7 @@ export const PLAN_CHANGES_TOOL = {
       type: 'object',
       properties: {
         change_alternatives_count: { type: 'integer', minimum: 1, description: 'How many distinct versions of this change you intend to submit. On the first call this is the total turn intent; later calls describe only the next group.' },
-        intent: { type: 'string', description: 'Brief creative purpose of the changes, in your own words.' },
-        acceptance_criteria: { type: 'string', description: 'Optional concrete qualities the changes should satisfy.' },
+        intent: { type: 'string', description: 'Creative purpose of this group. Make constraints or the unresolved difficulty explicit, especially for a retry.' },
       },
       required: ['change_alternatives_count', 'intent'], additionalProperties: false,
     },
@@ -107,7 +106,7 @@ export const SEND_CHAT_TOOL = {
   type: 'function',
   function: {
     name: 'send_chat',
-    description: 'Sends the latest reviewed chat proposal unchanged. Takes no arguments.',
+    description: 'Sends the latest reviewed chat proposal unchanged only when it is a complete author-facing reply, not a promise to make a manuscript change. Takes no arguments.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
   },
 };
@@ -144,12 +143,15 @@ function retainTerminalLineBreak(replacement, target) {
   return `${replacement}${terminalBreak}`;
 }
 
-function changeResultJSON({ status, revision, reason, summary, turnIntent, allowedCalls, recommendedAction }) {
+function promisesAChange(message) {
+  return /\b(?:i(?:'ll| will| can)|we(?:'ll| will| can)|let me)\b[\s\S]{0,100}\b(?:add|insert|replace|write|rewrite|redo|revise|edit|expand|shorten|remove|delete|rephrase|continue|draft|compose|polish|translate|restructure|change|update)\b/i.test(String(message));
+}
+
+function changeResultJSON({ status, revision, reason, summary, allowedCalls, recommendedAction }) {
   const result = { status };
   if (revision) result.revision_id = revision.id;
   if (reason) result.reason = reason;
   if (summary) result.turn_summary = summary;
-  if (turnIntent) result.turn_intent = turnIntent;
   if (allowedCalls?.length) result.allowed_calls = allowedCalls;
   if (recommendedAction) result.recommended_action = recommendedAction;
   return JSON.stringify(result);
@@ -180,17 +182,16 @@ function reviewResultText(revisions, baseText, { from, to }, resultTexts, goal, 
     : remaining > 0
       ? `Not complete — ${revisions.length} alternatives are ready; ${remaining} still needed.`
       : `Over the turn intent — ${revisions.length} alternatives are ready; ${-remaining} should be retracted.`;
-  const criteria = goal.acceptance_criteria || 'Faithfully fulfill the author request.';
-  const pendingCriteria = currentPlan.acceptance_criteria || criteria;
   const warnings = formatWarnings.length
     ? ` Formatting to correct: ${formatWarnings.map((warning) => `revision #${warning.revision_id} — ${warning.message}`).join('; ')}.`
     : '';
   const lines = [
     'NOIRDRAFT REVIEW',
-    `Objective: submit ${goal.change_alternatives_count} alternatives for this change — ${goal.intent} Acceptance criteria: ${criteria}`,
+    `Objective: submit ${goal.change_alternatives_count} alternatives for this change — ${goal.intent}`,
     `Progress: ${progress}`,
-    `Pending: submit ${currentPlan.change_alternatives_count} alternatives for this change — ${currentPlan.intent} Acceptance criteria: ${pendingCriteria}`,
-    `Question: Does every alternative fulfill the author request, remain distinct, and read correctly in context? ${nextAction.instruction}${warnings}`,
+    `Pending: submit ${currentPlan.change_alternatives_count} alternatives for this change — ${currentPlan.intent}`,
+    'Editorial concern: Read every proposed result as part of the full surrounding passage. Does it fulfill the author’s intent while remaining grammatical, syntactically complete, meaningful, coherent with the surrounding prose, and properly formatted? Do not accept a lazy literal substitution of the request that leaves an unnatural or nonsensical phrase. Act as a responsible writer: retract every revision that fails this in-context editorial check, then submit a corrected sibling if needed.',
+    `Managerial concern: ${nextAction.instruction}${warnings}`,
   ];
   if (revisions.length === 0) {
     const attempted = invalidCalls > 0
@@ -372,25 +373,11 @@ export async function requestRewrite({
     if (failedReviews === 2) return { call: 'plan_changes', attempt: 'State a concrete change-alternatives count and fresh creative intent, then submit distinct changes.' };
     return { call: 'propose_change', attempt: 'Propose a fresh, distinct version of the change that moves the work toward the turn intent.' };
   };
-  const planResult = (currentIntent, managerPrompt) => JSON.stringify({
-    status: 'accepted',
-    current_intent: currentIntent,
-    manager_prompt: managerPrompt,
-    turn_state: changesGoal
-      ? {
-        turn_intent: changesGoal,
-        current_intent: currentPlan,
-        changes_ready: revisions.length,
-        remaining_change_alternatives: Math.max(0, changesGoal.change_alternatives_count - revisions.length),
-        allowed_calls: allowedNextCalls(),
-        recommended_action: recommendedAction(),
-      }
-      : { allowed_calls: allowedNextCalls(), recommended_action: recommendedAction() },
-  });
   const chatReviewText = (chatIntent) => [
     'NOIRDRAFT CHAT REVIEW',
     `Intent: ${chatIntent.intent}`,
-    'Question: Is this accurate, helpful, and appropriately concise for the author? Call plan_chat again to replace it, or send_chat to publish it unchanged.',
+    'Editorial concern: Is this author-facing reply accurate, helpful, and appropriately concise? If the author would be better served by a versioned manuscript change instead, call plan_changes rather than sending chat.',
+    'Managerial concern: Before send_chat, check whether this reply promises, agrees to, or clearly entails a manuscript change. If it does, do not send it and do not leave the author waiting for a second confirmation: call plan_changes now, make the change, and use finish_changes for any commentary. Only send_chat a complete conversational reply. Otherwise, call send_chat to publish this reply unchanged, or plan_chat to replace it.',
     '----- PROPOSED REPLY -----',
     chatIntent.proposed_message,
     '----- END OF REPLY -----',
@@ -442,6 +429,17 @@ export async function requestRewrite({
           results.push({ call, status: 'rejected', reason: 'send_chat takes no arguments and requires a prior plan_chat proposal.' });
           continue;
         }
+        if (promisesAChange(chatPlan.proposed_message)) {
+          invalidCalls += 1;
+          results.push({
+            call,
+            status: 'rejected',
+            reason: 'This chat reply promises a manuscript change. Do not send it before doing the work.',
+            allowedCalls: ['plan_changes', 'plan_chat'],
+            recommendedAction: { call: 'plan_changes', attempt: 'Switch to the change flow now, create the required revisions, then use finish_changes for any author-facing commentary.' },
+          });
+          continue;
+        }
         finished = true;
         results.push({ call, status: 'finished', comment: chatPlan.proposed_message });
         continue;
@@ -489,7 +487,6 @@ export async function requestRewrite({
       if (call.function.name === 'plan_changes') {
         const changeAlternativesCount = change?.change_alternatives_count;
         const intent = change?.intent;
-        const acceptanceCriteria = change?.acceptance_criteria;
         if (!Number.isSafeInteger(changeAlternativesCount) || changeAlternativesCount < 1 || typeof intent !== 'string' || !intent.trim()) {
           invalidCalls += 1;
           results.push({ call, status: 'rejected', reason: 'plan_changes requires a positive change_alternatives_count and a nonempty intent.' });
@@ -500,18 +497,14 @@ export async function requestRewrite({
         if (isInitialPlan) changesGoal = {
           change_alternatives_count: changeAlternativesCount,
           intent: intent.trim(),
-          acceptance_criteria: typeof acceptanceCriteria === 'string' ? acceptanceCriteria.trim() : '',
         };
         currentPlanAvailable = true;
         const plan = {
           change_alternatives_count: changeAlternativesCount,
           intent: intent.trim(),
-          acceptance_criteria: typeof acceptanceCriteria === 'string' ? acceptanceCriteria.trim() : '',
         };
         currentPlan = plan;
-        results.push({ call, status: 'accepted', turn_intent: isInitialPlan ? changesGoal : null, current_intent: plan, manager_prompt: isInitialPlan
-          ? 'Turn intent recorded. Submit the first changes when ready.'
-          : `Turn intent remains ${changesGoal.change_alternatives_count} alternatives for this change. Submit this group without restating or changing it.` });
+        results.push({ call, status: 'accepted' });
         continue;
       }
       if (call.function.name === 'review_changes') {
@@ -617,15 +610,13 @@ export async function requestRewrite({
     if (citations.length) chatParts.push({ type: 'citations', revisions: results.filter(({ revision }) => revision).map(({ revision }) => revision) });
     for (const { comment } of results) addChat(comment);
     const turnSummary = { changes_ready: revisions.length, invalid_calls: invalidCalls, retracted_changes: retractedChanges };
-    const toolResults = results.map(({ call, revision, status, reason, turn_intent: turnIntent, current_intent: currentIntent, chat_intent: chatIntent, manager_prompt: managerPrompt, recovery, format_warnings: formatWarnings = [] }) => ({
+    const toolResults = results.map(({ call, revision, status, reason, allowedCalls, recommendedAction: resultRecommendedAction, chat_intent: chatIntent, recovery, format_warnings: formatWarnings = [] }) => ({
       role: 'tool', tool_call_id: call.id,
       content: status === 'review_ready'
         ? reviewResultText(revisions, baseText, { from, to }, resultTexts, changesGoal, currentPlan, recovery, formatWarnings, invalidCalls)
         : status === 'chat_review'
           ? chatReviewText(chatIntent)
-          : currentIntent
-          ? planResult(currentIntent, managerPrompt)
-          : changeResultJSON({ status, revision, reason, turnIntent, allowedCalls: status === 'rejected' ? allowedNextCalls() : null, recommendedAction: status === 'rejected' ? recommendedAction() : null, summary: status === 'finished' ? turnSummary : null }),
+          : changeResultJSON({ status, revision, reason, allowedCalls: status === 'rejected' ? (allowedCalls ?? allowedNextCalls()) : null, recommendedAction: status === 'rejected' ? (resultRecommendedAction ?? recommendedAction()) : null, summary: status === 'finished' ? turnSummary : null }),
     }));
     transcript.push(message, ...toolResults);
     rawTrace.push(...toolResults.map(({ tool_call_id: callId, content }) => `[noirdraft tool result: ${callId}]\n${content}\n[noirdraft end tool result: ${callId}]`));

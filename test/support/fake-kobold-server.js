@@ -96,7 +96,7 @@ export function startFakeKoboldServer(options = {}) {
         : hasSubmittedChange
         ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'review', type: 'function', function: { name: 'review_changes', arguments: '{}' } }] } }] }
         : !hasChangesGoal
-        ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'plan', type: 'function', function: { name: 'plan_changes', arguments: JSON.stringify({ change_alternatives_count: replacements.length, intent: 'Provide each requested replacement as a distinct sibling.', acceptance_criteria: 'Each change is distinct and fulfills the request.' }) } }] } }] }
+        ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'plan', type: 'function', function: { name: 'plan_changes', arguments: JSON.stringify({ change_alternatives_count: replacements.length, intent: 'Provide each requested replacement as a distinct sibling.' }) } }] } }] }
         : { choices: [{ message: {
           role: 'assistant', content: null,
           tool_calls: replacements.map((replacement, index) => ({ id: `call_${index + 1}`, type: 'function', function: { name: 'propose_change', arguments: JSON.stringify({ operation: isCursorContext ? 'insert' : 'replace', text: replacement }) } })),

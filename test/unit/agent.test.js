@@ -10,7 +10,7 @@ const finish = (comment, raw = comment) => ({ message: { role: 'assistant', cont
 const chatPlan = (intent = 'Answer the author directly without changing the manuscript.', proposedMessage = 'Here is a concise response.') => ({ message: { role: 'assistant', content: null, tool_calls: [{ id: 'chat-plan', type: 'function', function: { name: 'plan_chat', arguments: JSON.stringify({ intent, proposed_message: proposedMessage }) } }] }, raw: 'chat-plan' });
 const sendChat = (raw = 'send-chat') => ({ message: { role: 'assistant', content: null, tool_calls: [{ id: 'send-chat', type: 'function', function: { name: 'send_chat', arguments: '{}' } }] }, raw });
 const review = (raw = 'review') => ({ message: { role: 'assistant', content: null, tool_calls: [{ id: 'review', type: 'function', function: { name: 'review_changes', arguments: '{}' } }] }, raw });
-const goal = (changeAlternativesCount, intent = 'Provide distinct alternatives.', acceptanceCriteria = 'Each change must satisfy the author request and be distinct.') => ({ message: { role: 'assistant', content: null, tool_calls: [{ id: 'plan', type: 'function', function: { name: 'plan_changes', arguments: JSON.stringify({ change_alternatives_count: changeAlternativesCount, intent, acceptance_criteria: acceptanceCriteria }) } }] }, raw: 'plan' });
+const goal = (changeAlternativesCount, intent = 'Provide distinct alternatives.') => ({ message: { role: 'assistant', content: null, tool_calls: [{ id: 'plan', type: 'function', function: { name: 'plan_changes', arguments: JSON.stringify({ change_alternatives_count: changeAlternativesCount, intent }) } }] }, raw: 'plan' });
 const nextGroup = (changeAlternativesCount, intent = 'Use a contrasting approach.') => ({ message: { role: 'assistant', content: null, tool_calls: [{ id: 'plan', type: 'function', function: { name: 'plan_changes', arguments: JSON.stringify({ change_alternatives_count: changeAlternativesCount, intent }) } }] }, raw: 'plan' });
 
 test('a successful proposal is materialized as an agent-origin sibling without changing the checked-out revision', async () => {
@@ -144,7 +144,9 @@ test('an incomplete review rejects both completion and premature failure, then d
   const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, story.length], request: 'Give two versions.', agentProtocol: AGENT_PROTOCOL });
   assert.equal(result.chat, '[#1](noirdraft://version/STORY/1) [#2](noirdraft://version/STORY/2) Two versions are ready.');
   assert.match(result.rawResponse, /Progress: Not complete — 1 alternatives are ready; 1 still needed\./);
-  assert.match(result.rawResponse, /Question: .*First recovery: retry directly/);
+  assert.match(result.rawResponse, /Managerial concern: First recovery: retry directly/);
+  assert.match(result.rawResponse, /Editorial concern: Read every proposed result as part of the full surrounding passage/);
+  assert.match(result.rawResponse, /Do not accept a lazy literal substitution/);
   assert.match(result.rawResponse, /"reason":"The turn intent is 2 alternatives for this change; review found 1\."/);
   assert.match(result.rawResponse, /"reason":"Follow the current managed recovery action before declaring the goal unable\."/);
 });
@@ -169,9 +171,9 @@ test('the second incomplete review accepts a next-group plan and its guidance', 
   };
   const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, story.length], request: 'Give two versions.', agentProtocol: AGENT_PROTOCOL });
   assert.equal(result.revisions.length, 2);
-  assert.match(result.rawResponse, /Question: .*Second recovery: call plan_changes/);
-  assert.match(result.rawResponse, /"manager_prompt":"Turn intent remains 2 alternatives for this change\./);
-  assert.match(result.rawResponse, /"recommended_action":\{"call":"propose_change","attempt":"Apply the current plan/);
+  assert.match(result.rawResponse, /Managerial concern: Second recovery: call plan_changes/);
+  assert.doesNotMatch(result.rawResponse, /manager_prompt|acceptance_criteria/);
+  assert.match(result.rawResponse, /\[noirdraft tool result: plan\]\n\{"status":"accepted"\}/);
 });
 
 test('managed recovery permits unable only after direct, planned, and creative retries fail', async () => {
@@ -197,8 +199,8 @@ test('managed recovery permits unable only after direct, planned, and creative r
   };
   const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, story.length], request: 'Give two versions.', agentProtocol: AGENT_PROTOCOL });
   assert.equal(result.chat, '[#1](noirdraft://version/STORY/1) I could not find a second distinct option.');
-  assert.match(result.rawResponse, /Question: .*Final recovery: use imaginative/);
-  assert.match(result.rawResponse, /Question: .*managed recovery attempts are exhausted/);
+  assert.match(result.rawResponse, /Managerial concern: Final recovery: use imaginative/);
+  assert.match(result.rawResponse, /Managerial concern: The managed recovery attempts are exhausted/);
 });
 
 test('a cursor proposal returns its edited context so the model can submit a corrected sibling', async () => {
@@ -460,6 +462,8 @@ test('a greeting follows the chat plan without creating a manuscript revision', 
   assert.equal(result.revisions.length, 0);
   assert.equal(history.revisions.size, 1);
   assert.match(result.rawResponse, /----- PROPOSED REPLY -----\nHello! How can I help with this draft\?\n----- END OF REPLY -----/);
+  assert.match(result.rawResponse, /Editorial concern: .*call plan_changes/);
+  assert.match(result.rawResponse, /Managerial concern: Before send_chat/);
 });
 
 test('a later chat plan replaces the proposed reply before it is sent', async () => {
@@ -487,17 +491,20 @@ test('a chat plan may be reconsidered as a change plan before any text is sent',
   const client = {
     async chatCompletion() {
       callCount += 1;
-      if (callCount === 1) return chatPlan('Explain the request.', 'I can help with that.');
-      if (callCount === 2) return goal(1, 'Rewrite the selected sentence.');
-      if (callCount === 3) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'change', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"replace","text":"Rewritten."}' } }] }, raw: 'change' };
-      if (callCount === 4) return review();
+      if (callCount === 1) return chatPlan('Promise to rewrite the selection.', 'I will rewrite this sentence for you.');
+      if (callCount === 2) return sendChat('premature-send');
+      if (callCount === 3) return goal(1, 'Rewrite the selected sentence.');
+      if (callCount === 4) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'change', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"replace","text":"Rewritten."}' } }] }, raw: 'change' };
+      if (callCount === 5) return review();
       return finish('A revision is ready.');
     },
   };
   const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, story.length], request: 'Rewrite it.', agentProtocol: AGENT_PROTOCOL });
   assert.equal(result.chat, '[#1](noirdraft://version/STORY/1) A revision is ready.');
   assert.equal(await reconstructRevision(history, result.revision.id), 'Rewritten.');
-  assert.match(result.rawResponse, /NOIRDRAFT CHAT REVIEW[\s\S]*Turn intent recorded/);
+  assert.match(result.rawResponse, /NOIRDRAFT CHAT REVIEW[\s\S]*do not leave the author waiting for a second confirmation/);
+  assert.match(result.rawResponse, /This chat reply promises a manuscript change\. Do not send it before doing the work\./);
+  assert.match(result.rawResponse, /"recommended_action":\{"call":"plan_changes"/);
 });
 
 test('a disconnected server is contained as an AgentError without creating any revision', async () => {
