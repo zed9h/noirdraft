@@ -75,6 +75,9 @@ test('review_changes removes retracted revisions before the next proposal batch'
   const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 'Original.'.length], request: 'Offer two rewrites.', agentProtocol: protocol });
   assert.equal(history.revisions.has(1), false);
   assert.match(progress, /I recommend calling propose_changes to pursue the remaining alternatives/);
+  assert.match(progress, /approved alternatives sufficiently serve the objective/);
+  assert.match(progress, /fewer than planned were approved/);
+  assert.doesNotMatch(progress, /without any alternatives produced|really bad|explain yourself/);
   assert.doesNotMatch(result.chat, /#1/);
   assert.match(result.chat, /#2/);
   assert.match(result.chat, /#3/);

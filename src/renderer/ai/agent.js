@@ -102,14 +102,16 @@ export async function requestRewrite({ client, history, baseRevisionId, range, r
     const needed = Math.max(0, objective.alternativeCount - approved.length);
     const alternative = (count) => `${count} alternative${count === 1 ? '' : 's'}`;
     const summary = needed
-      ? `Progress: ${approved.length} of ${objective.alternativeCount} planned alternatives are approved; ${alternative(needed)} remain${needed === 1 ? 's' : ''}.`
+      ? `Progress: ${approved.length} of ${objective.alternativeCount} planned alternatives are approved; ${alternative(needed)} remain${needed === 1 ? 's' : ''} pending.`
       : `Progress: all ${objective.alternativeCount} planned alternatives are approved (100%).`;
     const recommendation = needed
       ? ' I recommend calling propose_changes to pursue the remaining alternatives.'
       : ' You may run another batch only if it would add useful alternatives.';
-    const exit = needed
-      ? ' You may instead call finish_changes to end early if further alternatives are not worthwhile.'
-      : ' You may call finish_changes now.';
+    const exit = needed === 0
+      ? ' You may call finish_changes now.'
+      : approved.length === 0
+      ? ' You may call finish_changes early if further alternatives are not worthwhile; briefly explain in the final chat why none were produced.'
+      : ' You may call finish_changes early if the approved alternatives sufficiently serve the objective; briefly note in the final chat that fewer than planned were produced.';
     return `NOIRDRAFT PROGRESS\nThe stated objective: ${objective.text}\n${summary}${recommendation}${exit}`;
   };
   const createBatch = async (proposals) => {
