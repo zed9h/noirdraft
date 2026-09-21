@@ -1,4 +1,4 @@
-import { composeContext } from './context.js';
+import { composeContext, sliceContextRows } from './context.js';
 import { KoboldError } from './kobold.js';
 import { commitRevision, reconstructRevision } from '../history/graph.js';
 import { createUnifiedDiff } from '../history/diff.js';
@@ -247,6 +247,8 @@ export async function requestRewrite({
   metadataText = '',
   pins = [],
   references = [],
+  chatHistory = [],
+  contextRows = 12,
   agentProtocol,
   generationOptions = {},
   onToken,
@@ -257,17 +259,19 @@ export async function requestRewrite({
   if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to < from || to > baseText.length) {
     throw new AgentError('The selected range is invalid for its base revision.', { code: 'INVALID_RANGE' });
   }
-  const target = baseText.slice(from, to);
+  const localContext = sliceContextRows(baseText, from, to, contextRows);
+  const target = localContext.target;
   const composed = composeContext({
     storyText: contextStoryText ?? (root === 'STORY' ? baseText : ''),
     metadataText,
     pins,
     references,
-    before: baseText.slice(0, from),
+    before: localContext.before,
     target,
-    after: baseText.slice(to),
+    after: localContext.after,
     request,
     agentProtocol,
+    chatHistory,
   });
   const prompt = `${composed.staticPrompt}\n\n${composed.turnPrompt}`;
   const initialMessages = [

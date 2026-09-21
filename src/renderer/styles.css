@@ -192,6 +192,8 @@ button { font: inherit; }
 .context-budget { display: flex; justify-content: space-between; margin-bottom: .35rem; color: #b8aea2; }
 .context-budget[data-over="true"] { color: #ffb4a9; }
 .context-usage-row { display: flex; justify-content: space-between; padding: .1rem 0; color: #948a7f; }
+.context-rows-control { display: flex; align-items: center; gap: .35rem; margin-left: auto; color: #948a7f; font-size: .72rem; }
+.context-rows-control input { width: 3.5rem; padding: .18rem .25rem; border: 1px solid #3a342d; border-radius: .2rem; color: #d7cec2; background: #17140f; font: inherit; }
 .context-prompt { margin-top: .35rem; padding: .4rem; max-height: 12rem; overflow: auto; white-space: pre-wrap; color: #cfc6bb; background: #100e0c; border-radius: .2rem; }
 .raw-model-output { color: #f6f3ee; }
 .raw-tool-result { color: #8c8780; }

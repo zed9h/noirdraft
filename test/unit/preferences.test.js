@@ -32,6 +32,9 @@ test('writePreferences persists a deep merge and readPreferences reflects it', a
 
     await writePreferences(filePath, { chatHistoryMessages: 0 });
     assert.equal((await readPreferences(filePath)).chatHistoryMessages, 0);
+
+    await writePreferences(filePath, { contextRows: 24 });
+    assert.equal((await readPreferences(filePath)).contextRows, 24);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -72,7 +72,8 @@ export function displayChatInput(input) {
     const packet = JSON.parse(value);
     return typeof packet.request === 'string' ? packet.request.trim() : value;
   } catch {
-    return value;
+    const request = value.match(/<noirdraft_turn>[\s\S]*?<request><!\[CDATA\[([\s\S]*?)\]\]><\/request>[\s\S]*?<\/noirdraft_turn>/)?.[1];
+    return request ? request.replaceAll(']]]]><![CDATA[>', ']]>').trim() : value;
   }
 }
 

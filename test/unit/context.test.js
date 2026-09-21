@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { allocateContextBudget, composeContext, ContextBudgetError } from '../../src/renderer/ai/context.js';
+import { allocateContextBudget, composeContext, ContextBudgetError, sliceContextRows } from '../../src/renderer/ai/context.js';
 
 const storyText = '# Chapter\n\nMaria walked in. The room was cold.\n\nShe sat down slowly.\n';
 const metadataText = '# Characters\n\n## Maria\n\nA cautious investigator.\n';
@@ -25,13 +25,13 @@ test('composeContext resolves pins and lays out clearly delimited, ordered secti
     'CONTEXT AFTER CURSOR',
     'REQUEST',
   ]);
-  assert.ok(result.staticPrompt.startsWith('Reply with only the replacement prose.'));
-  assert.ok(result.staticPrompt.includes('REFERENCE METADATA/Characters/Maria:\n## Maria'));
+  assert.ok(result.staticPrompt.startsWith('<noirdraft_static>'));
+  assert.ok(result.staticPrompt.includes('<instructions><![CDATA[Reply with only the replacement prose.]]></instructions>'));
+  assert.ok(result.staticPrompt.includes('<reference label="REFERENCE METADATA/Characters/Maria"><![CDATA[## Maria'));
   assert.ok(result.prompt.includes('A cautious investigator.'));
-  assert.deepEqual(JSON.parse(result.turnPrompt), {
-    context: { before: 'Maria walked in.', cursor: 'The room was cold.', after: 'She sat down slowly.' },
-    request: 'Make the room colder.',
-  });
+  assert.match(result.turnPrompt, /<noirdraft_turn>[\s\S]*<before><!\[CDATA\[Maria walked in\.\]\]><\/before>/);
+  assert.match(result.turnPrompt, /<selection><!\[CDATA\[The room was cold\.\]\]><\/selection>/);
+  assert.match(result.turnPrompt, /<request><!\[CDATA\[Make the room colder\.\]\]><\/request>/);
 });
 
 test('composeContext reports an unresolved pin explicitly instead of silently dropping it', () => {
@@ -48,7 +48,7 @@ test('composeContext reports an unresolved pin explicitly instead of silently dr
   assert.ok(!result.components.some((component) => component.label.includes('Elias')));
 });
 
-test('composeContext never includes chat history or rejected variants unless passed as explicit references', () => {
+test('composeContext includes only explicitly supplied chat history', () => {
   const result = composeContext({ storyText, target: 'The room was cold.', request: 'Rewrite.' });
   assert.ok(!result.prompt.includes('CHAT'));
   assert.equal(result.components.filter((component) => component.label.startsWith('REFERENCE')).length, 0);
@@ -59,7 +59,10 @@ test('composeContext never includes chat history or rejected variants unless pas
     request: 'Rewrite.',
     references: [{ label: 'STORY/Chapter/Earlier scene', text: 'It had rained all week.' }],
   });
-  assert.ok(withReference.staticPrompt.includes('REFERENCE STORY/Chapter/Earlier scene:\nIt had rained all week.'));
+  assert.ok(withReference.staticPrompt.includes('<reference label="REFERENCE STORY/Chapter/Earlier scene"><![CDATA[It had rained all week.]]></reference>'));
+
+  const withChat = composeContext({ storyText, request: 'Continue.', chatHistory: [{ request: 'Hello.', reply: 'Hi there.' }] });
+  assert.match(withChat.turnPrompt, /<noirdraft_chat_history>[\s\S]*<request><!\[CDATA\[Hello\.\]\]><\/request>[\s\S]*<reply><!\[CDATA\[Hi there\.\]\]><\/reply>/);
 });
 
 test('composeContext omits empty optional sections rather than emitting blank labels', () => {
@@ -67,11 +70,15 @@ test('composeContext omits empty optional sections rather than emitting blank la
   assert.deepEqual(result.components.map((component) => component.id), ['cursor']);
 });
 
-test('composeContext uses one uniform before/cursor/after JSON packet', () => {
+test('composeContext uses a bounded XML document context packet', () => {
   const result = composeContext({ storyText, request: 'Test the chat.' });
-  assert.deepEqual(JSON.parse(result.turnPrompt), {
-    context: { before: '', cursor: '', after: '' }, request: 'Test the chat.',
-  });
+  assert.match(result.turnPrompt, /<cursor><!\[CDATA\[\]\]><\/cursor>/);
+  assert.match(result.turnPrompt, /<request><!\[CDATA\[Test the chat\.\]\]><\/request>/);
+});
+
+test('sliceContextRows keeps a configurable number of rows around a selection', () => {
+  const result = sliceContextRows('one\ntwo\nthree\nfour\nfive', 8, 13, 2);
+  assert.deepEqual(result, { before: 'two\n', target: 'three', after: '\nfour' });
 });
 
 test('allocateContextBudget sums deterministic token counts and reports fit against the reserved budget', async () => {

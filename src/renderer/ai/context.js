@@ -8,6 +8,22 @@ export class ContextBudgetError extends Error {
   }
 }
 
+function cdata(value) {
+  return String(value).replaceAll(']]>', ']]]]><![CDATA[>');
+}
+
+function xmlElement(name, value, attributes = '') {
+  return `<${name}${attributes}><![CDATA[${cdata(value)}]]></${name}>`;
+}
+
+export function sliceContextRows(source, from, to, rows = 12) {
+  const text = String(source);
+  const count = Math.max(1, Math.floor(Number(rows) || 1));
+  const before = text.slice(0, from).split(/\r?\n/).slice(-count).join('\n');
+  const after = text.slice(to).split(/\r?\n/).slice(0, count).join('\n');
+  return { before, target: text.slice(from, to), after };
+}
+
 /**
  * Composes the explicit, clearly delimited context packet described in
  * PLAN.md §19: resolved references, story context around the target, the
@@ -26,6 +42,7 @@ export function composeContext({
   after = '',
   request = '',
   agentProtocol = '',
+  chatHistory = [],
 }) {
   const documents = { STORY: storyText, METADATA: metadataText };
   const resolvedPins = [];
@@ -52,15 +69,35 @@ export function composeContext({
     { id: 'request', label: 'REQUEST', text: request },
   ].filter((component) => component.text !== '' && component.text != null);
 
-  const referenceText = components
+  const staticReferences = components
     .filter((component) => component.id.startsWith('pin:') || component.id.startsWith('reference:'))
-    .map((component) => `${component.label}:\n${component.text}`)
-    .join('\n\n');
-  const staticPrompt = [agentProtocol, referenceText].filter(Boolean).join('\n\n');
-  const turnPrompt = JSON.stringify({
-    context: { before: String(before), cursor: String(target), after: String(after) },
-    request: String(request),
-  });
+    .map((component) => xmlElement('reference', component.text, ` label="${component.label.replaceAll('"', '&quot;')}"`))
+    .join('\n');
+  const staticPrompt = [
+    '<noirdraft_static>',
+    xmlElement('instructions', agentProtocol),
+    staticReferences ? `<pinned_context>\n${staticReferences}\n</pinned_context>` : '',
+    '</noirdraft_static>',
+  ].filter(Boolean).join('\n');
+  const history = chatHistory.length
+    ? `<noirdraft_chat_history>\n${chatHistory.map((turn, index) => [
+      `<turn index="${index + 1}">`,
+      xmlElement('request', turn.request),
+      xmlElement('reply', turn.reply),
+      '</turn>',
+    ].join('\n')).join('\n')}\n</noirdraft_chat_history>`
+    : '';
+  const turnPrompt = [
+    history,
+    '<noirdraft_turn>',
+    '<document_context>',
+    xmlElement('before', before),
+    xmlElement(target ? 'selection' : 'cursor', target),
+    xmlElement('after', after),
+    '</document_context>',
+    xmlElement('request', request),
+    '</noirdraft_turn>',
+  ].filter(Boolean).join('\n');
   return { components, staticPrompt, turnPrompt, prompt: `${staticPrompt}\n\n${turnPrompt}`, unresolvedPins };
 }
 

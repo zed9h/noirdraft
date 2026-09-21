@@ -44,6 +44,7 @@ const chatSendButton = document.querySelector('[data-chat-send]');
 const chatCancelButton = document.querySelector('[data-chat-cancel]');
 const chatHistoryCount = document.querySelector('[data-chat-history-count]');
 const chatContextSummary = document.querySelector('[data-chat-context-summary]');
+const contextRowsInput = document.querySelector('[data-context-rows]');
 const contextDialog = document.querySelector('[data-context-dialog]');
 const contextDialogTitle = document.querySelector('#context-dialog-title');
 const contextDialogSummary = document.querySelector('[data-context-dialog-summary]');
@@ -292,6 +293,7 @@ aiConnectionInput.addEventListener('keydown', (event) => {
 
 let generationMaxLength = 200;
 let chatHistoryMessageCount = 6;
+let contextRows = 12;
 if (preferences) {
   preferences.get()
     .then((stored) => {
@@ -301,6 +303,9 @@ if (preferences) {
         chatHistoryMessageCount = Math.floor(storedChatHistoryCount);
       }
       chatHistoryCount.value = String(chatHistoryMessageCount);
+      const storedContextRows = Number(stored.contextRows);
+      if (Number.isFinite(storedContextRows) && storedContextRows >= 1) contextRows = Math.min(200, Math.floor(storedContextRows));
+      contextRowsInput.value = String(contextRows);
       autoNotesEnabled = Boolean(stored.autoNotes);
       toggleAutoNotesButton.setAttribute('aria-pressed', String(autoNotesEnabled));
       return connectToKobold(stored.koboldUrl);
@@ -450,6 +455,9 @@ try {
     storyText: models.STORY.text, metadataText: models.METADATA.text,
     pins: readPins(models.METADATA.text), references: agentReferences, agentProtocol: AGENT_PROTOCOL,
   }).staticPrompt;
+  const chatContextTurns = (turns) => turns.slice(chatContextStart(turns)).map((turn) => ({
+    request: displayChatInput(turn.input), reply: displayChatOutput(turn.output),
+  }));
   const formatChatPacket = (_turns, input) => [staticChatPreamble(), input].filter(Boolean).join('\n\n');
   const updateDraftContextSummary = () => {
     const input = chatPrompt.value.trim();
@@ -457,7 +465,11 @@ try {
     contextToggle.dataset.targetColor = hasTarget ? String(nextChatJobId % 4) : '';
     if (!input) { chatContextSummary.textContent = 'Draft context'; return; }
     const turns = parseChatTurns(models.CHAT.text);
-    const roughPacket = formatChatPacket(turns.slice(chatContextStart(turns)), input);
+    const roughTurn = composeContext({
+      storyText: models.STORY.text, metadataText: models.METADATA.text,
+      request: input, chatHistory: chatContextTurns(turns),
+    }).turnPrompt;
+    const roughPacket = formatChatPacket(turns, roughTurn);
     chatContextSummary.textContent = `~${Math.ceil(roughPacket.length / 4)} / ${(koboldContextLength ?? 4096) - generationMaxLength} tokens`;
   };
   let contextDialogRequestId = 0;
@@ -511,16 +523,16 @@ try {
       // The raw payload must remain inspectable even when token counting fails.
     }
   };
-  const composeJobInput = async (input, selectedRoot = null, anchor = null) => {
+  const composeJobInput = async (input, selectedRoot = null, anchor = null, turns = parseChatTurns(models.CHAT.text)) => {
     const source = selectedRoot && anchor?.range ? models[selectedRoot].text : '';
     const [from, to] = anchor?.range ?? [0, 0];
     const targetText = source ? source.slice(from, to) : anchor?.target ?? '';
     return composeContext({
       storyText: models.STORY.text, metadataText: models.METADATA.text,
       pins: readPins(models.METADATA.text), references: agentReferences,
-      before: source ? source.slice(0, from) : anchor?.before ?? '',
-      target: targetText, after: source ? source.slice(to) : anchor?.after ?? '',
-      request: input, agentProtocol: AGENT_PROTOCOL,
+      before: anchor?.before ?? (source ? source.slice(0, from) : ''),
+      target: targetText, after: anchor?.after ?? (source ? source.slice(to) : ''),
+      request: input, agentProtocol: AGENT_PROTOCOL, chatHistory: chatContextTurns(turns),
     }).turnPrompt;
   };
   const previewDraftContext = async () => {
@@ -531,7 +543,9 @@ try {
     if (selectedRoot) {
       const range = [models[selectedRoot].selectionStart, models[selectedRoot].selectionEnd];
       const text = models[selectedRoot].text;
-      anchor = { target: text.slice(...range), before: text.slice(Math.max(0, range[0] - CONTEXT_WINDOW), range[0]), after: text.slice(range[1], range[1] + CONTEXT_WINDOW) };
+      const lines = text.slice(0, range[0]).split(/\r?\n/).slice(-contextRows).join('\n');
+      const after = text.slice(range[1]).split(/\r?\n/).slice(0, contextRows).join('\n');
+      anchor = { target: text.slice(...range), before: lines, after };
     }
     const packet = await composeJobInput(input, selectedRoot, anchor);
     await openContextDialog(formatChatPacket(parseChatTurns(models.CHAT.text).slice(chatContextStart(parseChatTurns(models.CHAT.text))), packet));
@@ -656,6 +670,12 @@ try {
     chatHistoryCount.value = String(chatHistoryMessageCount);
     await preferences?.set({ chatHistoryMessages: chatHistoryMessageCount });
     renderChatHistory();
+  });
+  contextRowsInput.addEventListener('change', async () => {
+    contextRows = Math.min(200, Math.max(1, Math.floor(Number(contextRowsInput.value) || 1)));
+    contextRowsInput.value = String(contextRows);
+    await preferences?.set({ contextRows });
+    updateDraftContextSummary();
   });
   const setChatSending = () => {
     chatSendButton.hidden = false;
@@ -819,6 +839,8 @@ try {
           metadataText: models.METADATA.text,
           pins: readPins(models.METADATA.text),
           references: agentReferences,
+          chatHistory: chatContextTurns(parseChatTurns(models.CHAT.text)),
+          contextRows,
           agentProtocol: AGENT_PROTOCOL,
           generationOptions: { max_length: generationMaxLength },
           onToken: (text) => { job.output = text; renderChatHistory(); },
@@ -885,12 +907,13 @@ try {
           range,
           targetHash: await hashStory(baseText.slice(range[0], range[1])),
           target: baseText.slice(range[0], range[1]),
-          before: baseText.slice(Math.max(0, range[0] - CONTEXT_WINDOW), range[0]),
-          after: baseText.slice(range[1], range[1] + CONTEXT_WINDOW),
+          before: baseText.slice(0, range[0]).split(/\r?\n/).slice(-contextRows).join('\n'),
+          after: baseText.slice(range[1]).split(/\r?\n/).slice(0, contextRows).join('\n'),
         },
       };
     }
-    job.packet = await composeJobInput(input, selectedRoot, job.anchor);
+    const storedTurns = parseChatTurns(models.CHAT.text);
+    job.packet = await composeJobInput(input, selectedRoot, job.anchor, storedTurns);
     job.protocolPrompt = formatChatPacket(parseChatTurns(models.CHAT.text).slice(chatContextStart(parseChatTurns(models.CHAT.text))), job.packet);
     chatJobs.push(job);
     refreshAgentTargetHighlights();
@@ -1145,8 +1168,6 @@ try {
     if (compositeViewButton) compositeViewButton.hidden = true;
     switchView('STORY');
   });
-
-  const CONTEXT_WINDOW = 400;
 
   // The same raw-context dialog is used for both an already-sent USER turn
   // and the draft still in the composer.

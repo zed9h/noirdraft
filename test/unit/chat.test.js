@@ -58,6 +58,11 @@ test('CHAT displays the author request while preserving the complete stored mode
   assert.equal(displayChatInput('Old handwritten question?'), 'Old handwritten question?');
 });
 
+test('CHAT displays the author request from an XML context packet', () => {
+  const packet = '<noirdraft_turn>\n<document_context>…</document_context>\n<request><![CDATA[Continue the conversation.]]></request>\n</noirdraft_turn>';
+  assert.equal(displayChatInput(packet), 'Continue the conversation.');
+});
+
 test('CHAT displays native protocol response chat while retaining raw response separately', () => {
   assert.equal(displayChatOutput('{"choices":[{"message":{"content":"Two versions below."}}]}'), 'Two versions below.');
   assert.equal(displayChatOutput('A response.'), 'A response.');
