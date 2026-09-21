@@ -39,6 +39,7 @@ Keep deterministic logic in its focused subsystem, then wire it through `app.js`
 
 - Prefer one direct, current protocol over compatibility layers during this prototype. Do not retain legacy prompt formats, parsers, fallbacks, or migrations unless the user explicitly asks for them.
 - Native KoboldCpp/OpenAI tool calls are the only agent mutation protocol. Keep long context as XML input data and function-call arguments as schema-validated JSON.
+- Design protocol management as a helpful secretary, not a bureaucratic gatekeeper: NoirDraft owns phases and bookkeeping while the model states creative intent in model-facing terms. Require only essential fields, name them from the model’s point of view, and make every constraint or rejection point toward a constructive next action.
 
 ## Develop and verify
 

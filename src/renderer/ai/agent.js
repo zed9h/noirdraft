@@ -16,8 +16,8 @@ export class AgentError extends Error {
 export const SUBMIT_CHANGE_TOOL = {
   type: 'function',
   function: {
-    name: 'submit_change',
-    description: 'Creates one revision at the marked selection or cursor.',
+    name: 'submit_alternative',
+    description: 'Creates one alternative revision for the marked selection or cursor.',
     parameters: {
       type: 'object',
       properties: {
@@ -32,8 +32,8 @@ export const SUBMIT_CHANGE_TOOL = {
 export const RETRACT_CHANGE_TOOL = {
   type: 'function',
   function: {
-    name: 'retract_change',
-    description: 'Retracts one proposal created earlier in this turn when its candidate context is not acceptable.',
+    name: 'retract_alternative',
+    description: 'Retracts one alternative created earlier in this turn when it is not acceptable.',
     parameters: {
       type: 'object',
       properties: {
@@ -44,18 +44,19 @@ export const RETRACT_CHANGE_TOOL = {
   },
 };
 
-export const SET_CHANGES_GOAL_TOOL = {
+export const PLAN_CHANGES_TOOL = {
   type: 'function',
   function: {
-    name: 'set_changes_goal',
-    description: 'Commits to the number of accepted sibling revisions to make and the review strategy before submitting any change.',
+    name: 'plan_alternatives',
+    description: 'States the number and creative purpose of the alternatives you intend to submit next. The first call records the turn intent; later calls prepare another batch. NoirDraft manages workflow state itself.',
     parameters: {
       type: 'object',
       properties: {
-        accepted_changes: { type: 'integer', minimum: 1, description: 'Exact number of accepted revisions intended for this turn.' },
-        strategy: { type: 'string', description: 'Brief private plan for how the proposals will differ and what the final review must check.' },
+        alternative_count: { type: 'integer', minimum: 1, description: 'How many distinct alternatives you intend to submit. On the first call this is the total turn intent; later calls describe only the next batch.' },
+        intent: { type: 'string', description: 'Brief creative purpose of the alternatives, in your own words.' },
+        acceptance_criteria: { type: 'string', description: 'Optional concrete qualities the alternatives should satisfy.' },
       },
-      required: ['accepted_changes', 'strategy'], additionalProperties: false,
+      required: ['alternative_count', 'intent'], additionalProperties: false,
     },
   },
 };
@@ -63,8 +64,8 @@ export const SET_CHANGES_GOAL_TOOL = {
 export const REVIEW_CHANGES_TOOL = {
   type: 'function',
   function: {
-    name: 'review_changes',
-    description: 'Prepares one complete review of all surviving proposals from this turn before it can be finished.',
+    name: 'review_alternatives',
+    description: 'Prepares one complete review of all surviving alternatives from this turn before it can be finished.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
   },
 };
@@ -86,7 +87,7 @@ export const FINISH_TURN_TOOL = {
   },
 };
 
-const AGENT_TOOLS = [SET_CHANGES_GOAL_TOOL, SUBMIT_CHANGE_TOOL, RETRACT_CHANGE_TOOL, REVIEW_CHANGES_TOOL, FINISH_TURN_TOOL];
+const AGENT_TOOLS = [PLAN_CHANGES_TOOL, SUBMIT_CHANGE_TOOL, RETRACT_CHANGE_TOOL, REVIEW_CHANGES_TOOL, FINISH_TURN_TOOL];
 
 const MIN_TOOL_RESPONSE_TOKENS = 1024;
 
@@ -97,9 +98,9 @@ function assertCompleteToolResponse({ message, finishReason, raw, required = fal
     });
   }
   const content = String(message?.content ?? '').trim();
-  const unparsedToolTranscript = /^[\[{]/.test(content) && /"(?:tool_calls|function|set_changes_goal|submit_change|review_changes|finish_turn|text)"/.test(content)
-    || /<\|tool_call(?:\|>|>)|call:(?:set_changes_goal|submit_change|retract_change|review_changes|finish_turn)\{/.test(content)
-    || /\b(?:set_changes_goal|submit_change|retract_change|review_changes|finish_turn)\s*\(/.test(content);
+  const unparsedToolTranscript = /^[\[{]/.test(content) && /"(?:tool_calls|function|plan_alternatives|submit_alternative|review_alternatives|finish_turn|text)"/.test(content)
+    || /<\|tool_call(?:\|>|>)|call:(?:plan_alternatives|submit_alternative|retract_alternative|review_alternatives|finish_turn)\{/.test(content)
+    || /\b(?:plan_alternatives|submit_alternative|retract_alternative|review_alternatives|finish_turn)\s*\(/.test(content);
   if (!message?.tool_calls?.length && unparsedToolTranscript) {
     throw new AgentError('KoboldCpp returned an unparsed tool call instead of a completed response. Retry the turn.', {
       code: 'UNPARSED_TOOL_CALL', rawText: raw,
@@ -118,39 +119,88 @@ function retainTerminalLineBreak(replacement, target) {
   return `${replacement}${terminalBreak}`;
 }
 
-function changeResultJSON({ status, revision, reason, summary, goal }) {
+function changeResultJSON({ status, revision, reason, summary, turnIntent, allowedCalls, recommendedAction }) {
   const result = { status };
   if (revision) result.revision_id = revision.id;
   if (reason) result.reason = reason;
   if (summary) result.turn_summary = summary;
-  if (goal) result.goal = goal;
+  if (turnIntent) result.turn_intent = turnIntent;
+  if (allowedCalls?.length) result.allowed_calls = allowedCalls;
+  if (recommendedAction) result.recommended_action = recommendedAction;
   return JSON.stringify(result);
 }
 
-function reviewResultJSON(revisions, baseText, { from, to }, resultTexts, goal, invalidCalls) {
-  const remaining = goal.accepted_changes - revisions.length;
-  const nextAction = remaining === 0
-    ? { action: 'finish_or_correct', instruction: 'The committed count is met. Check the proposals, then finish or correct them and review again.' }
+function addedDiffText(before, after) {
+  const added = createUnifiedDiff(before, after)
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('+') && !line.startsWith('+++'));
+  return added.length ? added.join('\n') : '+(no added text)';
+}
+
+function reviewResultText(revisions, baseText, { from, to }, resultTexts, goal, currentPlan, recovery, formatWarnings) {
+  const remaining = goal.alternative_count - revisions.length;
+  const nextAction = formatWarnings.length
+    ? { action: 'correct_formatting', instruction: 'Retract the warned proposals and submit corrected siblings before treating the count as progress.' }
+    : remaining === 0
+    ? { action: 'finish_or_correct', instruction: 'The turn intent is met. Retract weak changes if needed; otherwise finish the turn.' }
+    : recovery.stage === 'direct_retry'
+      ? { action: 'continue', remaining_changes: Math.max(0, remaining), instruction: 'First recovery: retry directly with fresh, distinct candidates. Do not finish yet; rejected duplicates are recoverable.' }
+      : recovery.stage === 'plan_retry'
+        ? { action: 'plan_next_batch', instruction: 'Second recovery: call plan_alternatives with a concrete batch count and intent, then submit that batch.' }
+        : recovery.stage === 'creative_retry'
+          ? { action: 'continue_creatively', remaining_changes: Math.max(0, remaining), instruction: 'Final recovery: use imaginative, broad, metaphorical, or otherwise less obvious candidates that still honor the author’s intent. Then review again.' }
+          : { action: 'give_up', instruction: 'The managed recovery attempts are exhausted. Explain the unresolved issue to the author with finish_turn outcome "unable" and failure_reason.' };
+  const progress = remaining === 0
+    ? `Turn intent met — ${revisions.length} alternatives are ready.`
     : remaining > 0
-      ? { action: 'continue', remaining_changes: remaining, instruction: `Do not call finish_turn yet. Submit ${remaining} new, distinct candidate${remaining === 1 ? '' : 's'}, then call review_changes again. Rejected duplicates are recoverable and are not a reason to give up.` }
-      : { action: 'correct', excess_changes: -remaining, instruction: `Retract ${-remaining} proposal${remaining === -1 ? '' : 's'}, then call review_changes again.` };
-  return JSON.stringify({
-    status: 'ready',
-    goal,
-    accepted_changes: revisions.length,
-    goal_status: remaining === 0 ? 'met' : remaining > 0 ? 'incomplete' : 'exceeded',
-    invalid_calls: invalidCalls,
-    next_action: nextAction,
-    proposals: revisions.map((revision) => {
-      const resultText = resultTexts.get(revision.id);
-      const replacement = resultText.slice(from, resultText.length - (baseText.length - to));
-      return {
-        revision_id: revision.id,
-        diff: createUnifiedDiff(baseText, resultText),
-        candidate_context: resultText.slice(Math.max(0, from - 400), Math.min(resultText.length, from + replacement.length + 400)),
-      };
-    }),
+      ? `Not complete — ${revisions.length} alternatives are ready; ${remaining} still needed.`
+      : `Over the turn intent — ${revisions.length} alternatives are ready; ${-remaining} should be retracted.`;
+  const lines = [
+    'NOIRDRAFT REVIEW',
+    `Turn intent: submit ${goal.alternative_count} alternatives.`,
+    `Current intent: submit ${currentPlan.alternative_count} alternatives — ${currentPlan.intent}`,
+    `Progress: ${progress}`,
+    `Acceptance criteria: ${goal.acceptance_criteria || 'Faithfully fulfill the author request.'}`,
+    'Question: Does every alternative fulfill the author request, remain distinct, and read correctly in context?',
+  ];
+  if (formatWarnings.length) {
+    lines.push('Formatting warnings:');
+    for (const warning of formatWarnings) lines.push(`- Revision #${warning.revision_id}: ${warning.message}`);
+  }
+  lines.push('Proposals to inspect:');
+  for (const revision of revisions) {
+    lines.push(`----- REVISION #${revision.id}: ADDED TEXT -----`);
+    lines.push(addedDiffText(baseText, resultTexts.get(revision.id)));
+    lines.push(`----- END REVISION #${revision.id} -----`);
+  }
+  lines.push(`Manager direction (${recovery.stage}): ${nextAction.instruction}`);
+  return lines.join('\n');
+}
+
+function insertionFormatWarnings(revisions, baseText, { from, to }, resultTexts) {
+  if (from !== to) return [];
+  const left = baseText.at(from - 1) ?? '';
+  if (!/[\p{L}\p{N}]/u.test(left)) return [];
+  return revisions.flatMap((revision) => {
+    const resultText = resultTexts.get(revision.id);
+    const inserted = resultText.slice(from, resultText.length - (baseText.length - to));
+    if (!/^[\p{L}\p{N}]/u.test(inserted)) return [];
+    return [{
+      revision_id: revision.id,
+      message: 'The inserted text joins directly to the word on its left. If this is a separate word, retract it and resubmit with the required leading separator, such as a space.',
+    }];
   });
+}
+
+function isWordCharacter(value) {
+  return /[\p{L}\p{N}]/u.test(value);
+}
+
+function normalizeInsertionSpacing(text, before, after) {
+  let insertion = String(text);
+  if (isWordCharacter(before) && isWordCharacter(insertion[0] ?? '')) insertion = ` ${insertion}`;
+  if (isWordCharacter(insertion.at(-1) ?? '') && isWordCharacter(after)) insertion = `${insertion} `;
+  return insertion;
 }
 
 /**
@@ -240,6 +290,55 @@ export async function requestRewrite({
   let reviewedChangeCallVersion = -1;
   let lastReviewRound = -1;
   let changesGoal = null;
+  let currentPlan = null;
+  let failedReviews = 0;
+  let giveUpAllowed = false;
+  let batchPlanAvailable = false;
+  const allowedNextCalls = () => {
+    if (!changesGoal) {
+      return ['plan_alternatives'];
+    }
+    const actions = ['plan_alternatives', 'submit_alternative', 'retract_alternative'];
+    if (changeCallVersion > 0 && reviewedChangeCallVersion !== changeCallVersion) {
+      actions.push('review_alternatives');
+    }
+    if (changeCallVersion > 0 && reviewedChangeCallVersion === changeCallVersion && lastReviewRound >= 0) {
+      if (revisions.length === changesGoal.alternative_count) {
+        actions.push('finish_turn');
+      } else if (giveUpAllowed) {
+        actions.push('finish_turn');
+      }
+    }
+    return actions;
+  };
+  const recommendedAction = () => {
+    if (!changesGoal) return { call: 'plan_alternatives', attempt: 'State how many alternatives you intend to submit and their creative intent.' };
+    if (changeCallVersion > 0 && reviewedChangeCallVersion !== changeCallVersion) {
+      return { call: 'review_alternatives', attempt: 'Inspect the alternatives or retractions made since the last review before trying to finish.' };
+    }
+    if (reviewedChangeCallVersion === changeCallVersion && revisions.length === changesGoal.alternative_count) {
+      return { call: 'finish_turn', attempt: 'Use outcome "complete" and concise commentary, unless you first retract a weak proposal.' };
+    }
+    if (giveUpAllowed) return { call: 'finish_turn', attempt: 'Use outcome "unable" with failure_reason explaining the unresolved issue to the author.' };
+    if (batchPlanAvailable) return { call: 'submit_alternative', attempt: 'Apply the current plan with a fresh, distinct alternative.' };
+    if (failedReviews === 2) return { call: 'plan_alternatives', attempt: 'State a concrete batch count and fresh creative intent, then submit distinct alternatives.' };
+    return { call: 'submit_alternative', attempt: 'Submit a fresh, distinct alternative that moves the work toward the turn intent.' };
+  };
+  const planResult = (currentIntent, managerPrompt) => JSON.stringify({
+    status: 'accepted',
+    current_intent: currentIntent,
+    manager_prompt: managerPrompt,
+    turn_state: changesGoal
+      ? {
+        turn_intent: changesGoal,
+        current_intent: currentPlan,
+        alternatives_ready: revisions.length,
+        remaining_alternatives: Math.max(0, changesGoal.alternative_count - revisions.length),
+        allowed_calls: allowedNextCalls(),
+        recommended_action: recommendedAction(),
+      }
+      : { allowed_calls: allowedNextCalls(), recommended_action: recommendedAction() },
+  });
   const transcript = [...initialMessages];
   const reconstructed = new Map([[baseRevisionId, baseText]]);
   const resultTexts = new Map();
@@ -262,7 +361,7 @@ export async function requestRewrite({
   };
   const materialize = async (batch, round) => {
     const results = [];
-    for (const call of batch.filter((item) => ['set_changes_goal', 'submit_change', 'retract_change', 'review_changes', 'finish_turn'].includes(item?.function?.name))) {
+    for (const call of batch.filter((item) => ['plan_alternatives', 'submit_alternative', 'retract_alternative', 'review_alternatives', 'finish_turn'].includes(item?.function?.name))) {
       let change;
       try { change = JSON.parse(call.function.arguments); } catch { change = null; }
       if (call.function.name === 'finish_turn') {
@@ -273,12 +372,12 @@ export async function requestRewrite({
         }
         if (changeCallVersion > 0 && (reviewedChangeCallVersion !== changeCallVersion || lastReviewRound >= round)) {
           invalidCalls += 1;
-          results.push({ call, status: 'rejected', reason: 'Call review_changes after the last proposal change, then finish in a later response.' });
+          results.push({ call, status: 'rejected', reason: 'Call review_alternatives after the last alternative change, then finish in a later response.' });
           continue;
         }
-        if (changesGoal && change.outcome === 'complete' && revisions.length !== changesGoal.accepted_changes) {
+        if (changesGoal && change.outcome === 'complete' && revisions.length !== changesGoal.alternative_count) {
           invalidCalls += 1;
-          results.push({ call, status: 'rejected', reason: `The goal requires ${changesGoal.accepted_changes} accepted changes; review found ${revisions.length}.` });
+          results.push({ call, status: 'rejected', reason: `The turn intent is ${changesGoal.alternative_count} alternatives; review found ${revisions.length}.` });
           continue;
         }
         if (change.outcome === 'unable' && (typeof change.failure_reason !== 'string' || !change.failure_reason.trim())) {
@@ -286,45 +385,76 @@ export async function requestRewrite({
           results.push({ call, status: 'rejected', reason: 'finish_turn with outcome "unable" requires failure_reason.' });
           continue;
         }
+        if (changesGoal && change.outcome === 'unable' && revisions.length !== changesGoal.alternative_count && !giveUpAllowed) {
+          invalidCalls += 1;
+          results.push({ call, status: 'rejected', reason: 'Follow the current managed recovery action before declaring the goal unable.' });
+          continue;
+        }
         finished = true;
         results.push({ call, status: 'finished', comment: change.comment });
         continue;
       }
-      if (call.function.name === 'set_changes_goal') {
-        const acceptedChanges = change?.accepted_changes;
-        const strategy = change?.strategy;
-        if (!Number.isSafeInteger(acceptedChanges) || acceptedChanges < 1 || typeof strategy !== 'string' || !strategy.trim()) {
+      if (call.function.name === 'plan_alternatives') {
+        const alternativeCount = change?.alternative_count;
+        const intent = change?.intent;
+        const acceptanceCriteria = change?.acceptance_criteria;
+        if (!Number.isSafeInteger(alternativeCount) || alternativeCount < 1 || typeof intent !== 'string' || !intent.trim()) {
           invalidCalls += 1;
-          results.push({ call, status: 'rejected', reason: 'set_changes_goal requires a positive integer accepted_changes and a nonempty strategy.' });
+          results.push({ call, status: 'rejected', reason: 'plan_alternatives requires a positive alternative_count and a nonempty intent.' });
           continue;
         }
-        if (changeCallVersion > 0) {
-          invalidCalls += 1;
-          results.push({ call, status: 'rejected', reason: 'set_changes_goal must be called before the first change call.' });
-          continue;
-        }
-        changesGoal = { accepted_changes: acceptedChanges, strategy };
-        results.push({ call, status: 'accepted', goal: changesGoal });
+        const isInitialPlan = !changesGoal;
+        if (isInitialPlan) changesGoal = {
+          alternative_count: alternativeCount,
+          intent: intent.trim(),
+          acceptance_criteria: typeof acceptanceCriteria === 'string' ? acceptanceCriteria.trim() : '',
+        };
+        batchPlanAvailable = true;
+        const plan = { alternative_count: alternativeCount, intent: intent.trim() };
+        currentPlan = plan;
+        results.push({ call, status: 'accepted', turn_intent: isInitialPlan ? changesGoal : null, current_intent: plan, manager_prompt: isInitialPlan
+          ? 'Turn intent recorded. Submit the first alternatives when ready.'
+          : `Turn intent remains ${changesGoal.alternative_count} alternatives. Submit this batch without restating or changing it.` });
         continue;
       }
-      if (call.function.name === 'review_changes') {
+      if (call.function.name === 'review_alternatives') {
         if (!change || Object.keys(change).length !== 0) {
           invalidCalls += 1;
-          results.push({ call, status: 'rejected', reason: 'review_changes takes no arguments.' });
+          results.push({ call, status: 'rejected', reason: 'review_alternatives takes no arguments.' });
           continue;
         }
-        if (!changesGoal && changeCallVersion > 0) {
+        if (!changesGoal) {
           invalidCalls += 1;
-          results.push({ call, status: 'rejected', reason: 'Set a changes goal before reviewing a change turn.' });
+          results.push({ call, status: 'rejected', reason: 'review_alternatives requires an initial plan_alternatives call.' });
+          continue;
+        }
+        if (changeCallVersion === 0 || reviewedChangeCallVersion === changeCallVersion) {
+          invalidCalls += 1;
+          results.push({ call, status: 'rejected', reason: 'review_alternatives requires a submit_alternative or retract_alternative since the previous review.' });
           continue;
         }
         reviewedChangeCallVersion = changeCallVersion;
         lastReviewRound = round;
-        results.push({ call, status: 'review_ready' });
+        const goalStatus = changesGoal && revisions.length === changesGoal.alternative_count ? 'met' : 'mismatched';
+        const formatWarnings = insertionFormatWarnings(revisions, baseText, { from, to }, resultTexts);
+        if (formatWarnings.length) {
+          giveUpAllowed = false;
+          results.push({ call, status: 'review_ready', recovery: { attempt: failedReviews, stage: 'correct_formatting' }, format_warnings: formatWarnings });
+        } else if (goalStatus === 'met') {
+          giveUpAllowed = false;
+          results.push({ call, status: 'review_ready', recovery: { attempt: failedReviews, stage: 'met' } });
+        } else {
+          failedReviews += 1;
+          const stage = failedReviews === 1 ? 'direct_retry' : failedReviews === 2 ? 'plan_retry' : failedReviews === 3 ? 'creative_retry' : 'give_up';
+          giveUpAllowed = stage === 'give_up';
+          results.push({ call, status: 'review_ready', recovery: { attempt: failedReviews, stage } });
+        }
         continue;
       }
-      if (call.function.name === 'retract_change') {
+      if (call.function.name === 'retract_alternative') {
         changeCallVersion += 1;
+        giveUpAllowed = false;
+        batchPlanAvailable = false;
         const revisionId = change?.revision_id;
         const index = revisions.findIndex(({ id }) => id === revisionId);
         if (!Number.isSafeInteger(revisionId) || index === -1) {
@@ -342,19 +472,23 @@ export async function requestRewrite({
       }
       const operation = change?.operation;
       const replacement = change?.text;
-      changeCallVersion += 1;
       if (!changesGoal) {
         invalidCalls += 1;
-        results.push({ call, status: 'rejected', reason: 'Call set_changes_goal before submit_change.' });
+        results.push({ call, status: 'rejected', reason: 'Call plan_alternatives first to state the alternative count and creative intent before submit_alternative.' });
         continue;
       }
+      changeCallVersion += 1;
+      giveUpAllowed = false;
+      batchPlanAvailable = false;
       const expectedOperation = target.length ? 'replace' : 'insert';
       if (operation !== expectedOperation || typeof replacement !== 'string' || !replacement.trim()) {
         invalidCalls += 1;
         results.push({ call, status: 'rejected', reason: `Expected operation "${expectedOperation}" with nonempty text.` });
         continue;
       }
-      const completeReplacement = operation === 'replace' ? retainTerminalLineBreak(replacement, target) : replacement;
+      const completeReplacement = operation === 'replace'
+        ? retainTerminalLineBreak(replacement, target)
+        : normalizeInsertionSpacing(replacement, baseText.at(from - 1) ?? '', baseText.at(to) ?? '');
       const proposedText = `${baseText.slice(0, from)}${completeReplacement}${baseText.slice(to)}`;
       if (proposedText === baseText) {
         invalidCalls += 1;
@@ -377,7 +511,7 @@ export async function requestRewrite({
   };
   // Each assistant message precedes its citations, matching the model's
   // native message/tool-call order in persisted CHAT.
-  for (let round = 0; round < 12; round += 1) {
+  for (let round = 0; round < 32; round += 1) {
     if (!calls?.length) break;
     const results = await materialize(calls, round);
     const citations = results
@@ -385,12 +519,14 @@ export async function requestRewrite({
       .map(({ revision }) => `[#${revision.id}](noirdraft://version/${root}/${revision.id})`);
     if (citations.length) chatParts.push({ type: 'citations', revisions: results.filter(({ revision }) => revision).map(({ revision }) => revision) });
     for (const { comment } of results) addChat(comment);
-    const turnSummary = { accepted_changes: revisions.length, invalid_calls: invalidCalls, retracted_changes: retractedChanges };
-    const toolResults = results.map(({ call, revision, status, reason, goal }) => ({
+    const turnSummary = { alternatives_ready: revisions.length, invalid_calls: invalidCalls, retracted_alternatives: retractedChanges };
+    const toolResults = results.map(({ call, revision, status, reason, turn_intent: turnIntent, current_intent: currentIntent, manager_prompt: managerPrompt, recovery, format_warnings: formatWarnings = [] }) => ({
       role: 'tool', tool_call_id: call.id,
       content: status === 'review_ready'
-        ? reviewResultJSON(revisions, baseText, { from, to }, resultTexts, changesGoal, invalidCalls)
-        : changeResultJSON({ status, revision, reason, goal, summary: status === 'finished' ? turnSummary : null }),
+        ? reviewResultText(revisions, baseText, { from, to }, resultTexts, changesGoal, currentPlan, recovery, formatWarnings)
+        : currentIntent
+          ? planResult(currentIntent, managerPrompt)
+          : changeResultJSON({ status, revision, reason, turnIntent, allowedCalls: status === 'rejected' ? allowedNextCalls() : null, recommendedAction: status === 'rejected' ? recommendedAction() : null, summary: status === 'finished' ? turnSummary : null }),
     }));
     transcript.push(message, ...toolResults);
     rawTrace.push(...toolResults.map(({ tool_call_id: callId, content }) => `[noirdraft tool result: ${callId}]\n${content}`));

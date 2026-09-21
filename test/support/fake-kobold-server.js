@@ -60,7 +60,7 @@ export function startFakeKoboldServer(options = {}) {
       const contextResult = payload.messages?.find((message) => message.role === 'user')?.content ?? '';
       let isCursorContext = false;
       try { isCursorContext = JSON.parse(contextResult).context?.cursor === ''; } catch { /* not an agent editing request */ }
-      const hasChangesGoal = payload.messages?.some((message) => message.role === 'tool' && message.tool_call_id === 'goal');
+      const hasChangesGoal = payload.messages?.some((message) => message.role === 'tool' && message.tool_call_id === 'plan');
       const hasSubmittedChange = payload.messages?.some((message) => message.role === 'tool' && /^call_/.test(message.tool_call_id));
       const hasReviewedChanges = payload.messages?.some((message) => message.role === 'tool' && message.tool_call_id === 'review');
       const reply = !payload.tools?.length
@@ -68,12 +68,12 @@ export function startFakeKoboldServer(options = {}) {
         : payload.tool_choice === 'none' || hasReviewedChanges
         ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'finish', type: 'function', function: { name: 'finish_turn', arguments: JSON.stringify({ outcome: 'complete', comment: 'Done.' }) } }] } }] }
         : hasSubmittedChange
-        ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'review', type: 'function', function: { name: 'review_changes', arguments: '{}' } }] } }] }
+        ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'review', type: 'function', function: { name: 'review_alternatives', arguments: '{}' } }] } }] }
         : !hasChangesGoal
-        ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'goal', type: 'function', function: { name: 'set_changes_goal', arguments: JSON.stringify({ accepted_changes: replacements.length, strategy: 'Provide each requested replacement as a distinct sibling.' }) } }] } }] }
+        ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'plan', type: 'function', function: { name: 'plan_alternatives', arguments: JSON.stringify({ alternative_count: replacements.length, intent: 'Provide each requested replacement as a distinct sibling.', acceptance_criteria: 'Each alternative is distinct and fulfills the request.' }) } }] } }] }
         : { choices: [{ message: {
           role: 'assistant', content: null,
-          tool_calls: replacements.map((replacement, index) => ({ id: `call_${index + 1}`, type: 'function', function: { name: 'submit_change', arguments: JSON.stringify({ operation: isCursorContext ? 'insert' : 'replace', text: replacement }) } })),
+          tool_calls: replacements.map((replacement, index) => ({ id: `call_${index + 1}`, type: 'function', function: { name: 'submit_alternative', arguments: JSON.stringify({ operation: isCursorContext ? 'insert' : 'replace', text: replacement }) } })),
         } }] };
       if (tokenDelayMs > 0) return setTimeout(() => sendJSON(response, 200, reply), tokenDelayMs);
       return sendJSON(response, 200, reply);
