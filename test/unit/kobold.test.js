@@ -32,6 +32,19 @@ test('ordinary chat completions keep the literal JSON response alongside plain a
   }
 });
 
+test('ordinary chat streams OpenAI-compatible reply chunks as they arrive', async () => {
+  const server = await startFakeKoboldServer({ tokens: ['A ', 'streamed ', 'reply.'], tokenDelayMs: 1 });
+  try {
+    const events = [];
+    for await (const event of new KoboldClient(server.url).chatCompletionStream({ messages: [{ role: 'user', content: 'Hello.' }] })) events.push(event);
+    assert.equal(events.map(({ text }) => text).join(''), 'A streamed reply.');
+    assert.equal(events.at(-1).done, true);
+    assert.match(events.at(-1).raw, /streamed/);
+  } finally {
+    await server.close();
+  }
+});
+
 test('a rejected chat completion retains its literal error body for session inspection', async () => {
   const client = new KoboldClient('http://fake.invalid', { fetch: async () => new Response('{"error":"context exhausted"}', { status: 400 }) });
   await assert.rejects(

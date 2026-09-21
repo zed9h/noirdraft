@@ -170,6 +170,70 @@ export class KoboldClient {
     return { message, finishReason: choice.finish_reason ?? null, raw };
   }
 
+  /** Streams an ordinary OpenAI-compatible chat reply when the server offers
+   * SSE. A non-streaming response is still decoded as one final event, which
+   * keeps older KoboldCpp builds usable without changing the chat protocol. */
+  async *chatCompletionStream({ messages, maxTokens = 200, temperature = 0, signal }) {
+    let response;
+    try {
+      response = await this.fetch(`${this.baseUrl}/v1/chat/completions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'koboldcpp', messages, max_tokens: maxTokens, temperature, stream: true }), signal,
+      });
+    } catch (cause) {
+      if (cause?.name === 'AbortError') throw cause;
+      throw new KoboldError('Could not reach KoboldCpp chat completions.', { code: 'UNAVAILABLE', cause });
+    }
+    if (!response.ok) {
+      const raw = await response.text().catch(() => '');
+      throw new KoboldError('KoboldCpp rejected the chat completion.', { code: 'CHAT_COMPLETION_FAILED', rawText: raw });
+    }
+    const contentType = response.headers.get('content-type') ?? '';
+    if (!contentType.includes('text/event-stream') || !response.body) {
+      const raw = await response.text();
+      let body;
+      try { body = JSON.parse(raw); } catch (cause) { throw new KoboldError('KoboldCpp returned a malformed chat response.', { code: 'MALFORMED_RESPONSE', cause, rawText: raw }); }
+      const choice = body?.choices?.[0];
+      const message = choice?.message;
+      if (!message || typeof message.content !== 'string') throw new KoboldError('KoboldCpp returned a malformed chat response.', { code: 'MALFORMED_RESPONSE', rawText: raw });
+      yield { text: message.content, raw, done: true, finishReason: choice.finish_reason ?? null };
+      return;
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let raw = '';
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        raw += chunk;
+        buffer += chunk;
+        let boundary = buffer.indexOf('\n\n');
+        while (boundary !== -1) {
+          const record = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const data = record.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('');
+          if (data === '[DONE]') {
+            yield { text: '', raw, done: true, finishReason: 'stop' };
+          } else if (data) {
+            try {
+              const event = JSON.parse(data);
+              const choice = event?.choices?.[0];
+              yield { text: typeof choice?.delta?.content === 'string' ? choice.delta.content : '', raw, done: Boolean(choice?.finish_reason), finishReason: choice?.finish_reason ?? null };
+            } catch {
+              // Ignore malformed individual SSE records; later records may remain valid.
+            }
+          }
+          boundary = buffer.indexOf('\n\n');
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
+    }
+  }
+
   async #readJSON(response) {
     try {
       return await response.json();

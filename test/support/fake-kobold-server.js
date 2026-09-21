@@ -56,15 +56,41 @@ export function startFakeKoboldServer(options = {}) {
     }
     if (method === 'POST' && url.pathname === '/v1/chat/completions') {
       const payload = JSON.parse(body || '{}');
+      if (payload.stream === true && !payload.tools?.length) {
+        response.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+        });
+        let index = 0;
+        const timer = setInterval(() => {
+          if (index >= tokens.length) {
+            clearInterval(timer);
+            response.write('data: [DONE]\n\n');
+            response.end();
+            return;
+          }
+          response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: tokens[index] }, finish_reason: null }] })}\n\n`);
+          index += 1;
+        }, tokenDelayMs);
+        response.on('close', () => clearInterval(timer));
+        return;
+      }
       const replacements = toolCalls ?? (tokens.join('') ? [tokens.join('')] : []);
       const contextResult = payload.messages?.find((message) => message.role === 'user')?.content ?? '';
+      const isGreeting = contextResult.includes('Say hello.');
       let isCursorContext = false;
       try { isCursorContext = JSON.parse(contextResult).context?.cursor === ''; } catch { /* not an agent editing request */ }
+      const hasChatPlan = payload.messages?.some((message) => message.role === 'tool' && message.tool_call_id === 'chat-plan');
       const hasChangesGoal = payload.messages?.some((message) => message.role === 'tool' && message.tool_call_id === 'plan');
       const hasSubmittedChange = payload.messages?.some((message) => message.role === 'tool' && /^call_/.test(message.tool_call_id));
       const hasReviewedChanges = payload.messages?.some((message) => message.role === 'tool' && message.tool_call_id === 'review');
       const reply = !payload.tools?.length
         ? { choices: [{ message: { role: 'assistant', content: tokens.join(''), tool_calls: [] }, finish_reason: 'stop' }] }
+        : isGreeting && !hasChatPlan
+        ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'chat-plan', type: 'function', function: { name: 'plan_chat', arguments: JSON.stringify({ intent: 'Greet the author.', proposed_message: tokens.join('') }) } }] } }] }
+        : isGreeting
+        ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'send-chat', type: 'function', function: { name: 'send_chat', arguments: '{}' } }] } }] }
         : payload.tool_choice === 'none' || hasReviewedChanges
         ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'finish', type: 'function', function: { name: 'finish_changes', arguments: JSON.stringify({ outcome: 'complete', comment: 'Done.' }) } }] } }] }
         : hasSubmittedChange

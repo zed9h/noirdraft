@@ -4,6 +4,7 @@ import { StoryModel } from './editor/model.js';
 import { CommitController } from './history/commits.js';
 import { childrenOf, commitRevision, createHistory, recordExternalEdit, reconstructRevision, verifyCurrentStory } from './history/graph.js';
 import { hashStory } from './history/hash.js';
+import { createUnifiedDiff } from './history/diff.js';
 import { parseHistories, serializeHistories } from './history/serialize.js';
 import { requestRewrite } from './ai/agent.js';
 import { composeContext } from './ai/context.js';
@@ -455,9 +456,34 @@ try {
     storyText: models.STORY.text, metadataText: models.METADATA.text,
     pins: readPins(models.METADATA.text), references: agentReferences, agentProtocol: AGENT_PROTOCOL,
   }).staticPrompt;
-  const chatContextTurns = (turns) => turns.slice(chatContextStart(turns)).map((turn) => ({
-    request: displayChatInput(turn.input), reply: displayChatOutput(turn.output),
-  }));
+  const expandChatRevisionReferences = async (reply) => {
+    const pattern = /\[#(\d+)\]\(noirdraft:\/\/version\/(STORY|METADATA)\/(\d+)\)/g;
+    const text = String(reply);
+    const parts = [];
+    let offset = 0;
+    for (const match of text.matchAll(pattern)) {
+      parts.push(text.slice(offset, match.index));
+      const root = match[2];
+      const revisionId = Number(match[3]);
+      const targetHistory = root === 'STORY' ? history : metadataHistory;
+      const revision = targetHistory?.revisions.get(revisionId);
+      if (!revision?.parents?.length) {
+        parts.push(`[NoirDraft revision ${root} #${revisionId} is unavailable]`);
+      } else {
+        const [baseText, revisedText] = await Promise.all([
+          reconstructRevision(targetHistory, revision.parents[0]),
+          reconstructRevision(targetHistory, revisionId),
+        ]);
+        parts.push(`[NoirDraft revision ${root} #${revisionId}]\n${createUnifiedDiff(baseText, revisedText)}[End NoirDraft revision]`);
+      }
+      offset = match.index + match[0].length;
+    }
+    parts.push(text.slice(offset));
+    return parts.join('');
+  };
+  const chatContextTurns = async (turns) => Promise.all(turns.slice(chatContextStart(turns)).map(async (turn) => ({
+    request: displayChatInput(turn.input), reply: await expandChatRevisionReferences(displayChatOutput(turn.output)),
+  })));
   const formatChatPacket = (_turns, input) => [staticChatPreamble(), input].filter(Boolean).join('\n\n');
   const updateDraftContextSummary = () => {
     const input = chatPrompt.value.trim();
@@ -467,19 +493,20 @@ try {
     const turns = parseChatTurns(models.CHAT.text);
     const roughTurn = composeContext({
       storyText: models.STORY.text, metadataText: models.METADATA.text,
-      request: input, chatHistory: chatContextTurns(turns),
+      request: input, chatHistory: turns.slice(chatContextStart(turns)).map((turn) => ({ request: displayChatInput(turn.input), reply: displayChatOutput(turn.output) })),
     }).turnPrompt;
     const roughPacket = formatChatPacket(turns, roughTurn);
     chatContextSummary.textContent = `~${Math.ceil(roughPacket.length / 4)} / ${(koboldContextLength ?? 4096) - generationMaxLength} tokens`;
   };
   let contextDialogRequestId = 0;
+  let liveRawJobId = null;
   const renderRawTrace = (source, title) => {
     contextDialogPrompt.replaceChildren();
     if (title !== 'Raw model response') {
       contextDialogPrompt.textContent = source;
       return;
     }
-    const toolResult = /\[noirdraft tool result: [^\n]+\]\n[^\n]*/g;
+    const toolResult = /\[noirdraft tool result: [^\n]+\]\n[\s\S]*?\n\[noirdraft end tool result: [^\n]+\]/g;
     let offset = 0;
     let match;
     while ((match = toolResult.exec(source))) {
@@ -503,6 +530,7 @@ try {
     }
   };
   const openContextDialog = async (prompt, title = 'Raw model context') => {
+    if (title !== 'Raw model response') liveRawJobId = null;
     const requestId = ++contextDialogRequestId;
     const source = String(prompt);
     const connected = Boolean(koboldClient) && aiStatus.dataset.connected === 'true';
@@ -523,6 +551,17 @@ try {
       // The raw payload must remain inspectable even when token counting fails.
     }
   };
+  const openRawResponseDialog = (job) => {
+    liveRawJobId = job.id;
+    return openContextDialog(job.rawResponse ?? 'Raw response is available only during this session.', 'Raw model response');
+  };
+  const refreshLiveRawResponse = (job) => {
+    if (!contextDialog.open || liveRawJobId !== job.id || contextDialogTitle.textContent !== 'Raw model response') return;
+    const source = job.rawResponse ?? '';
+    renderRawTrace(source, 'Raw model response');
+    contextDialogSummary.textContent = `~${Math.ceil(source.length / 4)} tokens`;
+    contextDialogSummary.dataset.over = 'false';
+  };
   const composeJobInput = async (input, selectedRoot = null, anchor = null, turns = parseChatTurns(models.CHAT.text)) => {
     const source = selectedRoot && anchor?.range ? models[selectedRoot].text : '';
     const [from, to] = anchor?.range ?? [0, 0];
@@ -532,12 +571,11 @@ try {
       pins: readPins(models.METADATA.text), references: agentReferences,
       before: anchor?.before ?? (source ? source.slice(0, from) : ''),
       target: targetText, after: anchor?.after ?? (source ? source.slice(to) : ''),
-      request: input, agentProtocol: AGENT_PROTOCOL, chatHistory: chatContextTurns(turns),
+      request: input, agentProtocol: AGENT_PROTOCOL, chatHistory: await chatContextTurns(turns),
     }).turnPrompt;
   };
   const previewDraftContext = async () => {
     const input = chatPrompt.value.trim();
-    if (!input) return;
     const selectedRoot = ['STORY', 'METADATA'].includes(activeRoot) ? activeRoot : null;
     let anchor = null;
     if (selectedRoot) {
@@ -549,6 +587,33 @@ try {
     }
     const packet = await composeJobInput(input, selectedRoot, anchor);
     await openContextDialog(formatChatPacket(parseChatTurns(models.CHAT.text).slice(chatContextStart(parseChatTurns(models.CHAT.text))), packet));
+  };
+  const renderChatMessageContent = (content, text) => {
+    new MarkdownRenderer(content).render(String(text));
+    const citationPattern = /\[#(\d+)\]\(noirdraft:\/\/version\/(STORY|METADATA)\/(\d+)\)/g;
+    const citationNodes = [];
+    const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) citationNodes.push(walker.currentNode);
+    for (const node of citationNodes) {
+      const source = node.nodeValue;
+      if (!citationPattern.test(source)) continue;
+      citationPattern.lastIndex = 0;
+      const fragment = document.createDocumentFragment();
+      let cursor = 0;
+      for (const match of source.matchAll(citationPattern)) {
+        fragment.append(document.createTextNode(source.slice(cursor, match.index)));
+        const version = document.createElement('button');
+        version.type = 'button';
+        version.className = `chat-version-reference chat-version-reference-${match[2].toLowerCase()}`;
+        version.textContent = `#${match[3]}`;
+        version.title = `${match[2]} revision ${match[3]}`;
+        version.addEventListener('click', () => openVersionCitation(match[2], Number(match[3])));
+        fragment.append(version);
+        cursor = match.index + match[0].length;
+      }
+      fragment.append(document.createTextNode(source.slice(cursor)));
+      node.replaceWith(fragment);
+    }
   };
   const renderChatHistory = (pendingTurn = null) => {
     const previousScrollTop = chatHistory.scrollTop;
@@ -618,36 +683,12 @@ try {
           }
         } else {
           labelTitle.setAttribute('aria-label', `Show raw response for turn ${index + 1}`);
-          labelTitle.addEventListener('click', () => void openContextDialog(call?.rawResponse ?? 'Raw response is available only during this session.', 'Raw model response'));
+          labelTitle.addEventListener('click', () => void openRawResponseDialog(call ?? { id: null, rawResponse: 'Raw response is available only during this session.' }));
           if (call) label.append(renderChatCall(call));
         }
         const content = document.createElement('div');
         content.className = 'chat-message-content';
-        new MarkdownRenderer(content).render(String(text));
-        const citationPattern = /\[#(\d+)\]\(noirdraft:\/\/version\/(STORY|METADATA)\/(\d+)\)/g;
-        const citationNodes = [];
-        const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
-        while (walker.nextNode()) citationNodes.push(walker.currentNode);
-        for (const node of citationNodes) {
-          const source = node.nodeValue;
-          if (!citationPattern.test(source)) continue;
-          citationPattern.lastIndex = 0;
-          const fragment = document.createDocumentFragment();
-          let cursor = 0;
-          for (const match of source.matchAll(citationPattern)) {
-            fragment.append(document.createTextNode(source.slice(cursor, match.index)));
-            const version = document.createElement('button');
-            version.type = 'button';
-            version.className = `chat-version-reference chat-version-reference-${match[2].toLowerCase()}`;
-            version.textContent = `#${match[3]}`;
-            version.title = `${match[2]} revision ${match[3]}`;
-            version.addEventListener('click', () => openVersionCitation(match[2], Number(match[3])));
-            fragment.append(version);
-            cursor = match.index + match[0].length;
-          }
-          fragment.append(document.createTextNode(source.slice(cursor)));
-          node.replaceWith(fragment);
-        }
+        renderChatMessageContent(content, text);
         if (!message.contains(label)) message.append(label);
         message.append(content);
         return message;
@@ -754,13 +795,19 @@ try {
     outputTitle.textContent = 'agent';
     outputTitle.title = 'Show raw model response';
     outputTitle.setAttribute('aria-label', `Show raw response for pending turn ${index + 1}`);
-    outputTitle.addEventListener('click', () => void openContextDialog(job.rawResponse ?? 'Raw response is available only during this session.', 'Raw model response'));
+    outputTitle.addEventListener('click', () => void openRawResponseDialog(job));
     outputLabel.append(outputTitle);
     outputLabel.append(renderChatCall(job));
     const outputContent = document.createElement('div');
     outputContent.className = 'chat-message-content';
-    outputContent.textContent = job.output || 'Waiting for the model…';
+    renderChatMessageContent(outputContent, job.output || job.progress || 'Preparing the agent request…');
     output.append(outputLabel, outputContent);
+    if (job.state === 'generating' && job.currentIntent?.intent) {
+      const intent = document.createElement('div');
+      intent.className = 'chat-agent-intent';
+      intent.textContent = `Current proposal intent: ${job.currentIntent.intent}`;
+      output.append(intent);
+    }
     card.append(header, input, output);
     return card;
   };
@@ -821,6 +868,7 @@ try {
     if (!job) return;
     activeChatJob = job;
     job.state = 'generating';
+    job.progress = 'Requesting the agent plan…';
     job.abortController = new AbortController();
     chatAbortController = job.abortController;
     setChatSending();
@@ -839,11 +887,21 @@ try {
           metadataText: models.METADATA.text,
           pins: readPins(models.METADATA.text),
           references: agentReferences,
-          chatHistory: chatContextTurns(parseChatTurns(models.CHAT.text)),
+          chatHistory: await chatContextTurns(parseChatTurns(models.CHAT.text)),
           contextRows,
           agentProtocol: AGENT_PROTOCOL,
           generationOptions: { max_length: generationMaxLength },
-          onToken: (text) => { job.output = text; renderChatHistory(); },
+          onProgress: ({ chat, rawResponse, revisions, intent }) => {
+            job.output = chat;
+            job.rawResponse = rawResponse;
+            job.revisionIds = revisions.map(({ id }) => id);
+            job.revisionId = revisions[0]?.id ?? null;
+            job.currentIntent = intent;
+            job.progress = intent?.intent ? 'Applying the current proposal plan…' : 'Processing the agent calls…';
+            refreshLiveRawResponse(job);
+            renderVersions();
+            renderChatHistory();
+          },
           signal: job.abortController.signal,
         });
         job.revisionId = result.revision?.id ?? null;
@@ -853,19 +911,30 @@ try {
         const turns = parseChatTurns(models.CHAT.text);
         const prior = turns.slice(chatContextStart(turns));
         const prompt = formatChatPacket(prior, job.packet);
-        const result = await koboldClient.chatCompletion({
+        let output = '';
+        let rawResponse = '';
+        let finishReason = null;
+        for await (const event of koboldClient.chatCompletionStream({
           messages: [{ role: 'user', content: prompt }], maxTokens: generationMaxLength, signal: job.abortController.signal,
-        });
-        const output = result.message.content ?? '';
-        if (result.finishReason === 'length' || /\bpropose_change\s*\(/i.test(output)) {
-          const error = new Error(result.finishReason === 'length'
+        })) {
+          output += event.text;
+          rawResponse = event.raw;
+          finishReason = event.finishReason ?? finishReason;
+          job.output = output;
+          job.rawResponse = rawResponse;
+          job.progress = output ? 'Writing reply…' : 'Receiving reply…';
+          refreshLiveRawResponse(job);
+          renderChatHistory();
+        }
+        if (finishReason === 'length' || /\bpropose_change\s*\(/i.test(output)) {
+          const error = new Error(finishReason === 'length'
             ? 'KoboldCpp stopped before completing the chat response. Increase the output limit and retry.'
             : 'KoboldCpp attempted an edit even though no passage was selected. Select text for a change, or retry the chat request.');
-          error.code = result.finishReason === 'length' ? 'TRUNCATED_CHAT_RESPONSE' : 'UNEXPECTED_TOOL_TEXT';
-          error.rawText = result.raw;
+          error.code = finishReason === 'length' ? 'TRUNCATED_CHAT_RESPONSE' : 'UNEXPECTED_TOOL_TEXT';
+          error.rawText = rawResponse;
           throw error;
         }
-        await completeChatJob(job, output, result.raw);
+        await completeChatJob(job, output, rawResponse);
       }
     } catch (error) {
       job.state = error.name === 'AbortError' || error.code === 'ABORTED' ? 'cancelled' : 'failed';

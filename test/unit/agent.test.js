@@ -264,6 +264,7 @@ test('a retracted current-turn proposal is removed from history and CHAT citatio
   const story = 'Original.';
   const history = await createHistory(story, { checkpointInterval: 1000 });
   const requests = [];
+  const progress = [];
   const client = {
     async chatCompletion(options) {
       requests.push(structuredClone(options));
@@ -275,7 +276,7 @@ test('a retracted current-turn proposal is removed from history and CHAT citatio
     },
   };
 
-  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, story.length], request: 'Rewrite.', agentProtocol: AGENT_PROTOCOL });
+  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, story.length], request: 'Rewrite.', agentProtocol: AGENT_PROTOCOL, onProgress: (snapshot) => progress.push(snapshot) });
   const receipt = JSON.parse(requests[3].messages.filter(({ role }) => role === 'tool').at(-2).content);
   assert.equal(receipt.status, 'accepted');
   assert.equal(receipt.revision_id, 1);
@@ -285,6 +286,9 @@ test('a retracted current-turn proposal is removed from history and CHAT citatio
   assert.equal(result.revisions.length, 1);
   assert.equal(await reconstructRevision(history, result.revision.id), 'Right.');
   assert.equal(result.chat, `[#${result.revision.id}](noirdraft://version/STORY/${result.revision.id}) Corrected version ready.`);
+  assert.ok(progress.some(({ revisions }) => revisions.some(({ id }) => id === 1)), 'the first accepted revision appears while pending');
+  assert.deepEqual(progress.at(-1).revisions.map(({ id }) => id), [result.revision.id], 'a retraction removes the old revision from the live result');
+  assert.doesNotMatch(progress.at(-1).chat, /\[#1\]/);
 });
 
 test('multiple proposals from the same base survive as separate preserved sibling branches', async () => {
@@ -535,6 +539,27 @@ test('an empty proposal is refused without creating a revision, and raw text is 
   } finally {
     await server.close();
   }
+});
+
+test('a review with no valid proposal says so without emitting empty revision markers', async () => {
+  const story = 'Original.';
+  const history = await createHistory(story, { checkpointInterval: 1000 });
+  let callCount = 0;
+  const client = {
+    async chatCompletion() {
+      callCount += 1;
+      if (callCount === 1) return goal(1, 'Rewrite the sentence.');
+      if (callCount === 2) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'bad', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"replace","text":""}' } }] }, raw: 'bad' };
+      if (callCount === 3) return review();
+      if (callCount === 4) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'good', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"replace","text":"Rewritten."}' } }] }, raw: 'good' };
+      if (callCount === 5) return review();
+      return finish('A revision is ready.');
+    },
+  };
+  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, story.length], request: 'Rewrite it.', agentProtocol: AGENT_PROTOCOL });
+  assert.match(result.rawResponse, /NOIRDRAFT REVIEW[\s\S]*No valid changes to inspect\. No valid change was created; rejected calls do not create revisions\./);
+  assert.match(result.rawResponse, /No valid changes to inspect\. No valid change was created; rejected calls do not create revisions\.\n\[noirdraft end tool result: review\]/);
+  assert.match(result.rawResponse, /\[noirdraft tool result: review\][\s\S]*\[noirdraft end tool result: review\]/);
 });
 
 test('a request binds to its exact base revision and refuses a stale one', async () => {

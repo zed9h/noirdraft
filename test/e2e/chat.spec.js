@@ -105,6 +105,23 @@ test('CHAT anchors a short history to the bottom before it overflows', async () 
   }
 });
 
+test('the draft USER header opens its context preview even when the prompt is empty', async () => {
+  const application = await electron.launch({
+    args: [path.resolve('.')],
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
+  });
+  try {
+    const window = await application.firstWindow();
+    await window.getByRole('button', { name: 'Preview context for draft message' }).click();
+    const dialog = window.locator('[data-context-dialog]');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('.context-prompt')).toContainText('<noirdraft_turn>');
+    await expect(dialog.locator('.context-prompt')).toContainText('<request><![CDATA[]]></request>');
+  } finally {
+    await application.close();
+  }
+});
+
 test('a selected middle-pane range becomes a queued chat rewrite while Send remains available', async () => {
   const application = await electron.launch({
     args: [path.resolve('.')],
@@ -135,26 +152,37 @@ test('a selected middle-pane range becomes a queued chat rewrite while Send rema
     await window.getByRole('button', { name: 'Show raw response for turn 1' }).click();
     const rawDialog = window.locator('[data-context-dialog]');
     await expect(rawDialog).toBeVisible();
-    await expect(rawDialog.locator('.context-prompt')).toContainText('tool_calls');
-    await expect(rawDialog.locator('.context-prompt')).not.toContainText('Revision STORY');
+    const rawPrompt = rawDialog.locator('.context-prompt');
+    await expect(rawPrompt).toContainText('tool_calls');
+    await expect(rawPrompt).not.toContainText('Revision STORY');
+    const toolResult = rawPrompt.locator('.raw-tool-result').first();
+    await expect(toolResult).toContainText('[noirdraft tool result:');
+    await expect(toolResult).toContainText('[noirdraft end tool result:');
+    await expect.poll(() => toolResult.evaluate((element) => getComputedStyle(element).color)).toBe('rgb(140, 135, 128)');
+    await expect.poll(() => rawPrompt.locator('.raw-model-output').first().evaluate((element) => getComputedStyle(element).color)).toBe('rgb(246, 243, 238)');
   } finally {
     await server.close();
     await application.close();
   }
 });
 
-test('ordinary chat persists assistant text while its session inspector retains the raw JSON response', async () => {
+test('ordinary chat shows its live plan and raw response while it is pending', async () => {
   const application = await electron.launch({
     args: [path.resolve('.')],
     env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
   });
-  const server = await startFakeKoboldServer({ tokens: ['Plain chat reply.'] });
+  const server = await startFakeKoboldServer({ tokens: ['Plain ', 'chat ', 'reply.'], tokenDelayMs: 40 });
   try {
     const window = await application.firstWindow();
     await window.waitForFunction(() => Boolean(window.__noirDraftTest?.getCommitController()));
     await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
     await window.getByLabel('Chat prompt').fill('Say hello.');
     await window.getByRole('button', { name: 'Send' }).click();
+    await expect(window.getByLabel('Chat history')).toContainText('Current proposal intent: Greet the author.');
+    await window.getByRole('button', { name: 'Show raw response for pending turn 1' }).click();
+    const pendingRawDialog = window.locator('[data-context-dialog]');
+    await expect(pendingRawDialog.locator('.context-prompt')).toContainText('plan_chat');
+    await pendingRawDialog.getByRole('button', { name: 'Close context' }).click();
     await expect(window.getByLabel('Chat history')).toContainText('Plain chat reply.');
     await window.getByRole('button', { name: 'Show raw response for turn 1' }).click();
     const rawDialog = window.locator('[data-context-dialog]');

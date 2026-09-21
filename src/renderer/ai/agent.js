@@ -162,7 +162,7 @@ function addedDiffText(before, after) {
   return added.length ? added.join('\n') : '+(no added text)';
 }
 
-function reviewResultText(revisions, baseText, { from, to }, resultTexts, goal, currentPlan, recovery, formatWarnings) {
+function reviewResultText(revisions, baseText, { from, to }, resultTexts, goal, currentPlan, recovery, formatWarnings, invalidCalls) {
   const remaining = goal.change_alternatives_count - revisions.length;
   const nextAction = formatWarnings.length
     ? { action: 'correct_formatting', instruction: 'Retract the warned proposals and submit corrected siblings before treating the count as progress.' }
@@ -192,6 +192,13 @@ function reviewResultText(revisions, baseText, { from, to }, resultTexts, goal, 
     `Pending: submit ${currentPlan.change_alternatives_count} alternatives for this change — ${currentPlan.intent} Acceptance criteria: ${pendingCriteria}`,
     `Question: Does every alternative fulfill the author request, remain distinct, and read correctly in context? ${nextAction.instruction}${warnings}`,
   ];
+  if (revisions.length === 0) {
+    const attempted = invalidCalls > 0
+      ? ' No valid change was created; rejected calls do not create revisions.'
+      : ' No change is currently available for inspection.';
+    lines.push(`No valid changes to inspect.${attempted}`);
+    return lines.join('\n');
+  }
   lines.push('Proposals to inspect:');
   for (const revision of revisions) {
     lines.push(`----- REVISION #${revision.id} -----`);
@@ -252,6 +259,7 @@ export async function requestRewrite({
   agentProtocol,
   generationOptions = {},
   onToken,
+  onProgress,
   signal,
 }) {
   const baseText = await reconstructRevision(history, baseRevisionId);
@@ -323,6 +331,15 @@ export async function requestRewrite({
   let failedReviews = 0;
   let giveUpAllowed = false;
   let currentPlanAvailable = false;
+  const currentChat = () => chatParts.flatMap((part) => part.type === 'chat'
+    ? [part.text]
+    : part.revisions.filter((revision) => history.revisions.get(revision.id) === revision).map((revision) => `[#${revision.id}](noirdraft://version/${root}/${revision.id})`)).join(' ');
+  const reportProgress = () => onProgress?.({
+    rawResponse: rawResponse ?? generated,
+    chat: currentChat(),
+    revisions: [...revisions],
+    intent: currentPlan ?? chatPlan,
+  });
   const allowedNextCalls = () => {
     if (chatPlan) return ['plan_chat', 'plan_changes', 'send_chat'];
     if (!changesGoal) {
@@ -394,6 +411,7 @@ export async function requestRewrite({
   };
   let calls = nativeCalls;
   let message = nativeMessage;
+  reportProgress();
   const addChat = (content) => {
     const text = String(content ?? '').trim();
     if (text) chatParts.push({ type: 'chat', text });
@@ -602,7 +620,7 @@ export async function requestRewrite({
     const toolResults = results.map(({ call, revision, status, reason, turn_intent: turnIntent, current_intent: currentIntent, chat_intent: chatIntent, manager_prompt: managerPrompt, recovery, format_warnings: formatWarnings = [] }) => ({
       role: 'tool', tool_call_id: call.id,
       content: status === 'review_ready'
-        ? reviewResultText(revisions, baseText, { from, to }, resultTexts, changesGoal, currentPlan, recovery, formatWarnings)
+        ? reviewResultText(revisions, baseText, { from, to }, resultTexts, changesGoal, currentPlan, recovery, formatWarnings, invalidCalls)
         : status === 'chat_review'
           ? chatReviewText(chatIntent)
           : currentIntent
@@ -610,13 +628,15 @@ export async function requestRewrite({
           : changeResultJSON({ status, revision, reason, turnIntent, allowedCalls: status === 'rejected' ? allowedNextCalls() : null, recommendedAction: status === 'rejected' ? recommendedAction() : null, summary: status === 'finished' ? turnSummary : null }),
     }));
     transcript.push(message, ...toolResults);
-    rawTrace.push(...toolResults.map(({ tool_call_id: callId, content }) => `[noirdraft tool result: ${callId}]\n${content}`));
+    rawTrace.push(...toolResults.map(({ tool_call_id: callId, content }) => `[noirdraft tool result: ${callId}]\n${content}\n[noirdraft end tool result: ${callId}]`));
     rawResponse = rawTrace.join('\n\n');
+    reportProgress();
     if (finished) break;
     try {
       const next = await client.chatCompletion({ messages: transcript, tools: AGENT_TOOLS, toolChoice: 'required', maxTokens: Math.max(MIN_TOOL_RESPONSE_TOKENS, generationOptions.max_length ?? 0), temperature: generationOptions.temperature ?? 0, signal });
       if (next.raw) rawTrace.push(next.raw);
       rawResponse = rawTrace.join('\n\n');
+      reportProgress();
       assertCompleteToolResponse({ message: next.message, finishReason: next.finishReason, raw: rawResponse, required: true });
       message = next.message;
       calls = message.tool_calls;
@@ -630,9 +650,7 @@ export async function requestRewrite({
       code: 'UNFINISHED_TURN', rawText: rawResponse,
     });
   }
-  const chat = chatParts.flatMap((part) => part.type === 'chat'
-    ? [part.text]
-    : part.revisions.filter((revision) => history.revisions.get(revision.id) === revision).map((revision) => `[#${revision.id}](noirdraft://version/${root}/${revision.id})`)).join(' ');
+  const chat = currentChat();
   if (revisions.length === 0 && chat === '') throw new AgentError('KoboldCpp returned neither a change nor a chat reply.', { code: 'EMPTY_RESPONSE', rawText: rawResponse });
   return {
     revision: revisions[0] ?? null,
