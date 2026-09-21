@@ -142,7 +142,7 @@ function reviewResultText(revisions, baseText, { from, to }, resultTexts, goal, 
   const nextAction = formatWarnings.length
     ? { action: 'correct_formatting', instruction: 'Retract the warned proposals and submit corrected siblings before treating the count as progress.' }
     : remaining === 0
-    ? { action: 'finish_or_correct', instruction: 'The turn intent is met. Retract weak changes if needed; otherwise finish the turn.' }
+    ? { action: 'finish_or_correct', instruction: 'The objective is met. Retract weak alternatives if needed; otherwise finish the turn.' }
     : recovery.stage === 'direct_retry'
       ? { action: 'continue', remaining_changes: Math.max(0, remaining), instruction: 'First recovery: retry directly with fresh, distinct candidates. Do not finish yet; rejected duplicates are recoverable.' }
       : recovery.stage === 'plan_retry'
@@ -155,25 +155,24 @@ function reviewResultText(revisions, baseText, { from, to }, resultTexts, goal, 
     : remaining > 0
       ? `Not complete — ${revisions.length} alternatives are ready; ${remaining} still needed.`
       : `Over the turn intent — ${revisions.length} alternatives are ready; ${-remaining} should be retracted.`;
+  const criteria = goal.acceptance_criteria || 'Faithfully fulfill the author request.';
+  const pendingCriteria = currentPlan.acceptance_criteria || criteria;
+  const warnings = formatWarnings.length
+    ? ` Formatting to correct: ${formatWarnings.map((warning) => `revision #${warning.revision_id} — ${warning.message}`).join('; ')}.`
+    : '';
   const lines = [
     'NOIRDRAFT REVIEW',
-    `Turn intent: submit ${goal.alternative_count} alternatives.`,
-    `Current intent: submit ${currentPlan.alternative_count} alternatives — ${currentPlan.intent}`,
+    `Objective: submit ${goal.alternative_count} alternatives — ${goal.intent} Acceptance criteria: ${criteria}`,
     `Progress: ${progress}`,
-    `Acceptance criteria: ${goal.acceptance_criteria || 'Faithfully fulfill the author request.'}`,
-    'Question: Does every alternative fulfill the author request, remain distinct, and read correctly in context?',
+    `Pending: submit ${currentPlan.alternative_count} alternatives — ${currentPlan.intent} Acceptance criteria: ${pendingCriteria}`,
+    `Question: Does every alternative fulfill the author request, remain distinct, and read correctly in context? ${nextAction.instruction}${warnings}`,
   ];
-  if (formatWarnings.length) {
-    lines.push('Formatting warnings:');
-    for (const warning of formatWarnings) lines.push(`- Revision #${warning.revision_id}: ${warning.message}`);
-  }
   lines.push('Proposals to inspect:');
   for (const revision of revisions) {
-    lines.push(`----- REVISION #${revision.id}: ADDED TEXT -----`);
+    lines.push(`----- REVISION #${revision.id} -----`);
     lines.push(addedDiffText(baseText, resultTexts.get(revision.id)));
-    lines.push(`----- END REVISION #${revision.id} -----`);
   }
-  lines.push(`Manager direction (${recovery.stage}): ${nextAction.instruction}`);
+  lines.push('----- END REVISIONS -----');
   return lines.join('\n');
 }
 
@@ -410,7 +409,11 @@ export async function requestRewrite({
           acceptance_criteria: typeof acceptanceCriteria === 'string' ? acceptanceCriteria.trim() : '',
         };
         batchPlanAvailable = true;
-        const plan = { alternative_count: alternativeCount, intent: intent.trim() };
+        const plan = {
+          alternative_count: alternativeCount,
+          intent: intent.trim(),
+          acceptance_criteria: typeof acceptanceCriteria === 'string' ? acceptanceCriteria.trim() : '',
+        };
         currentPlan = plan;
         results.push({ call, status: 'accepted', turn_intent: isInitialPlan ? changesGoal : null, current_intent: plan, manager_prompt: isInitialPlan
           ? 'Turn intent recorded. Submit the first alternatives when ready.'

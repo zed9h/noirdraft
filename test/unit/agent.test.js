@@ -95,7 +95,7 @@ test('a word-like insertion is automatically separated from surrounding words', 
   };
   const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [4, 4], request: 'Add a fruit.', agentProtocol: AGENT_PROTOCOL });
   assert.equal(await reconstructRevision(history, result.revision.id), 'word fruit.');
-  assert.match(result.rawResponse, /----- REVISION #1: ADDED TEXT -----\n\+word fruit\./);
+  assert.match(result.rawResponse, /----- REVISION #1 -----\n\+word fruit\./);
   assert.doesNotMatch(result.rawResponse, /Formatting warnings:/);
 });
 
@@ -118,7 +118,8 @@ test('finish_turn is rejected until review_alternatives follows the last alterna
   assert.match(result.rawResponse, /"reason":"Call review_alternatives after the last alternative change, then finish in a later response\."/);
   assert.match(result.rawResponse, /"allowed_calls":\["plan_alternatives","submit_alternative","retract_alternative","review_alternatives"\]/);
   assert.match(result.rawResponse, /"recommended_action":\{"call":"review_alternatives"/);
-  assert.match(result.rawResponse, /NOIRDRAFT REVIEW\nTurn intent: submit 1 alternatives\.\nCurrent intent: submit 1 alternatives/);
+  assert.match(result.rawResponse, /NOIRDRAFT REVIEW\nObjective: submit 1 alternatives/);
+  assert.match(result.rawResponse, /Pending: submit 1 alternatives/);
 });
 
 test('an incomplete review rejects both completion and premature failure, then directs a retry', async () => {
@@ -141,7 +142,7 @@ test('an incomplete review rejects both completion and premature failure, then d
   const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, story.length], request: 'Give two versions.', agentProtocol: AGENT_PROTOCOL });
   assert.equal(result.chat, '[#1](noirdraft://version/STORY/1) [#2](noirdraft://version/STORY/2) Two versions are ready.');
   assert.match(result.rawResponse, /Progress: Not complete — 1 alternatives are ready; 1 still needed\./);
-  assert.match(result.rawResponse, /Manager direction \(direct_retry\):/);
+  assert.match(result.rawResponse, /Question: .*First recovery: retry directly/);
   assert.match(result.rawResponse, /"reason":"The turn intent is 2 alternatives; review found 1\."/);
   assert.match(result.rawResponse, /"reason":"Follow the current managed recovery action before declaring the goal unable\."/);
 });
@@ -166,7 +167,7 @@ test('the second incomplete review accepts a next-batch plan and its guidance', 
   };
   const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, story.length], request: 'Give two versions.', agentProtocol: AGENT_PROTOCOL });
   assert.equal(result.revisions.length, 2);
-  assert.match(result.rawResponse, /Manager direction \(plan_retry\):/);
+  assert.match(result.rawResponse, /Question: .*Second recovery: call plan_alternatives/);
   assert.match(result.rawResponse, /"manager_prompt":"Turn intent remains 2 alternatives\./);
   assert.match(result.rawResponse, /"recommended_action":\{"call":"submit_alternative","attempt":"Apply the current plan/);
 });
@@ -194,8 +195,8 @@ test('managed recovery permits unable only after direct, planned, and creative r
   };
   const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, story.length], request: 'Give two versions.', agentProtocol: AGENT_PROTOCOL });
   assert.equal(result.chat, '[#1](noirdraft://version/STORY/1) I could not find a second distinct option.');
-  assert.match(result.rawResponse, /Manager direction \(creative_retry\):/);
-  assert.match(result.rawResponse, /Manager direction \(give_up\):/);
+  assert.match(result.rawResponse, /Question: .*Final recovery: use imaginative/);
+  assert.match(result.rawResponse, /Question: .*managed recovery attempts are exhausted/);
 });
 
 test('a cursor proposal returns its edited context so the model can submit a corrected sibling', async () => {
@@ -222,8 +223,9 @@ test('a cursor proposal returns its edited context so the model can submit a cor
   assert.equal(receipt.candidate_context, undefined);
   const changeReview = requests[4].messages.at(-1).content;
   assert.match(changeReview, /^NOIRDRAFT REVIEW/m);
-  assert.match(changeReview, /Turn intent: submit 2 alternatives\./);
-  assert.match(changeReview, /----- REVISION #2: ADDED TEXT -----\n\+left new right/);
+  assert.match(changeReview, /Objective: submit 2 alternatives/);
+  assert.match(changeReview, /----- REVISION #2 -----\n\+left new right/);
+  assert.match(changeReview, /----- END REVISIONS -----/);
   assert.equal(result.revisions.length, 2);
   assert.equal(await reconstructRevision(history, result.revisions[1].id), 'left new right');
 });
