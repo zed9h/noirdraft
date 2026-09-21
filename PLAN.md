@@ -600,9 +600,9 @@ Initial reserved roots:
 
 ```markdown
 # STORY
-# METADATA
-# CHAT
 # VERSIONS
+# CHAT
+# METADATA
 ```
 
 Only H1 headings are interpreted as root namespaces.

@@ -1901,9 +1901,9 @@ try {
 
   const buildProjectContents = () => {
     const replacements = new Map([['STORY', models.STORY.text]]);
-    if (project.roots.METADATA || metadataDirty || models.METADATA.text) replacements.set('METADATA', models.METADATA.text);
-    if (project.roots.CHAT || chatDirty || models.CHAT.text) replacements.set('CHAT', models.CHAT.text);
     replacements.set('VERSIONS', serializeHistories({ STORY: history, METADATA: metadataHistory }));
+    if (project.roots.CHAT || chatDirty || models.CHAT.text) replacements.set('CHAT', models.CHAT.text);
+    if (project.roots.METADATA || metadataDirty || models.METADATA.text) replacements.set('METADATA', models.METADATA.text);
     return serializeProjectDocument(project, replacements);
   };
   getStorageContents = buildProjectContents;

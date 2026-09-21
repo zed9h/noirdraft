@@ -1,4 +1,4 @@
-export const RESERVED_ROOTS = Object.freeze(['STORY', 'METADATA', 'CHAT', 'VERSIONS']);
+export const RESERVED_ROOTS = Object.freeze(['STORY', 'VERSIONS', 'CHAT', 'METADATA']);
 
 export class ProjectDocumentError extends Error {
   constructor(message, { code, root, offsets = [], project = null } = {}) {

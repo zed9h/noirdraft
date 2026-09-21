@@ -87,6 +87,25 @@ test('serializer creates missing optional roots using the existing line ending',
   assert.equal(serialized, '# STORY\r\n\r\n## Chapter\r\n# CHAT\r\n\r\n## Session\r\n');
 });
 
+test('serializer places newly created reserved roots in preferred order', () => {
+  const project = parseProjectDocument([
+    '# STORY\n\n## Chapter\n',
+    '# AUTHOR-NOTES\nKeep this section in place.\n',
+    '# VERSIONS\n\nVersion data\n',
+  ].join(''));
+  const serialized = serializeProjectDocument(project, new Map([
+    ['CHAT', '## Session\n'],
+    ['METADATA', '# Notes\n'],
+  ]));
+  assert.equal(serialized, [
+    '# STORY\n\n## Chapter\n',
+    '# AUTHOR-NOTES\nKeep this section in place.\n',
+    '# VERSIONS\n\nVersion data\n',
+    '# CHAT\n\n### Session\n',
+    '# METADATA\n\n## Notes\n',
+  ].join(''));
+});
+
 test('unknown-only and rootless documents remain byte-identical when untouched', () => {
   for (const source of ['free text\n', '# UNKNOWN\nvalue\n']) {
     assert.equal(serializeProjectDocument(parseProjectDocument(source)), source);

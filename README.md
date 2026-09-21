@@ -21,9 +21,9 @@ NoirDraft recognizes ordinary top-level Markdown roots:
 
 ```markdown
 # STORY
-# METADATA
-# CHAT
 # VERSIONS
+# CHAT
+# METADATA
 ```
 
 There is no database, proprietary project file, or binary sidecar. STORY is shown without its storage heading, so visible story heading levels are promoted in the editor and restored on save. Unknown roots are preserved. See [PLAN.md](PLAN.md) for the complete contract.
