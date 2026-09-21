@@ -476,6 +476,26 @@ test('a later chat plan replaces the proposed reply before it is sent', async ()
   assert.match(result.rawResponse, /Intent: Give a quick reply\.[\s\S]*Intent: Give a clearer reply\./);
 });
 
+test('a chat plan may be reconsidered as a change plan before any text is sent', async () => {
+  const story = 'Original.';
+  const history = await createHistory(story, { checkpointInterval: 1000 });
+  let callCount = 0;
+  const client = {
+    async chatCompletion() {
+      callCount += 1;
+      if (callCount === 1) return chatPlan('Explain the request.', 'I can help with that.');
+      if (callCount === 2) return goal(1, 'Rewrite the selected sentence.');
+      if (callCount === 3) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'change', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"replace","text":"Rewritten."}' } }] }, raw: 'change' };
+      if (callCount === 4) return review();
+      return finish('A revision is ready.');
+    },
+  };
+  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, story.length], request: 'Rewrite it.', agentProtocol: AGENT_PROTOCOL });
+  assert.equal(result.chat, '[#1](noirdraft://version/STORY/1) A revision is ready.');
+  assert.equal(await reconstructRevision(history, result.revision.id), 'Rewritten.');
+  assert.match(result.rawResponse, /NOIRDRAFT CHAT REVIEW[\s\S]*Turn intent recorded/);
+});
+
 test('a disconnected server is contained as an AgentError without creating any revision', async () => {
   const story = '# Chapter\n\nText.\n';
   const history = await createHistory(story, { checkpointInterval: 1000 });

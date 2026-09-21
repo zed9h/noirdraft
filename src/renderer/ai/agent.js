@@ -324,7 +324,7 @@ export async function requestRewrite({
   let giveUpAllowed = false;
   let currentPlanAvailable = false;
   const allowedNextCalls = () => {
-    if (chatPlan) return ['plan_chat', 'send_chat'];
+    if (chatPlan) return ['plan_chat', 'plan_changes', 'send_chat'];
     if (!changesGoal) {
       return ['plan_chat', 'plan_changes'];
     }
@@ -342,7 +342,7 @@ export async function requestRewrite({
     return actions;
   };
   const recommendedAction = () => {
-    if (chatPlan) return { call: 'send_chat', attempt: 'Send the reviewed proposed reply unchanged, or call plan_chat again to replace it.' };
+    if (chatPlan) return { call: 'send_chat', attempt: 'Send the reviewed proposed reply unchanged, call plan_chat to replace it, or call plan_changes if you now judge that the author asked for an edit.' };
     if (!changesGoal) return { call: 'plan_chat or plan_changes', attempt: 'Use plan_chat when no edit was requested; otherwise state how many versions of the change you intend to submit and their creative intent.' };
     if (changeCallVersion > 0 && reviewedChangeCallVersion !== changeCallVersion) {
       return { call: 'review_changes', attempt: 'Inspect the changes or retractions made since the last review before trying to finish.' };
@@ -477,11 +477,7 @@ export async function requestRewrite({
           results.push({ call, status: 'rejected', reason: 'plan_changes requires a positive change_alternatives_count and a nonempty intent.' });
           continue;
         }
-        if (chatPlan) {
-          invalidCalls += 1;
-          results.push({ call, status: 'rejected', reason: 'This turn has a reviewed chat proposal. Use send_chat to publish it or plan_chat to replace it.' });
-          continue;
-        }
+        if (chatPlan) chatPlan = null;
         const isInitialPlan = !changesGoal;
         if (isInitialPlan) changesGoal = {
           change_alternatives_count: changeAlternativesCount,
