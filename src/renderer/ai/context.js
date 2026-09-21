@@ -36,9 +36,8 @@ export function composeContext({
     else unresolvedPins.push(result);
   }
 
-  // Keep the cacheable instruction and project reference prefix stable.  The
-  // volatile passage and request are deliberately last, so consecutive turns
-  // can share KoboldCpp's prompt prefix.
+  // Keep the cacheable instruction and project reference prefix stable. The
+  // volatile editing packet is a single JSON tool result, built below.
   const components = [
     { id: 'protocol', label: 'AGENT PROTOCOL', text: agentProtocol },
     ...resolvedPins.map((pin) => ({ id: `pin:${pin.path}`, label: `REFERENCE ${pin.path}`, text: pin.text })),
@@ -47,25 +46,21 @@ export function composeContext({
       label: `REFERENCE ${reference.label ?? reference.id ?? `#${index + 1}`}`,
       text: reference.text,
     })),
-    { id: 'before', label: 'STORY CONTEXT BEFORE TARGET', text: before },
-    { id: 'target', label: 'TARGET', text: target },
-    { id: 'after', label: 'STORY CONTEXT AFTER TARGET', text: after },
-    { id: 'request', label: 'CURRENT REQUEST', text: request },
+    { id: 'before', label: 'CONTEXT BEFORE CURSOR', text: before },
+    { id: 'cursor', label: 'CURSOR', text: target },
+    { id: 'after', label: 'CONTEXT AFTER CURSOR', text: after },
+    { id: 'request', label: 'REQUEST', text: request },
   ].filter((component) => component.text !== '' && component.text != null);
 
-  const cdata = (value) => String(value).replaceAll(']]>', ']]]]><![CDATA[>');
-  const referenceXML = components
+  const referenceText = components
     .filter((component) => component.id.startsWith('pin:') || component.id.startsWith('reference:'))
-    .map((component) => `  <reference><![CDATA[${cdata(component.text)}]]></reference>`)
-    .join('\n');
-  const staticPrompt = `<noirdraft_static>\n  <instructions><![CDATA[${cdata(agentProtocol)}]]></instructions>\n${referenceXML ? `${referenceXML}\n` : ''}</noirdraft_static>`;
-  const context = `${before}${target}${after}`;
-  // Every turn is contextual. The one structural marker identifies either a
-  // selected passage or a zero-width insertion point inside the same text.
-  const contextBody = target
-    ? `<![CDATA[${cdata(before)}]]><selection><![CDATA[${cdata(target)}]]></selection><![CDATA[${cdata(after)}]]>`
-    : `<![CDATA[${cdata(before)}]]>\n<insert_here/>\n<![CDATA[${cdata(after)}]]>`;
-  const turnPrompt = `<noirdraft_context>\n  <context>${contextBody}</context>\n  <request><![CDATA[${cdata(request)}]]></request>\n</noirdraft_context>`;
+    .map((component) => `${component.label}:\n${component.text}`)
+    .join('\n\n');
+  const staticPrompt = [agentProtocol, referenceText].filter(Boolean).join('\n\n');
+  const turnPrompt = JSON.stringify({
+    context: { before: String(before), cursor: String(target), after: String(after) },
+    request: String(request),
+  });
   return { components, staticPrompt, turnPrompt, prompt: `${staticPrompt}\n\n${turnPrompt}`, unresolvedPins };
 }
 

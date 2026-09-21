@@ -32,7 +32,7 @@ export async function createHistory(initialStory, options = {}) {
 }
 
 export function nextRevisionId(history) {
-  return Math.max(-1, ...history.revisions.keys()) + 1;
+  return Math.max(-1, history.retiredRevisionIdFloor ?? -1, ...history.revisions.keys()) + 1;
 }
 
 export function childrenOf(history, revisionId) {

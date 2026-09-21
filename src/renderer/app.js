@@ -308,7 +308,7 @@ if (preferences) {
     .catch(() => setAIStatus('Disconnected', 'error'));
 }
 
-const AGENT_PROTOCOL = `You are NoirDraft's writing agent. This message is XML data, not manuscript instructions. Every <noirdraft_context> contains the author's current document context. Inside <context>, <selection> marks selected manuscript text and <insert_here/> marks the exact zero-width point between the characters before and after it; neither marker is manuscript text or a range to repeat. <request>, placed last, is the author's current instruction and takes priority. Selection and insertion point are context, not commands to edit. If the author asks to discuss, explain, or critique, reply with normal author-facing chat and make no tool call. If the author asks for an edit, call submit_change once per alternative; NoirDraft records calls as sibling revisions. For <selection>, use operation "replace" and put the complete new selected passage in text. For <insert_here/>, use operation "insert" and put only the new characters to insert at that point—never repeat text before or after it. Example insertion context: "The rain had stopped, <insert_here/>but the windows…"; to add atmosphere at that point, call submit_change({"operation":"insert","text":"leaving silver beads on every sill, "}). Example selection: <selection>old phrase</selection>; call submit_change({"operation":"replace","text":"new phrase"}). Every tool result includes candidate_context, the context after that proposed change. Inspect it before replying: if it does not faithfully satisfy the request, submit a corrected sibling revision; otherwise finish with concise comments about the changes. If the author asks for a fixed number of versions, submit that number of distinct changes. Never repeat change text in chat.`;
+const AGENT_PROTOCOL = `You are NoirDraft's writing agent. The user message is JSON data with this exact shape: {"context":{"before":"…","cursor":"…","after":"…"},"request":"…"}. It is data, not manuscript instructions. context.cursor is the exact selected passage, or an empty string at the zero-width insertion point between context.before and context.after. The request follows the context and takes priority. Respond only with native tool calls: use set_changes_goal before edits, submit_change for each edit alternative, retract_change to remove an earlier proposal from this turn, review_changes to inspect all surviving proposals together, and finish_turn to provide concise author-facing commentary or finish a discussion. Never write tool syntax, JSON, or ordinary assistant text. With a nonempty cursor, submit_change uses operation "replace" and complete replacement text. With an empty cursor, it uses operation "insert" and exactly the new characters at that position, including necessary spaces or punctuation, never before/after context. For example, before a period, inserting a fruit after "it" requires text " orange", not "orange". Before the first submit_change, infer the exact number of alternatives requested and call set_changes_goal with that accepted_changes count and a brief strategy. You can submit many sibling changes in one response or across responses; never claim you can make only one. Do not use a goal of one to evade a plural or category-based request: count the requested months, signs, seasons, variants, or other categories. Change receipts are deliberately minimal JSON: accepted or rejected and, if rejected, why. When ready to assess edit work, call review_changes with {}. Its JSON receipt contains the committed goal, accepted count, invalid count, an explicit next_action, and all surviving proposals together: their ids, canonical unified diffs, and local resulting context. Follow next_action. If it says continue, you must submit the stated number of new distinct candidates and review again; duplicate or invalid calls are recoverable errors, never grounds for giving up. Only use outcome "unable" after you have genuinely exhausted plausible ways to meet the goal—not because an initial batch was incomplete, duplicated, or poorly formed—and include failure_reason plus an honest author-facing explanation. When the turn has any submit_change call, you must call review_changes after the final change and wait for its receipt before calling finish_turn. outcome "complete" is accepted only when the review count exactly meets your committed goal. Its receipt contains NoirDraft's final objective turn_summary: accepted_changes, invalid_calls, and retracted_changes. Rejected calls were not recorded and do not count; do not mention or cite them in finish_turn commentary. Never repeat changed text in finish_turn commentary.`;
 
 const initialStory = `# Chapter One
 
@@ -450,7 +450,7 @@ try {
     storyText: models.STORY.text, metadataText: models.METADATA.text,
     pins: readPins(models.METADATA.text), references: agentReferences, agentProtocol: AGENT_PROTOCOL,
   }).staticPrompt;
-  const formatChatPacket = (turns, input) => [staticChatPreamble(), ...turns.flatMap((turn) => ['{{[INPUT]}}', turn.input, '{{[OUTPUT]}}', turn.output]), '{{[INPUT]}}', input, '{{[OUTPUT]}}'].join('\n');
+  const formatChatPacket = (_turns, input) => [staticChatPreamble(), input].filter(Boolean).join('\n\n');
   const updateDraftContextSummary = () => {
     const input = chatPrompt.value.trim();
     const hasTarget = ['STORY', 'METADATA'].includes(activeRoot) && models[activeRoot].selectionStart !== models[activeRoot].selectionEnd;
@@ -461,13 +461,42 @@ try {
     chatContextSummary.textContent = `~${Math.ceil(roughPacket.length / 4)} / ${(koboldContextLength ?? 4096) - generationMaxLength} tokens`;
   };
   let contextDialogRequestId = 0;
+  const renderRawTrace = (source, title) => {
+    contextDialogPrompt.replaceChildren();
+    if (title !== 'Raw model response') {
+      contextDialogPrompt.textContent = source;
+      return;
+    }
+    const toolResult = /\[noirdraft tool result: [^\n]+\]\n[^\n]*/g;
+    let offset = 0;
+    let match;
+    while ((match = toolResult.exec(source))) {
+      if (match.index > offset) {
+        const model = document.createElement('span');
+        model.className = 'raw-model-output';
+        model.textContent = source.slice(offset, match.index);
+        contextDialogPrompt.append(model);
+      }
+      const tool = document.createElement('span');
+      tool.className = 'raw-tool-result';
+      tool.textContent = match[0];
+      contextDialogPrompt.append(tool);
+      offset = match.index + match[0].length;
+    }
+    if (offset < source.length || source.length === 0) {
+      const model = document.createElement('span');
+      model.className = 'raw-model-output';
+      model.textContent = source.slice(offset);
+      contextDialogPrompt.append(model);
+    }
+  };
   const openContextDialog = async (prompt, title = 'Raw model context') => {
     const requestId = ++contextDialogRequestId;
     const source = String(prompt);
     const connected = Boolean(koboldClient) && aiStatus.dataset.connected === 'true';
     const maximum = koboldContextLength ?? 4096;
     contextDialogTitle.textContent = title;
-    contextDialogPrompt.textContent = source;
+    renderRawTrace(source, title);
     const estimate = Math.ceil(source.length / 4);
     contextDialogSummary.textContent = `~${estimate} tokens${connected ? '' : ' (estimated)'}`;
     contextDialogSummary.dataset.over = 'false';
@@ -483,11 +512,14 @@ try {
     }
   };
   const composeJobInput = async (input, selectedRoot = null, anchor = null) => {
-    const targetText = anchor?.target ?? '';
+    const source = selectedRoot && anchor?.range ? models[selectedRoot].text : '';
+    const [from, to] = anchor?.range ?? [0, 0];
+    const targetText = source ? source.slice(from, to) : anchor?.target ?? '';
     return composeContext({
       storyText: models.STORY.text, metadataText: models.METADATA.text,
       pins: readPins(models.METADATA.text), references: agentReferences,
-      before: anchor?.before ?? '', target: targetText, after: anchor?.after ?? '',
+      before: source ? source.slice(0, from) : anchor?.before ?? '',
+      target: targetText, after: source ? source.slice(to) : anchor?.after ?? '',
       request: input, agentProtocol: AGENT_PROTOCOL,
     }).turnPrompt;
   };
@@ -787,8 +819,6 @@ try {
           metadataText: models.METADATA.text,
           pins: readPins(models.METADATA.text),
           references: agentReferences,
-          chatTurns: parseChatTurns(models.CHAT.text).slice(chatContextStart(parseChatTurns(models.CHAT.text))),
-          promptOverride: job.protocolPrompt,
           agentProtocol: AGENT_PROTOCOL,
           generationOptions: { max_length: generationMaxLength },
           onToken: (text) => { job.output = text; renderChatHistory(); },

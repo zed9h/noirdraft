@@ -53,7 +53,7 @@ test('chat turn ranges isolate only complete compact turns for confirmed deletio
 });
 
 test('CHAT displays the author request while preserving the complete stored model input', () => {
-  const packet = '<noirdraft><request><![CDATA[Give me three versions.]]></request></noirdraft>';
+  const packet = JSON.stringify({ context: { before: 'Before', cursor: 'Selection', after: 'After' }, request: 'Give me three versions.' });
   assert.equal(displayChatInput(packet), 'Give me three versions.');
   assert.equal(displayChatInput('Old handwritten question?'), 'Old handwritten question?');
 });

@@ -135,10 +135,10 @@ export class KoboldClient {
 
   /** OpenAI-compatible chat completion. When tools are supplied, KoboldCpp
    * applies the loaded model's native tool template and returns tool_calls. */
-  async chatCompletion({ messages, tools = [], toolChoice = 'auto', maxTokens = 200, signal }) {
+  async chatCompletion({ messages, tools = [], toolChoice = 'auto', maxTokens = 200, temperature = 0, signal }) {
     let response;
     try {
-      const payload = { model: 'koboldcpp', messages, max_tokens: maxTokens, temperature: 0 };
+      const payload = { model: 'koboldcpp', messages, max_tokens: maxTokens, temperature };
       if (tools.length > 0) {
         payload.tools = tools;
         payload.tool_choice = toolChoice;

@@ -20,16 +20,18 @@ test('composeContext resolves pins and lays out clearly delimited, ordered secti
   assert.deepEqual(result.components.map((component) => component.label), [
     'AGENT PROTOCOL',
     'REFERENCE METADATA/Characters/Maria',
-    'STORY CONTEXT BEFORE TARGET',
-    'TARGET',
-    'STORY CONTEXT AFTER TARGET',
-    'CURRENT REQUEST',
+    'CONTEXT BEFORE CURSOR',
+    'CURSOR',
+    'CONTEXT AFTER CURSOR',
+    'REQUEST',
   ]);
-  assert.ok(result.staticPrompt.startsWith('<noirdraft_static>\n  <instructions><![CDATA[Reply with only the replacement prose.]]></instructions>'));
-  assert.ok(result.staticPrompt.includes('<reference><![CDATA[## Maria'));
+  assert.ok(result.staticPrompt.startsWith('Reply with only the replacement prose.'));
+  assert.ok(result.staticPrompt.includes('REFERENCE METADATA/Characters/Maria:\n## Maria'));
   assert.ok(result.prompt.includes('A cautious investigator.'));
-  assert.ok(result.turnPrompt.includes('<context><![CDATA[Maria walked in.]]><selection><![CDATA[The room was cold.]]></selection><![CDATA[She sat down slowly.]]></context>'));
-  assert.ok(result.turnPrompt.endsWith('<request><![CDATA[Make the room colder.]]></request>\n</noirdraft_context>'));
+  assert.deepEqual(JSON.parse(result.turnPrompt), {
+    context: { before: 'Maria walked in.', cursor: 'The room was cold.', after: 'She sat down slowly.' },
+    request: 'Make the room colder.',
+  });
 });
 
 test('composeContext reports an unresolved pin explicitly instead of silently dropping it', () => {
@@ -57,18 +59,19 @@ test('composeContext never includes chat history or rejected variants unless pas
     request: 'Rewrite.',
     references: [{ label: 'STORY/Chapter/Earlier scene', text: 'It had rained all week.' }],
   });
-  assert.ok(withReference.staticPrompt.includes('<reference><![CDATA[It had rained all week.]]></reference>'));
+  assert.ok(withReference.staticPrompt.includes('REFERENCE STORY/Chapter/Earlier scene:\nIt had rained all week.'));
 });
 
 test('composeContext omits empty optional sections rather than emitting blank labels', () => {
   const result = composeContext({ storyText, target: 'The room was cold.', request: '' });
-  assert.deepEqual(result.components.map((component) => component.id), ['target']);
+  assert.deepEqual(result.components.map((component) => component.id), ['cursor']);
 });
 
-test('composeContext uses a cursor marker for ordinary contextual chat', () => {
+test('composeContext uses one uniform before/cursor/after JSON packet', () => {
   const result = composeContext({ storyText, request: 'Test the chat.' });
-  assert.equal(result.turnPrompt, '<noirdraft_context>\n  <context><![CDATA[]]>\n<insert_here/>\n<![CDATA[]]></context>\n  <request><![CDATA[Test the chat.]]></request>\n</noirdraft_context>');
-  assert.ok(!result.turnPrompt.includes('<selection>'));
+  assert.deepEqual(JSON.parse(result.turnPrompt), {
+    context: { before: '', cursor: '', after: '' }, request: 'Test the chat.',
+  });
 });
 
 test('allocateContextBudget sums deterministic token counts and reports fit against the reserved budget', async () => {

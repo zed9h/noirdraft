@@ -57,12 +57,20 @@ export function startFakeKoboldServer(options = {}) {
     if (method === 'POST' && url.pathname === '/v1/chat/completions') {
       const payload = JSON.parse(body || '{}');
       const replacements = toolCalls ?? (tokens.join('') ? [tokens.join('')] : []);
-      const currentPacket = payload.messages?.at(-1)?.content?.slice(payload.messages.at(-1)?.content?.lastIndexOf('<noirdraft_context>')) ?? '';
-      const isCursorContext = currentPacket.includes('<insert_here/>');
-      const reply = !payload.tools?.length || isCursorContext
+      const contextResult = payload.messages?.find((message) => message.role === 'user')?.content ?? '';
+      let isCursorContext = false;
+      try { isCursorContext = JSON.parse(contextResult).context?.cursor === ''; } catch { /* not an agent editing request */ }
+      const hasChangesGoal = payload.messages?.some((message) => message.role === 'tool' && message.tool_call_id === 'goal');
+      const hasSubmittedChange = payload.messages?.some((message) => message.role === 'tool' && /^call_/.test(message.tool_call_id));
+      const hasReviewedChanges = payload.messages?.some((message) => message.role === 'tool' && message.tool_call_id === 'review');
+      const reply = !payload.tools?.length
         ? { choices: [{ message: { role: 'assistant', content: tokens.join(''), tool_calls: [] }, finish_reason: 'stop' }] }
-        : payload.tool_choice === 'none' || payload.messages?.some((message) => message.role === 'tool')
-        ? { choices: [{ message: { role: 'assistant', content: 'Done.', tool_calls: [] } }] }
+        : payload.tool_choice === 'none' || hasReviewedChanges
+        ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'finish', type: 'function', function: { name: 'finish_turn', arguments: JSON.stringify({ outcome: 'complete', comment: 'Done.' }) } }] } }] }
+        : hasSubmittedChange
+        ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'review', type: 'function', function: { name: 'review_changes', arguments: '{}' } }] } }] }
+        : !hasChangesGoal
+        ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'goal', type: 'function', function: { name: 'set_changes_goal', arguments: JSON.stringify({ accepted_changes: replacements.length, strategy: 'Provide each requested replacement as a distinct sibling.' }) } }] } }] }
         : { choices: [{ message: {
           role: 'assistant', content: null,
           tool_calls: replacements.map((replacement, index) => ({ id: `call_${index + 1}`, type: 'function', function: { name: 'submit_change', arguments: JSON.stringify({ operation: isCursorContext ? 'insert' : 'replace', text: replacement }) } })),

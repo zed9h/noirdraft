@@ -193,6 +193,8 @@ button { font: inherit; }
 .context-budget[data-over="true"] { color: #ffb4a9; }
 .context-usage-row { display: flex; justify-content: space-between; padding: .1rem 0; color: #948a7f; }
 .context-prompt { margin-top: .35rem; padding: .4rem; max-height: 12rem; overflow: auto; white-space: pre-wrap; color: #cfc6bb; background: #100e0c; border-radius: .2rem; }
+.raw-model-output { color: #f6f3ee; }
+.raw-tool-result { color: #8c8780; }
 
 .agent-references { display: flex; flex-direction: column; gap: .25rem; margin-bottom: .4rem; }
 .agent-references[hidden] { display: none; }

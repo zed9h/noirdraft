@@ -68,8 +68,12 @@ export function appendChatTurn(chat, input, output) {
  * remain untouched and display as-is. */
 export function displayChatInput(input) {
   const value = String(input);
-  const match = value.match(/<request><!\[CDATA\[([\s\S]*?)\]\]><\/request>/);
-  return match ? match[1].trim() : value;
+  try {
+    const packet = JSON.parse(value);
+    return typeof packet.request === 'string' ? packet.request.trim() : value;
+  } catch {
+    return value;
+  }
 }
 
 /** Structured agent output keeps tool calls out of the reading transcript;
