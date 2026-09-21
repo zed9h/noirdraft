@@ -171,7 +171,7 @@ test('ordinary chat shows its live plan and raw response while it is pending', a
     args: [path.resolve('.')],
     env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
   });
-  const server = await startFakeKoboldServer({ tokens: ['Plain ', 'chat ', 'reply.'], tokenDelayMs: 40 });
+  const server = await startFakeKoboldServer({ tokens: ['Plain ', 'chat ', 'reply.'], tokenDelayMs: 250 });
   try {
     const window = await application.firstWindow();
     await window.waitForFunction(() => Boolean(window.__noirDraftTest?.getCommitController()));
@@ -181,7 +181,7 @@ test('ordinary chat shows its live plan and raw response while it is pending', a
     await expect(window.getByLabel('Chat history')).toContainText('Current proposal intent: Greet the author.');
     await window.getByRole('button', { name: 'Show raw response for pending turn 1' }).click();
     const pendingRawDialog = window.locator('[data-context-dialog]');
-    await expect(pendingRawDialog.locator('.context-prompt')).toContainText('plan_chat');
+    await expect(pendingRawDialog.locator('.context-prompt')).toContainText('turn_iterate');
     await pendingRawDialog.getByRole('button', { name: 'Close context' }).click();
     await expect(window.getByLabel('Chat history')).toContainText('Plain chat reply.');
     await window.getByRole('button', { name: 'Show raw response for turn 1' }).click();
@@ -194,7 +194,7 @@ test('ordinary chat shows its live plan and raw response while it is pending', a
   }
 });
 
-test('retry preserves an applied rewrite as a sibling branch', async () => {
+test('retry does not record an identical rewrite as a second sibling', async () => {
   const application = await electron.launch({
     args: [path.resolve('.')],
     env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
@@ -219,7 +219,7 @@ test('retry preserves an applied rewrite as a sibling branch', async () => {
       const history = window.__noirDraftTest.getHistory();
       return [...history.revisions.values()].filter((revision) => revision.parents.includes(1)).map((revision) => revision.id).sort();
     });
-    expect(siblings).toEqual([2, 3]);
+    expect(siblings).toEqual([2]);
   } finally {
     await server.close();
     await application.close();

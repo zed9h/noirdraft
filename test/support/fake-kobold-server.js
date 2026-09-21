@@ -79,28 +79,23 @@ export function startFakeKoboldServer(options = {}) {
       const replacements = toolCalls ?? (tokens.join('') ? [tokens.join('')] : []);
       const contextResult = payload.messages?.find((message) => message.role === 'user')?.content ?? '';
       const isGreeting = contextResult.includes('Say hello.');
-      let isCursorContext = false;
-      try { isCursorContext = JSON.parse(contextResult).context?.cursor === ''; } catch { /* not an agent editing request */ }
-      const hasChatPlan = payload.messages?.some((message) => message.role === 'tool' && message.tool_call_id === 'chat-plan');
-      const hasChangesGoal = payload.messages?.some((message) => message.role === 'tool' && message.tool_call_id === 'plan');
-      const hasSubmittedChange = payload.messages?.some((message) => message.role === 'tool' && /^call_/.test(message.tool_call_id));
-      const hasReviewedChanges = payload.messages?.some((message) => message.role === 'tool' && message.tool_call_id === 'review');
+      const toolMessages = payload.messages?.filter((message) => message.role === 'tool') ?? [];
+      const lastTool = toolMessages.at(-1)?.content ?? '';
+      const revisionIds = [...lastTool.matchAll(/----- REVISION #(\d+) -----/g)].map((match) => Number(match[1]));
+      const call = (argumentsObject) => ({ choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: `iterate_${toolMessages.length + 1}`, type: 'function', function: { name: 'turn_iterate', arguments: JSON.stringify(argumentsObject) } }] } }] });
       const reply = !payload.tools?.length
         ? { choices: [{ message: { role: 'assistant', content: tokens.join(''), tool_calls: [] }, finish_reason: 'stop' }] }
-        : isGreeting && !hasChatPlan
-        ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'chat-plan', type: 'function', function: { name: 'plan_chat', arguments: JSON.stringify({ intent: 'Greet the author.', proposed_message: tokens.join('') }) } }] } }] }
+        : toolMessages.length === 0
+        ? call({ chat: { intent: isGreeting ? 'Greet the author.' : 'Determine whether this request needs a manuscript change.', message: isGreeting ? tokens.join('') : 'I will make the requested revision.' } })
         : isGreeting
-        ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'send-chat', type: 'function', function: { name: 'send_chat', arguments: '{}' } }] } }] }
-        : payload.tool_choice === 'none' || hasReviewedChanges
-        ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'finish', type: 'function', function: { name: 'finish_changes', arguments: JSON.stringify({ outcome: 'complete', comment: 'Done.' }) } }] } }] }
-        : hasSubmittedChange
-        ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'review', type: 'function', function: { name: 'review_changes', arguments: '{}' } }] } }] }
-        : !hasChangesGoal
-        ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'plan', type: 'function', function: { name: 'plan_changes', arguments: JSON.stringify({ change_alternatives_count: replacements.length, intent: 'Provide each requested replacement as a distinct sibling.' }) } }] } }] }
-        : { choices: [{ message: {
-          role: 'assistant', content: null,
-          tool_calls: replacements.map((replacement, index) => ({ id: `call_${index + 1}`, type: 'function', function: { name: 'propose_change', arguments: JSON.stringify({ operation: isCursorContext ? 'insert' : 'replace', text: replacement }) } })),
-        } }] };
+        ? call({ chat: { editorial_comment: 'This is a complete greeting.', verdict: 'approve' } })
+        : lastTool.includes('This is the final conclusion')
+        ? call({ chat: { editorial_comment: 'The conclusion is complete.', verdict: 'approve' } })
+        : lastTool.includes('NOIRDRAFT CHAT REVIEW')
+        ? call({ chat: { editorial_comment: 'The request needs a direct manuscript revision.', verdict: 'switch_to_changes' }, changes: { change_alternatives_count: replacements.length, intent: 'Provide each requested replacement as a distinct sibling.', operation: 'replace', proposals: replacements.map((text) => ({ text })) } })
+        : lastTool.includes('NOIRDRAFT CHANGE REVIEW') && revisionIds.length
+        ? call({ changes: { intent: 'Approve the valid revisions and conclude.', operation: 'replace', reviews: revisionIds.map((revision_id) => ({ revision_id, editorial_comment: 'Grammatical and appropriate in context.', verdict: 'approve' })) }, chat: { intent: 'Conclude the completed change.', message: 'Done.' } })
+        : call({ chat: { editorial_comment: 'The conclusion is complete.', verdict: 'approve' } });
       if (tokenDelayMs > 0) return setTimeout(() => sendJSON(response, 200, reply), tokenDelayMs);
       return sendJSON(response, 200, reply);
     }
