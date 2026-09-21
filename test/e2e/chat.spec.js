@@ -178,10 +178,10 @@ test('ordinary chat shows its live plan and raw response while it is pending', a
     await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
     await window.getByLabel('Chat prompt').fill('Say hello.');
     await window.getByRole('button', { name: 'Send' }).click();
-    await expect(window.getByLabel('Chat history')).toContainText('Current proposal intent: Greet the author.');
+    await expect(window.getByLabel('Chat history')).toContainText('Plain chat reply.');
     await window.getByRole('button', { name: 'Show raw response for pending turn 1' }).click();
     const pendingRawDialog = window.locator('[data-context-dialog]');
-    await expect(pendingRawDialog.locator('.context-prompt')).toContainText('turn_iterate');
+    await expect(pendingRawDialog.locator('.context-prompt')).toContainText('draft_chat');
     await pendingRawDialog.getByRole('button', { name: 'Close context' }).click();
     await expect(window.getByLabel('Chat history')).toContainText('Plain chat reply.');
     await window.getByRole('button', { name: 'Show raw response for turn 1' }).click();

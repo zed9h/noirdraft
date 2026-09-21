@@ -1,134 +1,106 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { AgentError, requestRewrite } from '../../src/renderer/ai/agent.js';
+import { requestRewrite } from '../../src/renderer/ai/agent.js';
 import { createHistory, reconstructRevision } from '../../src/renderer/history/graph.js';
 
-const protocol = 'Use only turn_iterate.';
-const iterate = (payload, raw = 'iterate') => ({ message: { role: 'assistant', content: null, tool_calls: [{ id: `call_${raw}`, type: 'function', function: { name: 'turn_iterate', arguments: JSON.stringify(payload) } }] }, raw });
+const protocol = 'Use NoirDraft native tools.';
+const call = (name, args, id) => ({ id: `call_${id}`, type: 'function', function: { name, arguments: JSON.stringify(args) } });
+const response = (calls, raw = 'response') => ({ message: { role: 'assistant', content: null, tool_calls: calls }, raw });
 
-test('a reviewed chat draft is approved implicitly without a separate send call', async () => {
+test('chat remains a compact draft-and-approval flow', async () => {
   const history = await createHistory('Original.');
-  let calls = 0;
+  let count = 0;
   const client = { async chatCompletion() {
-    calls += 1;
-    return calls === 1
-      ? iterate({ chat: { intent: 'Greet the author.', message: 'Hello.' } }, 'draft')
-      : iterate({ chat: { editorial_comment: 'A complete greeting.', verdict: 'approve' } }, 'approve');
+    count += 1;
+    return count === 1 ? response([call('draft_chat', { message: 'Hello.' }, 'draft')], 'draft') : response([call('approve_chat', {}, 'approve')], 'approve');
   } };
   const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 0], request: 'hi', agentProtocol: protocol });
   assert.equal(result.chat, 'Hello.');
-  assert.equal(result.revisions.length, 0);
   assert.match(result.rawResponse, /NOIRDRAFT CHAT REVIEW/);
-  assert.match(result.rawResponse, /"status":"approved"/);
 });
 
-test('chat approval accepts a repeated copy of the reviewed draft', async () => {
+test('a proposal batch produces its review before review_changes consumes it', async () => {
   const history = await createHistory('Original.');
-  let calls = 0;
-  const draft = { intent: 'Greet the author.', message: 'Hello.' };
-  const client = { async chatCompletion() {
-    calls += 1;
-    return calls === 1
-      ? iterate({ chat: draft }, 'draft')
-      : iterate({ chat: { ...draft, editorial_comment: 'This greeting is complete.', verdict: 'approve' } }, 'approve');
-  } };
-  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 0], request: 'hi', agentProtocol: protocol });
-  assert.equal(result.chat, 'Hello.');
-});
-
-test('a new chat draft may approve itself in the first iteration', async () => {
-  const history = await createHistory('Original.');
-  const client = { async chatCompletion() {
-    return iterate({ chat: { intent: 'Acknowledge the author.', message: 'Understood.', verdict: 'approve' } }, 'immediate');
-  } };
-  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 0], request: 'Do not repeat yourself.', agentProtocol: protocol });
-  assert.equal(result.chat, 'Understood.');
-});
-
-test('an inferred chat-to-changes transition can retry a wrong cursor operation without getting stuck', async () => {
-  const history = await createHistory('Original.');
-  let calls = 0;
-  const client = { async chatCompletion() {
-    calls += 1;
-    if (calls === 1) return iterate({ chat: { intent: 'Consider the opening.', message: 'I can make this more evocative.' } }, 'chat');
-    if (calls === 2) return iterate({ chat: { editorial_comment: 'A concrete revision is better.' }, changes: { change_alternatives_count: 1, intent: 'Add one evocative phrase.', operation: 'replace', proposals: [{ text: 'Rain-dark glass' }] } }, 'wrong-operation');
-    if (calls === 3) return iterate({ chat: { editorial_comment: 'A concrete revision is better.' }, changes: { change_alternatives_count: 1, intent: 'Add one evocative phrase.', operation: 'insert', proposals: [{ text: 'Rain-dark glass ' }] } }, 'retry-operation');
-    if (calls === 4) return iterate({ changes: { intent: 'Approve the insertion.', operation: 'insert', reviews: [{ revision_id: 1, editorial_comment: 'It reads naturally at the cursor.', verdict: 'approve' }] }, chat: { intent: 'Conclude.', message: 'I added an evocative phrase.' } }, 'conclude');
-    return iterate({ chat: { editorial_comment: 'Complete.', verdict: 'approve' } }, 'finish');
-  } };
-  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 0], request: 'Make the opening vivid.', agentProtocol: protocol });
-  assert.equal(await reconstructRevision(history, 1), 'Rain-dark glass Original.');
-  assert.match(result.rawResponse, /No selection is marked/);
-  assert.match(result.chat, /#1/);
-});
-
-test('one iteration may switch from chat to changes, then from changes to conclusion chat', async () => {
-  const story = 'Original.';
-  const history = await createHistory(story);
-  let calls = 0;
-  const client = { async chatCompletion() {
-    calls += 1;
-    if (calls === 1) return iterate({ chat: { intent: 'Consider the request.', message: 'I will revise it.' } }, 'chat');
-    if (calls === 2) return iterate({
-      chat: { editorial_comment: 'This promises an edit, so it must become a revision.', verdict: 'switch_to_changes' },
-      changes: { change_alternatives_count: 1, intent: 'Write one grammatical revision.', operation: 'replace', proposals: [{ text: 'Rewritten.' }] },
-    }, 'switch');
-    if (calls === 3) return iterate({
-      changes: { intent: 'Approve the grammatical candidate.', operation: 'replace', reviews: [{ revision_id: 1, editorial_comment: 'Grammatical and natural in the complete sentence.', verdict: 'approve' }] },
-      chat: { intent: 'Conclude the completed revision.', message: 'I prepared a revision.' },
-    }, 'conclusion');
-    return iterate({ chat: { editorial_comment: 'This is an accurate concise conclusion.', verdict: 'approve' } }, 'approve');
-  } };
-  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, story.length], request: 'Rewrite it.', agentProtocol: protocol });
-  assert.equal(await reconstructRevision(history, 1), 'Rewritten.');
-  assert.equal(result.chat, '[#1](noirdraft://version/STORY/1) I prepared a revision.');
-  assert.match(result.rawResponse, /NOIRDRAFT CHANGE REVIEW/);
-  assert.match(result.rawResponse, /This is the final conclusion/);
-});
-
-test('a retracted pending proposal is removed before the final citation is made', async () => {
-  const history = await createHistory('Original.');
-  let calls = 0;
-  const client = { async chatCompletion() {
-    calls += 1;
-    if (calls === 1) return iterate({ chat: { intent: 'Assess editing need.', message: 'I will revise it.' } }, 'chat');
-    if (calls === 2) return iterate({ chat: { editorial_comment: 'This requires changes.', verdict: 'switch_to_changes' }, changes: { change_alternatives_count: 1, intent: 'Find one sound rewrite.', operation: 'replace', proposals: [{ text: 'Wrong.' }] } }, 'propose');
-    if (calls === 3) return iterate({ changes: { intent: 'Replace the weak candidate with a sound rewrite.', operation: 'replace', reviews: [{ revision_id: 1, editorial_comment: 'Weak and unsuitable.', verdict: 'retract' }], proposals: [{ text: 'Right.' }] } }, 'retract');
-    if (calls === 4) return iterate({ changes: { intent: 'Keep the sound rewrite.', operation: 'replace', reviews: [{ revision_id: 2, editorial_comment: 'Grammatical and strong.', verdict: 'approve' }] }, chat: { intent: 'Conclude.', message: 'One revision is ready.' } }, 'review');
-    return iterate({ chat: { editorial_comment: 'Complete.', verdict: 'approve' } }, 'approve');
-  } };
-  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 'Original.'.length], request: 'Rewrite.', agentProtocol: protocol });
-  assert.equal(history.revisions.has(1), false);
-  assert.equal(result.chat, '[#2](noirdraft://version/STORY/2) One revision is ready.');
-  assert.doesNotMatch(result.chat, /#1/);
-});
-
-test('a change review shows only revisions that still need an editorial verdict', async () => {
-  const history = await createHistory('Original.');
-  let calls = 0;
-  let secondReview = '';
+  let count = 0;
+  let displayedReview = '';
   const client = { async chatCompletion({ messages }) {
-    calls += 1;
-    if (calls === 1) return iterate({ chat: { intent: 'Assess editing need.', message: 'I will revise it.' } }, 'chat');
-    if (calls === 2) return iterate({ chat: { editorial_comment: 'This requires changes.', verdict: 'switch_to_changes' }, changes: { change_alternatives_count: 2, intent: 'Offer two distinct rewrites.', operation: 'replace', proposals: [{ text: 'First.' }] } }, 'first');
-    if (calls === 3) return iterate({ changes: { intent: 'Add the second rewrite.', operation: 'replace', reviews: [{ revision_id: 1, editorial_comment: 'Strong and grammatical.', verdict: 'approve' }], proposals: [{ text: 'Second.' }] } }, 'approve-first');
-    if (calls === 4) {
-      secondReview = messages.at(-1).content;
-      return iterate({ changes: { intent: 'Approve the second rewrite.', operation: 'replace', reviews: [{ revision_id: 2, editorial_comment: 'Also strong and grammatical.', verdict: 'approve' }] }, chat: { intent: 'Conclude.', message: 'Two revisions are ready.' } }, 'approve-second');
+    count += 1;
+    if (count === 1) return response([
+      call('begin_changes', { objective: 'Offer two distinct rewrites.', alternative_count: 2 }, 'begin'),
+      call('propose_changes', { proposals: [{ text: 'First.' }, { text: 'Second.' }] }, 'propose'),
+    ], 'batch');
+    if (count === 2) {
+      displayedReview = messages.at(-1).content;
+      return response([call('review_changes', { reviews: [
+        { revision_id: 1, comment: 'Natural and grammatical.', verdict: 'approve' },
+        { revision_id: 2, comment: 'Natural and distinct.', verdict: 'approve' },
+      ] }, 'review')], 'review');
     }
-    return iterate({ chat: { editorial_comment: 'Complete.', verdict: 'approve' } }, 'finish');
+    if (count === 3) return response([call('finish_changes', {}, 'finish')], 'finish');
+    if (count === 4) return response([call('draft_chat', { message: 'Two revisions are ready.' }, 'conclusion')], 'conclusion');
+    return response([call('approve_chat', {}, 'approve')], 'approve');
   } };
   const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 'Original.'.length], request: 'Offer two rewrites.', agentProtocol: protocol });
-  assert.match(secondReview, /REVISION #2/);
-  assert.doesNotMatch(secondReview, /REVISION #1/);
+  assert.match(displayedReview, /NOIRDRAFT CHANGE REVIEW/);
+  assert.match(displayedReview, /REVISION #1/);
+  assert.match(displayedReview, /REVISION #2/);
+  assert.equal(await reconstructRevision(history, 1), 'First.');
   assert.match(result.chat, /#1/);
   assert.match(result.chat, /#2/);
 });
 
-test('a stale base remains refused before the first iteration', async () => {
+test('review_changes records a pending intent and removes retracted revisions', async () => {
   const history = await createHistory('Original.');
-  await assert.rejects(
-    requestRewrite({ client: { async chatCompletion() { throw new Error('must not call'); } }, history, baseRevisionId: 8, range: [0, 0], request: 'hi', agentProtocol: protocol }),
-    (error) => error.code === 'MISSING_REVISION',
-  );
+  let count = 0;
+  let progress = '';
+  const client = { async chatCompletion({ messages }) {
+    count += 1;
+    if (count === 1) return response([call('begin_changes', { objective: 'Offer two rewrites.', alternative_count: 2 }, 'begin'), call('propose_changes', { proposals: [{ text: 'Wrong.' }, { text: 'Right.' }] }, 'propose')]);
+    if (count === 2) return response([call('review_changes', { reviews: [
+      { revision_id: 1, comment: 'Weak.', verdict: 'retract' },
+      { revision_id: 2, comment: 'Sound.', verdict: 'approve' },
+    ], pending_intent: 'Provide one more rewrite that is distinct from revision #2.' }, 'review')]);
+    if (count === 3) {
+      progress = messages.at(-1).content;
+      return response([call('propose_changes', { proposals: [{ text: 'Another.' }] }, 'second')]);
+    }
+    if (count === 4) return response([call('review_changes', { reviews: [{ revision_id: 3, comment: 'Sound and distinct.', verdict: 'approve' }] }, 'last-review')]);
+    if (count === 5) return response([call('finish_changes', {}, 'finish')]);
+    if (count === 6) return response([call('draft_chat', { message: 'Done.' }, 'chat')]);
+    return response([call('approve_chat', {}, 'approve')]);
+  } };
+  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 'Original.'.length], request: 'Offer two rewrites.', agentProtocol: protocol });
+  assert.equal(history.revisions.has(1), false);
+  assert.match(progress, /Pending: Provide one more rewrite/);
+  assert.doesNotMatch(result.chat, /#1/);
+  assert.match(result.chat, /#2/);
+  assert.match(result.chat, /#3/);
+});
+
+test('finish_changes asks the agent to select the best alternatives when a batch exceeds its objective', async () => {
+  const history = await createHistory('Original.');
+  let count = 0;
+  let selection = '';
+  const client = { async chatCompletion({ messages }) {
+    count += 1;
+    if (count === 1) return response([call('begin_changes', { objective: 'Offer two rewrites.', alternative_count: 2 }, 'begin'), call('propose_changes', { proposals: [{ text: 'First.' }, { text: 'Second.' }, { text: 'Third.' }] }, 'propose')]);
+    if (count === 2) return response([call('review_changes', { reviews: [
+      { revision_id: 1, comment: 'Strong.', verdict: 'approve' },
+      { revision_id: 2, comment: 'Strong.', verdict: 'approve' },
+      { revision_id: 3, comment: 'Strong.', verdict: 'approve' },
+    ] }, 'review')]);
+    if (count === 3) return response([call('finish_changes', {}, 'select')]);
+    if (count === 4) {
+      selection = messages.at(-1).content;
+      return response([call('finish_changes', { keep_revision_ids: [1, 3] }, 'finish')]);
+    }
+    if (count === 5) return response([call('draft_chat', { message: 'Done.' }, 'chat')]);
+    return response([call('approve_chat', {}, 'approve')]);
+  } };
+  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 'Original.'.length], request: 'Offer two rewrites.', agentProtocol: protocol });
+  assert.match(selection, /NOIRDRAFT FINAL SELECTION/);
+  assert.equal(history.revisions.has(2), false);
+  assert.match(result.chat, /#1/);
+  assert.match(result.chat, /#3/);
+  assert.doesNotMatch(result.chat, /#2/);
 });
