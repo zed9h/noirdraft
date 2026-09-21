@@ -13,10 +13,26 @@ export class AgentError extends Error {
   }
 }
 
-export const SUBMIT_CHANGE_TOOL = {
+export const PLAN_CHAT_TOOL = {
   type: 'function',
   function: {
-    name: 'submit_change',
+    name: 'plan_chat',
+    description: 'Plans a reply without creating or planning a manuscript change. Use for greetings, discussion, questions, critique, explanation, or any request that does not ask to edit.',
+    parameters: {
+      type: 'object',
+      properties: {
+        intent: { type: 'string', description: 'Brief purpose and approach for the author-facing reply.' },
+        proposed_message: { type: 'string', description: 'The complete proposed reply for review before it is sent.' },
+      },
+      required: ['intent', 'proposed_message'], additionalProperties: false,
+    },
+  },
+};
+
+export const PROPOSE_CHANGE_TOOL = {
+  type: 'function',
+  function: {
+    name: 'propose_change',
     description: 'Creates one revision for the marked selection or cursor.',
     parameters: {
       type: 'object',
@@ -70,11 +86,11 @@ export const REVIEW_CHANGES_TOOL = {
   },
 };
 
-export const FINISH_TURN_TOOL = {
+export const FINISH_CHANGES_TOOL = {
   type: 'function',
   function: {
-    name: 'finish_turn',
-    description: 'Completes the turn with concise author-facing commentary after any changes are submitted.',
+    name: 'finish_changes',
+    description: 'Completes a change turn with concise author-facing commentary after changes are reviewed.',
     parameters: {
       type: 'object',
       properties: {
@@ -87,7 +103,16 @@ export const FINISH_TURN_TOOL = {
   },
 };
 
-const AGENT_TOOLS = [PLAN_CHANGES_TOOL, SUBMIT_CHANGE_TOOL, RETRACT_CHANGE_TOOL, REVIEW_CHANGES_TOOL, FINISH_TURN_TOOL];
+export const SEND_CHAT_TOOL = {
+  type: 'function',
+  function: {
+    name: 'send_chat',
+    description: 'Sends the latest reviewed chat proposal unchanged. Takes no arguments.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+  },
+};
+
+const AGENT_TOOLS = [PLAN_CHAT_TOOL, SEND_CHAT_TOOL, PLAN_CHANGES_TOOL, PROPOSE_CHANGE_TOOL, RETRACT_CHANGE_TOOL, REVIEW_CHANGES_TOOL, FINISH_CHANGES_TOOL];
 
 const MIN_TOOL_RESPONSE_TOKENS = 1024;
 
@@ -98,9 +123,9 @@ function assertCompleteToolResponse({ message, finishReason, raw, required = fal
     });
   }
   const content = String(message?.content ?? '').trim();
-  const unparsedToolTranscript = /^[\[{]/.test(content) && /"(?:tool_calls|function|plan_changes|submit_change|review_changes|finish_turn|text)"/.test(content)
-    || /<\|tool_call(?:\|>|>)|call:(?:plan_changes|submit_change|retract_change|review_changes|finish_turn)\{/.test(content)
-    || /\b(?:plan_changes|submit_change|retract_change|review_changes|finish_turn)\s*\(/.test(content);
+  const unparsedToolTranscript = /^[\[{]/.test(content) && /"(?:tool_calls|function|plan_chat|send_chat|plan_changes|propose_change|review_changes|finish_changes|text)"/.test(content)
+    || /<\|tool_call(?:\|>|>)|call:(?:plan_chat|send_chat|plan_changes|propose_change|retract_change|review_changes|finish_changes)\{/.test(content)
+    || /\b(?:plan_chat|send_chat|plan_changes|propose_change|retract_change|review_changes|finish_changes)\s*\(/.test(content);
   if (!message?.tool_calls?.length && unparsedToolTranscript) {
     throw new AgentError('KoboldCpp returned an unparsed tool call instead of a completed response. Retry the turn.', {
       code: 'UNPARSED_TOOL_CALL', rawText: raw,
@@ -149,7 +174,7 @@ function reviewResultText(revisions, baseText, { from, to }, resultTexts, goal, 
         ? { action: 'plan_next_group', instruction: 'Second recovery: call plan_changes with a concrete change-alternatives count and intent, then submit that group.' }
         : recovery.stage === 'creative_retry'
           ? { action: 'continue_creatively', remaining_changes: Math.max(0, remaining), instruction: 'Final recovery: use imaginative, broad, metaphorical, or otherwise less obvious candidates that still honor the author’s intent. Then review again.' }
-          : { action: 'give_up', instruction: 'The managed recovery attempts are exhausted. Explain the unresolved issue to the author with finish_turn outcome "unable" and failure_reason.' };
+          : { action: 'give_up', instruction: 'The managed recovery attempts are exhausted. Explain the unresolved issue to the author with finish_changes outcome "unable" and failure_reason.' };
   const progress = remaining === 0
     ? `Turn intent met — ${revisions.length} alternatives are ready.`
     : remaining > 0
@@ -290,38 +315,41 @@ export async function requestRewrite({
   let lastReviewRound = -1;
   let changesGoal = null;
   let currentPlan = null;
+  let chatPlan = null;
   let failedReviews = 0;
   let giveUpAllowed = false;
   let currentPlanAvailable = false;
   const allowedNextCalls = () => {
+    if (chatPlan) return ['plan_chat', 'send_chat'];
     if (!changesGoal) {
-      return ['plan_changes'];
+      return ['plan_chat', 'plan_changes'];
     }
-    const actions = ['plan_changes', 'submit_change', 'retract_change'];
+    const actions = ['plan_changes', 'propose_change', 'retract_change'];
     if (changeCallVersion > 0 && reviewedChangeCallVersion !== changeCallVersion) {
       actions.push('review_changes');
     }
     if (changeCallVersion > 0 && reviewedChangeCallVersion === changeCallVersion && lastReviewRound >= 0) {
       if (revisions.length === changesGoal.change_alternatives_count) {
-        actions.push('finish_turn');
+        actions.push('finish_changes');
       } else if (giveUpAllowed) {
-        actions.push('finish_turn');
+        actions.push('finish_changes');
       }
     }
     return actions;
   };
   const recommendedAction = () => {
-    if (!changesGoal) return { call: 'plan_changes', attempt: 'State how many versions of this change you intend to submit and their creative intent.' };
+    if (chatPlan) return { call: 'send_chat', attempt: 'Send the reviewed proposed reply unchanged, or call plan_chat again to replace it.' };
+    if (!changesGoal) return { call: 'plan_chat or plan_changes', attempt: 'Use plan_chat when no edit was requested; otherwise state how many versions of the change you intend to submit and their creative intent.' };
     if (changeCallVersion > 0 && reviewedChangeCallVersion !== changeCallVersion) {
       return { call: 'review_changes', attempt: 'Inspect the changes or retractions made since the last review before trying to finish.' };
     }
     if (reviewedChangeCallVersion === changeCallVersion && revisions.length === changesGoal.change_alternatives_count) {
-      return { call: 'finish_turn', attempt: 'Use outcome "complete" and concise commentary, unless you first retract a weak proposal.' };
+      return { call: 'finish_changes', attempt: 'Use outcome "complete" and concise commentary, unless you first retract a weak proposal.' };
     }
-    if (giveUpAllowed) return { call: 'finish_turn', attempt: 'Use outcome "unable" with failure_reason explaining the unresolved issue to the author.' };
-    if (currentPlanAvailable) return { call: 'submit_change', attempt: 'Apply the current plan with a fresh, distinct version of the change.' };
+    if (giveUpAllowed) return { call: 'finish_changes', attempt: 'Use outcome "unable" with failure_reason explaining the unresolved issue to the author.' };
+    if (currentPlanAvailable) return { call: 'propose_change', attempt: 'Apply the current plan with a fresh, distinct version of the change.' };
     if (failedReviews === 2) return { call: 'plan_changes', attempt: 'State a concrete change-alternatives count and fresh creative intent, then submit distinct changes.' };
-    return { call: 'submit_change', attempt: 'Submit a fresh, distinct version of the change that moves the work toward the turn intent.' };
+    return { call: 'propose_change', attempt: 'Propose a fresh, distinct version of the change that moves the work toward the turn intent.' };
   };
   const planResult = (currentIntent, managerPrompt) => JSON.stringify({
     status: 'accepted',
@@ -338,6 +366,14 @@ export async function requestRewrite({
       }
       : { allowed_calls: allowedNextCalls(), recommended_action: recommendedAction() },
   });
+  const chatReviewText = (chatIntent) => [
+    'NOIRDRAFT CHAT REVIEW',
+    `Intent: ${chatIntent.intent}`,
+    'Question: Is this accurate, helpful, and appropriately concise for the author? Call plan_chat again to replace it, or send_chat to publish it unchanged.',
+    '----- PROPOSED REPLY -----',
+    chatIntent.proposed_message,
+    '----- END OF REPLY -----',
+  ].join('\n');
   const transcript = [...initialMessages];
   const reconstructed = new Map([[baseRevisionId, baseText]]);
   const resultTexts = new Map();
@@ -360,13 +396,48 @@ export async function requestRewrite({
   };
   const materialize = async (toolCalls, round) => {
     const results = [];
-    for (const call of toolCalls.filter((item) => ['plan_changes', 'submit_change', 'retract_change', 'review_changes', 'finish_turn'].includes(item?.function?.name))) {
+    for (const call of toolCalls.filter((item) => ['plan_chat', 'send_chat', 'plan_changes', 'propose_change', 'retract_change', 'review_changes', 'finish_changes'].includes(item?.function?.name))) {
       let change;
       try { change = JSON.parse(call.function.arguments); } catch { change = null; }
-      if (call.function.name === 'finish_turn') {
+      if (call.function.name === 'plan_chat') {
+        if (typeof change?.intent !== 'string' || !change.intent.trim() || typeof change?.proposed_message !== 'string' || !change.proposed_message.trim()) {
+          invalidCalls += 1;
+          results.push({ call, status: 'rejected', reason: 'plan_chat requires nonempty intent and proposed_message.' });
+          continue;
+        }
+        if (changesGoal || changeCallVersion > 0) {
+          invalidCalls += 1;
+          results.push({ call, status: 'rejected', reason: 'plan_chat is only for a no-edit request before planning or proposing a change. Use finish_changes to conclude a change turn.' });
+          continue;
+        }
+        chatPlan = { intent: change.intent.trim(), proposed_message: change.proposed_message.trim() };
+        results.push({ call, status: 'chat_review', chat_intent: chatPlan });
+        continue;
+      }
+      if (call.function.name === 'send_chat') {
+        if (!change || Object.keys(change).length !== 0 || !chatPlan) {
+          invalidCalls += 1;
+          results.push({ call, status: 'rejected', reason: 'send_chat takes no arguments and requires a prior plan_chat proposal.' });
+          continue;
+        }
+        finished = true;
+        results.push({ call, status: 'finished', comment: chatPlan.proposed_message });
+        continue;
+      }
+      if (call.function.name === 'finish_changes') {
         if (typeof change?.comment !== 'string' || !['complete', 'unable'].includes(change?.outcome)) {
           invalidCalls += 1;
-          results.push({ call, status: 'rejected', reason: 'finish_turn requires a valid outcome and comment.' });
+          results.push({ call, status: 'rejected', reason: 'finish_changes requires a valid outcome and comment.' });
+          continue;
+        }
+        if (chatPlan) {
+          invalidCalls += 1;
+          results.push({ call, status: 'rejected', reason: 'This turn has a reviewed chat proposal. Use send_chat to publish it unchanged, or plan_chat to replace it.' });
+          continue;
+        }
+        if (!changesGoal && changeCallVersion === 0) {
+          invalidCalls += 1;
+          results.push({ call, status: 'rejected', reason: 'Call plan_changes before finish_changes for an edit request.' });
           continue;
         }
         if (changeCallVersion > 0 && (reviewedChangeCallVersion !== changeCallVersion || lastReviewRound >= round)) {
@@ -381,7 +452,7 @@ export async function requestRewrite({
         }
         if (change.outcome === 'unable' && (typeof change.failure_reason !== 'string' || !change.failure_reason.trim())) {
           invalidCalls += 1;
-          results.push({ call, status: 'rejected', reason: 'finish_turn with outcome "unable" requires failure_reason.' });
+          results.push({ call, status: 'rejected', reason: 'finish_changes with outcome "unable" requires failure_reason.' });
           continue;
         }
         if (changesGoal && change.outcome === 'unable' && revisions.length !== changesGoal.change_alternatives_count && !giveUpAllowed) {
@@ -400,6 +471,11 @@ export async function requestRewrite({
         if (!Number.isSafeInteger(changeAlternativesCount) || changeAlternativesCount < 1 || typeof intent !== 'string' || !intent.trim()) {
           invalidCalls += 1;
           results.push({ call, status: 'rejected', reason: 'plan_changes requires a positive change_alternatives_count and a nonempty intent.' });
+          continue;
+        }
+        if (chatPlan) {
+          invalidCalls += 1;
+          results.push({ call, status: 'rejected', reason: 'This turn has a reviewed chat proposal. Use send_chat to publish it or plan_chat to replace it.' });
           continue;
         }
         const isInitialPlan = !changesGoal;
@@ -433,7 +509,7 @@ export async function requestRewrite({
         }
         if (changeCallVersion === 0 || reviewedChangeCallVersion === changeCallVersion) {
           invalidCalls += 1;
-          results.push({ call, status: 'rejected', reason: 'review_changes requires a submit_change or retract_change since the previous review.' });
+          results.push({ call, status: 'rejected', reason: 'review_changes requires a propose_change or retract_change since the previous review.' });
           continue;
         }
         reviewedChangeCallVersion = changeCallVersion;
@@ -477,7 +553,7 @@ export async function requestRewrite({
       const replacement = change?.text;
       if (!changesGoal) {
         invalidCalls += 1;
-        results.push({ call, status: 'rejected', reason: 'Call plan_changes first to state the change-alternatives count and creative intent before submit_change.' });
+        results.push({ call, status: 'rejected', reason: 'Call plan_changes first to state the change-alternatives count and creative intent before propose_change.' });
         continue;
       }
       changeCallVersion += 1;
@@ -523,11 +599,13 @@ export async function requestRewrite({
     if (citations.length) chatParts.push({ type: 'citations', revisions: results.filter(({ revision }) => revision).map(({ revision }) => revision) });
     for (const { comment } of results) addChat(comment);
     const turnSummary = { changes_ready: revisions.length, invalid_calls: invalidCalls, retracted_changes: retractedChanges };
-    const toolResults = results.map(({ call, revision, status, reason, turn_intent: turnIntent, current_intent: currentIntent, manager_prompt: managerPrompt, recovery, format_warnings: formatWarnings = [] }) => ({
+    const toolResults = results.map(({ call, revision, status, reason, turn_intent: turnIntent, current_intent: currentIntent, chat_intent: chatIntent, manager_prompt: managerPrompt, recovery, format_warnings: formatWarnings = [] }) => ({
       role: 'tool', tool_call_id: call.id,
       content: status === 'review_ready'
         ? reviewResultText(revisions, baseText, { from, to }, resultTexts, changesGoal, currentPlan, recovery, formatWarnings)
-        : currentIntent
+        : status === 'chat_review'
+          ? chatReviewText(chatIntent)
+          : currentIntent
           ? planResult(currentIntent, managerPrompt)
           : changeResultJSON({ status, revision, reason, turnIntent, allowedCalls: status === 'rejected' ? allowedNextCalls() : null, recommendedAction: status === 'rejected' ? recommendedAction() : null, summary: status === 'finished' ? turnSummary : null }),
     }));
@@ -548,7 +626,7 @@ export async function requestRewrite({
     }
   }
   if (!finished) {
-    throw new AgentError('KoboldCpp did not finish the turn with a native finish_turn call. Retry the turn.', {
+    throw new AgentError('KoboldCpp did not finish the turn with a native completion call. Retry the turn.', {
       code: 'UNFINISHED_TURN', rawText: rawResponse,
     });
   }

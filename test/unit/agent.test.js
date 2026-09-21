@@ -6,7 +6,9 @@ import { KoboldClient } from '../../src/renderer/ai/kobold.js';
 import { startFakeKoboldServer } from '../support/fake-kobold-server.js';
 
 const AGENT_PROTOCOL = 'Reply with only the replacement prose.';
-const finish = (comment, raw = comment) => ({ message: { role: 'assistant', content: null, tool_calls: [{ id: 'finish', type: 'function', function: { name: 'finish_turn', arguments: JSON.stringify({ outcome: 'complete', comment }) } }] }, raw });
+const finish = (comment, raw = comment) => ({ message: { role: 'assistant', content: null, tool_calls: [{ id: 'finish', type: 'function', function: { name: 'finish_changes', arguments: JSON.stringify({ outcome: 'complete', comment }) } }] }, raw });
+const chatPlan = (intent = 'Answer the author directly without changing the manuscript.', proposedMessage = 'Here is a concise response.') => ({ message: { role: 'assistant', content: null, tool_calls: [{ id: 'chat-plan', type: 'function', function: { name: 'plan_chat', arguments: JSON.stringify({ intent, proposed_message: proposedMessage }) } }] }, raw: 'chat-plan' });
+const sendChat = (raw = 'send-chat') => ({ message: { role: 'assistant', content: null, tool_calls: [{ id: 'send-chat', type: 'function', function: { name: 'send_chat', arguments: '{}' } }] }, raw });
 const review = (raw = 'review') => ({ message: { role: 'assistant', content: null, tool_calls: [{ id: 'review', type: 'function', function: { name: 'review_changes', arguments: '{}' } }] }, raw });
 const goal = (changeAlternativesCount, intent = 'Provide distinct alternatives.', acceptanceCriteria = 'Each change must satisfy the author request and be distinct.') => ({ message: { role: 'assistant', content: null, tool_calls: [{ id: 'plan', type: 'function', function: { name: 'plan_changes', arguments: JSON.stringify({ change_alternatives_count: changeAlternativesCount, intent, acceptance_criteria: acceptanceCriteria }) } }] }, raw: 'plan' });
 const nextGroup = (changeAlternativesCount, intent = 'Use a contrasting approach.') => ({ message: { role: 'assistant', content: null, tool_calls: [{ id: 'plan', type: 'function', function: { name: 'plan_changes', arguments: JSON.stringify({ change_alternatives_count: changeAlternativesCount, intent }) } }] }, raw: 'plan' });
@@ -64,7 +66,7 @@ test('an insert operation adds only its text at a zero-width cursor', async () =
     async chatCompletion() {
       callCount += 1;
       if (callCount === 1) return goal(1);
-      if (callCount === 2) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'insert', type: 'function', function: { name: 'submit_change', arguments: '{"operation":"insert","text":"briefly "}' } }] }, raw: 'insert' };
+      if (callCount === 2) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'insert', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"insert","text":"briefly "}' } }] }, raw: 'insert' };
       if (callCount === 3) return review();
       return finish('Inserted a small qualifier.', 'chat');
     },
@@ -88,7 +90,7 @@ test('a word-like insertion is automatically separated from surrounding words', 
     async chatCompletion() {
       callCount += 1;
       if (callCount === 1) return goal(1);
-      if (callCount === 2) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'bad', type: 'function', function: { name: 'submit_change', arguments: '{"operation":"insert","text":"fruit"}' } }] }, raw: 'bad' };
+      if (callCount === 2) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'bad', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"insert","text":"fruit"}' } }] }, raw: 'bad' };
       if (callCount === 3) return review();
       return finish('Corrected.', 'done');
     },
@@ -99,7 +101,7 @@ test('a word-like insertion is automatically separated from surrounding words', 
   assert.doesNotMatch(result.rawResponse, /Formatting warnings:/);
 });
 
-test('finish_turn is rejected until review_changes follows the last change call', async () => {
+test('finish_changes is rejected until review_changes follows the last change call', async () => {
   const story = 'Original.';
   const history = await createHistory(story, { checkpointInterval: 1000 });
   let callCount = 0;
@@ -107,7 +109,7 @@ test('finish_turn is rejected until review_changes follows the last change call'
     async chatCompletion() {
       callCount += 1;
       if (callCount === 1) return goal(1);
-      if (callCount === 2) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'change', type: 'function', function: { name: 'submit_change', arguments: '{"operation":"replace","text":"Revision."}' } }] }, raw: 'change' };
+      if (callCount === 2) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'change', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"replace","text":"Revision."}' } }] }, raw: 'change' };
       if (callCount === 3) return finish('Premature.', 'premature');
       if (callCount === 4) return review();
       return finish('Reviewed.', 'finish');
@@ -116,7 +118,7 @@ test('finish_turn is rejected until review_changes follows the last change call'
   const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, story.length], request: 'Rewrite.', agentProtocol: AGENT_PROTOCOL });
   assert.equal(result.chat, '[#1](noirdraft://version/STORY/1) Reviewed.');
   assert.match(result.rawResponse, /"reason":"Call review_changes after the last change, then finish in a later response\."/);
-  assert.match(result.rawResponse, /"allowed_calls":\["plan_changes","submit_change","retract_change","review_changes"\]/);
+  assert.match(result.rawResponse, /"allowed_calls":\["plan_changes","propose_change","retract_change","review_changes"\]/);
   assert.match(result.rawResponse, /"recommended_action":\{"call":"review_changes"/);
   assert.match(result.rawResponse, /NOIRDRAFT REVIEW\nObjective: submit 1 alternatives for this change/);
   assert.match(result.rawResponse, /Pending: submit 1 alternatives for this change/);
@@ -130,11 +132,11 @@ test('an incomplete review rejects both completion and premature failure, then d
     async chatCompletion() {
       callCount += 1;
       if (callCount === 1) return goal(2, 'Make two distinct alternatives.');
-      if (callCount === 2) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'change', type: 'function', function: { name: 'submit_change', arguments: '{"operation":"replace","text":"Only one."}' } }] }, raw: 'change' };
+      if (callCount === 2) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'change', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"replace","text":"Only one."}' } }] }, raw: 'change' };
       if (callCount === 3) return review();
       if (callCount === 4) return finish('Pretends this is enough.', 'premature');
-      if (callCount === 5) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'finish', type: 'function', function: { name: 'finish_turn', arguments: JSON.stringify({ outcome: 'unable', comment: 'I give up.', failure_reason: 'Not enough alternatives.' }) } }] }, raw: 'unable' };
-      if (callCount === 6) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'second', type: 'function', function: { name: 'submit_change', arguments: '{"operation":"replace","text":"Second one."}' } }] }, raw: 'second' };
+      if (callCount === 5) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'finish', type: 'function', function: { name: 'finish_changes', arguments: JSON.stringify({ outcome: 'unable', comment: 'I give up.', failure_reason: 'Not enough alternatives.' }) } }] }, raw: 'unable' };
+      if (callCount === 6) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'second', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"replace","text":"Second one."}' } }] }, raw: 'second' };
       if (callCount === 7) return review();
       return finish('Two versions are ready.', 'done');
     },
@@ -155,12 +157,12 @@ test('the second incomplete review accepts a next-group plan and its guidance', 
     async chatCompletion() {
       callCount += 1;
       if (callCount === 1) return goal(2);
-      if (callCount === 2) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'first', type: 'function', function: { name: 'submit_change', arguments: '{"operation":"replace","text":"First."}' } }] }, raw: 'first' };
+      if (callCount === 2) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'first', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"replace","text":"First."}' } }] }, raw: 'first' };
       if (callCount === 3) return review();
-      if (callCount === 4) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'duplicate', type: 'function', function: { name: 'submit_change', arguments: '{"operation":"replace","text":"First."}' } }] }, raw: 'duplicate' };
+      if (callCount === 4) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'duplicate', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"replace","text":"First."}' } }] }, raw: 'duplicate' };
       if (callCount === 5) return review();
       if (callCount === 6) return nextGroup(1, 'Use a contrasting sentence with a different image.');
-      if (callCount === 7) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'second', type: 'function', function: { name: 'submit_change', arguments: '{"operation":"replace","text":"Second."}' } }] }, raw: 'second' };
+      if (callCount === 7) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'second', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"replace","text":"Second."}' } }] }, raw: 'second' };
       if (callCount === 8) return review();
       return finish('Two options are ready.', 'done');
     },
@@ -169,14 +171,14 @@ test('the second incomplete review accepts a next-group plan and its guidance', 
   assert.equal(result.revisions.length, 2);
   assert.match(result.rawResponse, /Question: .*Second recovery: call plan_changes/);
   assert.match(result.rawResponse, /"manager_prompt":"Turn intent remains 2 alternatives for this change\./);
-  assert.match(result.rawResponse, /"recommended_action":\{"call":"submit_change","attempt":"Apply the current plan/);
+  assert.match(result.rawResponse, /"recommended_action":\{"call":"propose_change","attempt":"Apply the current plan/);
 });
 
 test('managed recovery permits unable only after direct, planned, and creative retries fail', async () => {
   const story = 'Original.';
   const history = await createHistory(story, { checkpointInterval: 1000 });
   let callCount = 0;
-  const duplicate = (id) => ({ message: { role: 'assistant', content: null, tool_calls: [{ id, type: 'function', function: { name: 'submit_change', arguments: '{"operation":"replace","text":"First."}' } }] }, raw: id });
+  const duplicate = (id) => ({ message: { role: 'assistant', content: null, tool_calls: [{ id, type: 'function', function: { name: 'propose_change', arguments: '{"operation":"replace","text":"First."}' } }] }, raw: id });
   const client = {
     async chatCompletion() {
       callCount += 1;
@@ -190,7 +192,7 @@ test('managed recovery permits unable only after direct, planned, and creative r
       if (callCount === 8) return review();
       if (callCount === 9) return duplicate('creative-retry');
       if (callCount === 10) return review();
-      return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'finish', type: 'function', function: { name: 'finish_turn', arguments: JSON.stringify({ outcome: 'unable', comment: 'I could not find a second distinct option.', failure_reason: 'The remaining attempts duplicate the accepted proposal.' }) } }] }, raw: 'unable' };
+      return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'finish', type: 'function', function: { name: 'finish_changes', arguments: JSON.stringify({ outcome: 'unable', comment: 'I could not find a second distinct option.', failure_reason: 'The remaining attempts duplicate the accepted proposal.' }) } }] }, raw: 'unable' };
     },
   };
   const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, story.length], request: 'Give two versions.', agentProtocol: AGENT_PROTOCOL });
@@ -210,8 +212,8 @@ test('a cursor proposal returns its edited context so the model can submit a cor
       // mutable message array.
       requests.push(structuredClone(options));
       if (requests.length === 1) return goal(2);
-      if (requests.length === 2) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'bad', type: 'function', function: { name: 'submit_change', arguments: '{"operation":"insert","text":"right"}' } }] }, raw: 'bad' };
-      if (requests.length === 3) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'good', type: 'function', function: { name: 'submit_change', arguments: '{"operation":"insert","text":"new "}' } }] }, raw: 'good' };
+      if (requests.length === 2) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'bad', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"insert","text":"right"}' } }] }, raw: 'bad' };
+      if (requests.length === 3) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'good', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"insert","text":"new "}' } }] }, raw: 'good' };
       if (requests.length === 4) return review();
       return finish('Corrected.', 'done');
     },
@@ -239,8 +241,8 @@ test('an identical sibling proposal is transient, including when the sibling was
     async chatCompletion(options) {
       requests.push(structuredClone(options));
       if (requests.length === 1) return goal(1);
-      if (requests.length === 2) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'same', type: 'function', function: { name: 'submit_change', arguments: '{"operation":"replace","text":"Manual."}' } }] }, raw: 'same' };
-      if (requests.length === 3) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'different', type: 'function', function: { name: 'submit_change', arguments: '{"operation":"replace","text":"Agent."}' } }] }, raw: 'different' };
+      if (requests.length === 2) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'same', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"replace","text":"Manual."}' } }] }, raw: 'same' };
+      if (requests.length === 3) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'different', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"replace","text":"Agent."}' } }] }, raw: 'different' };
       if (requests.length === 4) return review();
       return finish('A distinct version is ready.', 'done');
     },
@@ -266,8 +268,8 @@ test('a retracted current-turn proposal is removed from history and CHAT citatio
     async chatCompletion(options) {
       requests.push(structuredClone(options));
       if (requests.length === 1) return goal(1);
-      if (requests.length === 2) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'wrong', type: 'function', function: { name: 'submit_change', arguments: '{"operation":"replace","text":"Wrong."}' } }] }, raw: 'wrong' };
-      if (requests.length === 3) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'retract', type: 'function', function: { name: 'retract_change', arguments: '{"revision_id":1}' } }, { id: 'right', type: 'function', function: { name: 'submit_change', arguments: '{"operation":"replace","text":"Right."}' } }] }, raw: 'correction' };
+      if (requests.length === 2) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'wrong', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"replace","text":"Wrong."}' } }] }, raw: 'wrong' };
+      if (requests.length === 3) return { message: { role: 'assistant', content: null, tool_calls: [{ id: 'retract', type: 'function', function: { name: 'retract_change', arguments: '{"revision_id":1}' } }, { id: 'right', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"replace","text":"Right."}' } }] }, raw: 'correction' };
       if (requests.length === 4) return review();
       return finish('Corrected version ready.', 'done');
     },
@@ -347,10 +349,10 @@ test('a follow-up tool response creates more sibling revisions before the final 
     async chatCompletion(options) {
       requests.push(structuredClone(options));
       if (requests.length === 1) return goal(2);
-      if (requests.length === 2) return reply({ role: 'assistant', content: 'First option:', tool_calls: [{ id: 'first', type: 'function', function: { name: 'submit_change', arguments: '{"operation":"replace","text":"First."}' } }] }, 'first');
-      if (requests.length === 3) return reply({ role: 'assistant', content: 'Second option:', tool_calls: [{ id: 'second', type: 'function', function: { name: 'submit_change', arguments: '{"operation":"replace","text":"Second."}' } }] }, 'second');
+      if (requests.length === 2) return reply({ role: 'assistant', content: 'First option:', tool_calls: [{ id: 'first', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"replace","text":"First."}' } }] }, 'first');
+      if (requests.length === 3) return reply({ role: 'assistant', content: 'Second option:', tool_calls: [{ id: 'second', type: 'function', function: { name: 'propose_change', arguments: '{"operation":"replace","text":"Second."}' } }] }, 'second');
       if (requests.length === 4) return reply({ role: 'assistant', content: null, tool_calls: [{ id: 'review', type: 'function', function: { name: 'review_changes', arguments: '{}' } }] }, 'review');
-      return reply({ role: 'assistant', content: null, tool_calls: [{ id: 'finish', type: 'function', function: { name: 'finish_turn', arguments: JSON.stringify({ outcome: 'complete', comment: 'Two distinct options, with different pacing.' }) } }] }, 'final');
+      return reply({ role: 'assistant', content: null, tool_calls: [{ id: 'finish', type: 'function', function: { name: 'finish_changes', arguments: JSON.stringify({ outcome: 'complete', comment: 'Two distinct options, with different pacing.' }) } }] }, 'final');
     },
   };
 
@@ -372,10 +374,10 @@ test('a follow-up tool response creates more sibling revisions before the final 
 test('a truncated unparsed tool transcript fails instead of appearing as agent chat', async () => {
   const story = 'Original.';
   const history = await createHistory(story, { checkpointInterval: 1000 });
-  const raw = JSON.stringify({ choices: [{ finish_reason: 'length', message: { role: 'assistant', content: '[{"function":{"name":"submit_change"', tool_calls: [] } }] });
+  const raw = JSON.stringify({ choices: [{ finish_reason: 'length', message: { role: 'assistant', content: '[{"function":{"name":"propose_change"', tool_calls: [] } }] });
   const client = {
     async chatCompletion() {
-      return { message: { role: 'assistant', content: '[{"function":{"name":"submit_change"', tool_calls: [] }, finishReason: 'length', raw };
+      return { message: { role: 'assistant', content: '[{"function":{"name":"propose_change"', tool_calls: [] }, finishReason: 'length', raw };
     },
   };
 
@@ -389,10 +391,10 @@ test('a truncated unparsed tool transcript fails instead of appearing as agent c
 test('a Gemma control-token tool transcript fails instead of appearing as agent chat', async () => {
   const story = 'Original.';
   const history = await createHistory(story, { checkpointInterval: 1000 });
-  const raw = '{"choices":[{"message":{"content":"<|tool_call>call:submit_change{operation:<|\\\"|>insert}"}}]}';
+  const raw = '{"choices":[{"message":{"content":"<|tool_call>call:propose_change{operation:<|\\\"|>insert}"}}]}';
   const client = {
     async chatCompletion() {
-      return { message: { role: 'assistant', content: '<|tool_call>call:submit_change{operation:<|"|>insert}', tool_calls: [] }, raw };
+      return { message: { role: 'assistant', content: '<|tool_call>call:propose_change{operation:<|"|>insert}', tool_calls: [] }, raw };
     },
   };
   await assert.rejects(
@@ -405,10 +407,10 @@ test('a Gemma control-token tool transcript fails instead of appearing as agent 
 test('a plain-text function transcript fails instead of appearing as agent chat', async () => {
   const story = 'Original.';
   const history = await createHistory(story, { checkpointInterval: 1000 });
-  const raw = '{"choices":[{"message":{"content":"submit_change(operation=\\\"replace\\\", text=\\\"Rewrite.\\\")"}}]}';
+  const raw = '{"choices":[{"message":{"content":"propose_change(operation=\\\"replace\\\", text=\\\"Rewrite.\\\")"}}]}';
   const client = {
     async chatCompletion() {
-      return { message: { role: 'assistant', content: 'submit_change(operation="replace", text="Rewrite.")', tool_calls: [] }, raw };
+      return { message: { role: 'assistant', content: 'propose_change(operation="replace", text="Rewrite.")', tool_calls: [] }, raw };
     },
   };
   await assert.rejects(
@@ -421,11 +423,57 @@ test('a plain-text function transcript fails instead of appearing as agent chat'
 test('a selected passage may be discussed without submitting a change', async () => {
   const story = 'Original.';
   const history = await createHistory(story, { checkpointInterval: 1000 });
-  const client = { async chatCompletion() { return finish('Here is an idea.', '{"message":"Here is an idea."}'); } };
+  let callCount = 0;
+  const client = {
+    async chatCompletion() {
+      callCount += 1;
+      return callCount === 1
+        ? chatPlan('Discuss the selected passage without editing it.', 'Here is an idea.')
+        : sendChat('{"message":"Here is an idea."}');
+    },
+  };
   const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, story.length], request: 'Discuss it.', agentProtocol: AGENT_PROTOCOL });
   assert.equal(result.chat, 'Here is an idea.');
   assert.equal(result.revisions.length, 0);
   assert.equal(history.revisions.size, 1);
+  assert.match(result.rawResponse, /----- PROPOSED REPLY -----\nHere is an idea\.\n----- END OF REPLY -----/);
+});
+
+test('a greeting follows the chat plan without creating a manuscript revision', async () => {
+  const story = 'Original.';
+  const history = await createHistory(story, { checkpointInterval: 1000 });
+  let callCount = 0;
+  const client = {
+    async chatCompletion() {
+      callCount += 1;
+      return callCount === 1
+        ? chatPlan('Greet the author and offer help without editing.', 'Hello! How can I help with this draft?')
+        : sendChat();
+    },
+  };
+  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [story.length, story.length], request: 'hi', agentProtocol: AGENT_PROTOCOL });
+  assert.equal(result.chat, 'Hello! How can I help with this draft?');
+  assert.equal(result.revisions.length, 0);
+  assert.equal(history.revisions.size, 1);
+  assert.match(result.rawResponse, /----- PROPOSED REPLY -----\nHello! How can I help with this draft\?\n----- END OF REPLY -----/);
+});
+
+test('a later chat plan replaces the proposed reply before it is sent', async () => {
+  const story = 'Original.';
+  const history = await createHistory(story, { checkpointInterval: 1000 });
+  let callCount = 0;
+  const client = {
+    async chatCompletion() {
+      callCount += 1;
+      if (callCount === 1) return chatPlan('Give a quick reply.', 'First draft.');
+      if (callCount === 2) return chatPlan('Give a clearer reply.', 'Revised reply.');
+      return sendChat();
+    },
+  };
+  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 0], request: 'Explain this.', agentProtocol: AGENT_PROTOCOL });
+  assert.equal(result.chat, 'Revised reply.');
+  assert.equal(result.revisions.length, 0);
+  assert.match(result.rawResponse, /Intent: Give a quick reply\.[\s\S]*Intent: Give a clearer reply\./);
 });
 
 test('a disconnected server is contained as an AgentError without creating any revision', async () => {

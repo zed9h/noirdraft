@@ -66,14 +66,14 @@ export function startFakeKoboldServer(options = {}) {
       const reply = !payload.tools?.length
         ? { choices: [{ message: { role: 'assistant', content: tokens.join(''), tool_calls: [] }, finish_reason: 'stop' }] }
         : payload.tool_choice === 'none' || hasReviewedChanges
-        ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'finish', type: 'function', function: { name: 'finish_turn', arguments: JSON.stringify({ outcome: 'complete', comment: 'Done.' }) } }] } }] }
+        ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'finish', type: 'function', function: { name: 'finish_changes', arguments: JSON.stringify({ outcome: 'complete', comment: 'Done.' }) } }] } }] }
         : hasSubmittedChange
         ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'review', type: 'function', function: { name: 'review_changes', arguments: '{}' } }] } }] }
         : !hasChangesGoal
         ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'plan', type: 'function', function: { name: 'plan_changes', arguments: JSON.stringify({ change_alternatives_count: replacements.length, intent: 'Provide each requested replacement as a distinct sibling.', acceptance_criteria: 'Each change is distinct and fulfills the request.' }) } }] } }] }
         : { choices: [{ message: {
           role: 'assistant', content: null,
-          tool_calls: replacements.map((replacement, index) => ({ id: `call_${index + 1}`, type: 'function', function: { name: 'submit_change', arguments: JSON.stringify({ operation: isCursorContext ? 'insert' : 'replace', text: replacement }) } })),
+          tool_calls: replacements.map((replacement, index) => ({ id: `call_${index + 1}`, type: 'function', function: { name: 'propose_change', arguments: JSON.stringify({ operation: isCursorContext ? 'insert' : 'replace', text: replacement }) } })),
         } }] };
       if (tokenDelayMs > 0) return setTimeout(() => sendJSON(response, 200, reply), tokenDelayMs);
       return sendJSON(response, 200, reply);
