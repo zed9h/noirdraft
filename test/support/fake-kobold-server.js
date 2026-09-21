@@ -89,14 +89,11 @@ export function startFakeKoboldServer(options = {}) {
         : toolMessages.length === 0
         ? isGreeting
           ? calls(call('draft_chat', { message: tokens.join('') }))
-          : calls(
-            call('begin_changes', { objective: 'Provide each requested replacement as a distinct sibling.', alternative_count: replacements.length }),
-            call('propose_changes', { proposals: replacements.map((text) => ({ text })) }, 2),
-          )
+          : calls(call('propose_changes', { intent: 'Provide each requested replacement as a distinct sibling.', alternative_count: replacements.length, proposals: replacements.map((text) => ({ text })) }))
         : isGreeting
         ? calls(call('approve_chat', {}))
         : lastTool.includes('NOIRDRAFT CHANGE REVIEW') && revisionIds.length
-        ? calls(call('review_changes', { reviews: revisionIds.map((revision_id) => ({ revision_id, comment: 'Grammatical and appropriate in context.', verdict: 'approve' })) }))
+        ? calls(call('review_changes', { set_overview: 'The proposals are grammatical and appropriate in context.', reviews: revisionIds.map((revision_id) => ({ revision_id, copyedit: { sentence_integrity: true, mechanics: true, clarity: true, style: true }, comment: 'Grammatical and appropriate in context.', verdict: 'approve' })) }))
         : lastTool.includes('NOIRDRAFT PROGRESS')
         ? calls(call('finish_changes', {}))
         : lastTool.includes('NOIRDRAFT CHANGE SET COMPLETE')
