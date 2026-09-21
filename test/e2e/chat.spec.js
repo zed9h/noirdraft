@@ -200,6 +200,42 @@ test('a selected middle-pane range becomes a queued chat rewrite while Send rema
   }
 });
 
+test('a pending rewrite folds its selection context and keeps the chosen fold while it updates', async () => {
+  const application = await electron.launch({
+    args: [path.resolve('.')],
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
+  });
+  // A rewrite makes several protocol calls, leaving ample time for a live
+  // progress refresh after the author opens the initially folded preview.
+  const server = await startFakeKoboldServer({ tokens: ['Rewritten.'], tokenDelayMs: 250 });
+  try {
+    const window = await application.firstWindow();
+    await window.waitForFunction(() => Boolean(window.__noirDraftTest?.getCommitController()));
+    await window.evaluate(() => {
+      const { editors, models } = window.__noirDraftTest;
+      editors.STORY.replace(0, models.STORY.text.length, 'Fold this selected passage.\n');
+      editors.STORY.setSelection(0, 'Fold this selected passage.'.length);
+    });
+    await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
+    await window.getByLabel('Chat prompt').fill('Rewrite it.');
+    await window.getByRole('button', { name: 'Send' }).click();
+
+    const selection = window.locator('.chat-turn-pending .chat-call-selection');
+    await expect(selection).toHaveCount(1);
+    await expect(selection).not.toHaveAttribute('open', '');
+    await selection.locator('summary').click();
+    await expect(selection).toHaveAttribute('open', '');
+
+    // The pending card is replaced when progress arrives; its context preview
+    // must retain the author’s chosen state through that replacement.
+    await window.waitForTimeout(400);
+    await expect(window.locator('.chat-turn-pending .chat-call-selection')).toHaveAttribute('open', '');
+  } finally {
+    await server.close();
+    await application.close();
+  }
+});
+
 test('ordinary chat shows its live plan and raw response while it is pending', async () => {
   const application = await electron.launch({
     args: [path.resolve('.')],

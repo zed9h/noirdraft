@@ -602,6 +602,20 @@ try {
       node.replaceWith(fragment);
     }
   };
+  const renderChatSelectionContext = (job) => {
+    const selection = document.createElement('details');
+    selection.className = 'chat-call-selection';
+    selection.open = Boolean(job.selectionContextOpen);
+    const summary = document.createElement('summary');
+    summary.textContent = job.anchor.target;
+    selection.append(summary);
+    selection.addEventListener('toggle', () => {
+      // Pending cards are replaced as the model reports progress. Keep this
+      // UI-only state on the job so that replacement does not re-expand it.
+      job.selectionContextOpen = selection.open;
+    });
+    return selection;
+  };
   const renderChatHistory = (pendingTurn = null) => {
     const restorePromptFocus = document.activeElement === chatPrompt;
     const previousScrollTop = chatHistory.scrollTop;
@@ -681,12 +695,7 @@ try {
           tokens.textContent = `~${Math.ceil(turn.input.length / 4)} tokens`;
           label.append(tokens);
           if (call?.kind === 'rewrite' && call.anchor.target) {
-            const selection = document.createElement('details');
-            selection.className = 'chat-call-selection';
-            const summary = document.createElement('summary');
-            summary.textContent = call.anchor.target;
-            selection.append(summary);
-            message.append(label, selection);
+            message.append(label, renderChatSelectionContext(call));
           }
         } else {
           labelTitle.setAttribute('aria-label', `Show raw response for turn ${index + 1}`);
@@ -817,10 +826,7 @@ try {
     inputContent.className = 'chat-message-content';
     inputContent.textContent = job.input;
     if (job.kind === 'rewrite' && job.anchor?.target) {
-      const selection = document.createElement('blockquote');
-      selection.className = 'chat-call-selection';
-      selection.textContent = job.anchor.target;
-      input.append(inputLabel, selection, inputContent);
+      input.append(inputLabel, renderChatSelectionContext(job), inputContent);
     } else input.append(inputLabel, inputContent);
     const output = document.createElement('section');
     output.className = 'chat-message chat-agent chat-output';
