@@ -19,7 +19,7 @@ export const AGENT_TOOLS = [
   tool('draft_chat', 'Draft or rewrite the author-facing chat reply. Its result is a chat review.', object({ message: text }, ['message'])),
   tool('approve_chat', 'Send the currently displayed chat draft to the author.', object()),
   tool('propose_changes', 'Create one batch of fresh sibling change alternatives. On the first call, intent and alternative_count establish the fixed Objective; on later calls they are the next pending batch plan. Its result is the detailed review to inspect before reviewing.', object({ intent: text, alternative_count: { type: 'integer', minimum: 1 }, proposals: { type: 'array', minItems: 1, items: proposal } }, ['intent', 'alternative_count', 'proposals'])),
-  tool('review_changes', 'First diagnose the whole displayed set, then copyedit every revision. Approval requires sentence integrity, mechanics, clarity, and style all true. Put next_batch_focus and next_batch_count last only when another proposal batch would help.', object({ set_overview: { ...text, description: 'A brief diagnosis of the set as a whole: its strongest quality and concrete problems to correct.' }, reviews: { type: 'array', items: assessment }, next_batch_focus: text, next_batch_count: { type: 'integer', minimum: 1 } }, ['set_overview', 'reviews'])),
+  tool('review_changes', 'First diagnose the whole displayed set, then copyedit every revision. Approval requires sentence integrity, mechanics, clarity, and style all true.', object({ set_overview: { ...text, description: 'A brief diagnosis of the set as a whole: its strongest quality and concrete problems to correct.' }, reviews: { type: 'array', items: assessment } }, ['set_overview', 'reviews'])),
   tool('finish_changes', 'Close a fully reviewed change set. It takes no parameters.', object()),
 ];
 
@@ -64,11 +64,11 @@ export async function requestRewrite({ client, history, baseRevisionId, range, r
   };
   await getResponse();
 
-  let phase = 'chat'; let chatDraft = null; let chatRetries = 0; let objective = null; let batchIntent = null; let nextBatchFocus = null; let nextBatchCount = null; let reviewVisible = false; let changeRetries = 0; let complete = false;
+  let phase = 'chat'; let chatDraft = null; let chatRetries = 0; let objective = null; let batchIntent = null; let batchNumber = 0; let reviewVisible = false; let complete = false;
   const pending = []; const approved = []; const active = []; const texts = new Map(); const cached = new Map([[baseRevisionId, base]]);
   const citations = () => approved.filter((revision) => history.revisions.get(revision.id) === revision).map((revision) => `[#${revision.id}](noirdraft://version/${root}/${revision.id})`);
   const finalChat = () => complete && chatDraft ? [...citations(), chatDraft.message].join(' ') : citations().join(' ');
-  const report = () => onProgress?.({ rawResponse: raw, chat: finalChat(), revisions: [...active], intent: nextBatchFocus ? { intent: nextBatchFocus } : chatDraft });
+  const report = () => onProgress?.({ rawResponse: raw, chat: finalChat(), revisions: [...active], intent: chatDraft });
   const reject = (reason) => ({ ok: false, content: receipt('rejected', reason) });
   const rejectBatch = (errors) => ({ ok: false, content: ['NOIRDRAFT BATCH ERRORS', ...errors.map((error) => `- ${error}`), 'Correct every listed proposal, then call propose_changes with a fresh batch.'].join('\n') });
   const accept = (content) => ({ ok: true, content });
@@ -90,26 +90,27 @@ export async function requestRewrite({ client, history, baseRevisionId, range, r
     '----- PROPOSED REPLY -----', chatDraft.message, '----- END OF REPLY -----',
   ].join('\n');
   const detailedReview = (omitted = []) => {
-    const needed = Math.max(0, objective.alternativeCount - approved.length - pending.length);
-    const lines = ['NOIRDRAFT CHANGE REVIEW', `Objective: ${objective.alternativeCount} alternatives — ${objective.text}`, `This batch: ${pending.length} alternatives — ${batchIntent}`, `Approved so far: ${approved.length} · Remaining objective: ${needed}`, `Editorial concern: ${EDITORIAL} A replacement must contain only replacement text, never a copied sentence or other surrounding context.`, 'Managerial concern: First give review_changes a brief set_overview identifying strengths and concrete problems. Then copyedit every listed revision: sentence_integrity, mechanics, clarity, and style must all be true before verdict approve; otherwise retract it. At its end, optionally set next_batch_focus and next_batch_count only if another batch would help; finish_changes is also allowed after this review.'];
+    const lines = ['NOIRDRAFT CHANGE REVIEW', `Objective: ${objective.alternativeCount} alternatives — ${objective.text}`];
+    if (batchNumber > 1) lines.push(`This batch: ${pending.length} alternatives — ${batchIntent}`);
+    lines.push(`Editorial concern: ${EDITORIAL} A replacement must contain only replacement text, never a copied sentence or other surrounding context.`, 'Managerial concern: First give review_changes a brief set_overview identifying strengths and concrete problems. Then copyedit every listed revision: sentence_integrity, mechanics, clarity, and style must all be true before verdict approve; otherwise retract it. After this review, either call propose_changes with a fresh intent and alternative_count or finish_changes.');
     if (omitted.length) lines.push(`Before review, ignored invalid proposals: ${omitted.join(' ')}`);
-    if (!pending.length) lines.push('No valid proposals were created. Call review_changes with reviews: [] and, if useful, a clearer next_batch_focus.');
+    if (!pending.length) lines.push('No valid proposals were created. Call review_changes with reviews: [].');
     else { lines.push('Proposals to inspect:', '----- ORIGINAL TEXT -----', removals(base, texts.get(pending[0].id))); for (const revision of pending) lines.push(`----- REVISION #${revision.id} -----`, additions(base, texts.get(revision.id))); lines.push('----- END REVISIONS -----'); }
     return lines.join('\n');
   };
   const progress = () => {
     const needed = Math.max(0, objective.alternativeCount - approved.length);
     const alternative = (count) => `${count} alternative${count === 1 ? '' : 's'}`;
-    const summary = `The stated objective is: ${objective.text} (${objective.alternativeCount} ${alternative(objective.alternativeCount)}). Progress: ${approved.length}/${objective.alternativeCount} ${alternative(objective.alternativeCount)} approved${needed ? `; ${needed} pending` : '; the objective is met'}.`;
-    const recommendation = nextBatchFocus
-      ? ` If you continue, run propose_changes for ${alternative((nextBatchCount ?? needed) || 1)} focused on: ${nextBatchFocus}.`
-      : needed
-        ? ` If you continue, run propose_changes for ${alternative(needed)}.`
-        : ' You may run another batch only if it would add useful alternatives.';
+    const summary = needed
+      ? `Progress: ${approved.length} of ${objective.alternativeCount} planned alternatives are approved; ${alternative(needed)} remain${needed === 1 ? 's' : ''}.`
+      : `Progress: all ${objective.alternativeCount} planned alternatives are approved (100%).`;
+    const recommendation = needed
+      ? ' I recommend calling propose_changes to pursue the remaining alternatives.'
+      : ' You may run another batch only if it would add useful alternatives.';
     const exit = needed
-      ? ' You may instead call finish_changes to end early if pursuing the remaining alternatives is not worthwhile.'
+      ? ' You may instead call finish_changes to end early if further alternatives are not worthwhile.'
       : ' You may call finish_changes now.';
-    return `NOIRDRAFT PROGRESS\n${summary}${recommendation}${exit}`;
+    return `NOIRDRAFT PROGRESS\nThe stated objective: ${objective.text}\n${summary}${recommendation}${exit}`;
   };
   const createBatch = async (proposals) => {
     if (!Array.isArray(proposals) || !proposals.length) return reject('propose_changes requires at least one proposal.');
@@ -131,10 +132,11 @@ export async function requestRewrite({ client, history, baseRevisionId, range, r
       const revision = await commitRevision(history, base, candidate, { origin: 'agent', parentId: baseRevisionId, setCurrent: false, note: null });
       active.push(revision); pending.push(revision); texts.set(revision.id, candidate);
     }
+    batchNumber += 1;
     reviewVisible = true;
     return accept(detailedReview(errors));
   };
-  const assessBatch = (setOverview, reviews, nextIntent, nextCount) => {
+  const assessBatch = (setOverview, reviews) => {
     if (!reviewVisible) return reject('Call review_changes only after NoirDraft has shown a detailed change review.');
     if (typeof setOverview !== 'string' || !setOverview.trim()) return reject('review_changes requires a brief set_overview before the individual assessments.');
     const candidates = pending;
@@ -154,9 +156,6 @@ export async function requestRewrite({ client, history, baseRevisionId, range, r
       else approved.push(revision);
     }
     reviewVisible = false;
-    if (approved.length < objective.alternativeCount) changeRetries += 1;
-    nextBatchFocus = typeof nextIntent === 'string' && nextIntent.trim() ? nextIntent.trim() : null;
-    nextBatchCount = Number.isSafeInteger(nextCount) && nextCount > 0 ? nextCount : null;
     return accept(progress());
   };
   const execute = async (call) => {
@@ -183,7 +182,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, r
     }
     if (name === 'review_changes') {
       if (phase !== 'changes' || !objective) return reject('There is no active change objective to review.');
-      return assessBatch(args.set_overview, args.reviews, args.next_batch_focus, args.next_batch_count);
+      return assessBatch(args.set_overview, args.reviews);
     }
     if (name === 'finish_changes') {
       if (phase !== 'changes') return reject('There is no active change set to finish.');

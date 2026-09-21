@@ -40,6 +40,8 @@ test('a proposal batch produces its review before review_changes consumes it', a
   } };
   const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 'Original.'.length], request: 'Offer two rewrites.', agentProtocol: protocol });
   assert.match(displayedReview, /NOIRDRAFT CHANGE REVIEW/);
+  assert.doesNotMatch(displayedReview, /This batch:/);
+  assert.doesNotMatch(displayedReview, /Approved so far:/);
   assert.match(displayedReview, /----- ORIGINAL TEXT -----/);
   assert.match(displayedReview, /-Original\./);
   assert.doesNotMatch(displayedReview, /END ORIGINAL TEXT/);
@@ -50,7 +52,7 @@ test('a proposal batch produces its review before review_changes consumes it', a
   assert.match(result.chat, /#2/);
 });
 
-test('review_changes records adjusted next-batch focus and removes retracted revisions', async () => {
+test('review_changes removes retracted revisions before the next proposal batch', async () => {
   const history = await createHistory('Original.');
   let count = 0;
   let progress = '';
@@ -60,7 +62,7 @@ test('review_changes records adjusted next-batch focus and removes retracted rev
     if (count === 2) return response([call('review_changes', { set_overview: 'The first rewrite is weak; the second is sound.', reviews: [
       review(1, 'Weak.', 'retract'),
       review(2, 'Sound.'),
-    ], next_batch_focus: 'Avoid the weak first draft; provide one fresh rewrite distinct from revision #2.', next_batch_count: 1 }, 'review')]);
+    ] }, 'review')]);
     if (count === 3) {
       progress = messages.at(-1).content;
       return response([call('propose_changes', { intent: 'Provide one more rewrite.', alternative_count: 1, proposals: [{ text: 'Another.' }] }, 'second')]);
@@ -72,7 +74,7 @@ test('review_changes records adjusted next-batch focus and removes retracted rev
   } };
   const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 'Original.'.length], request: 'Offer two rewrites.', agentProtocol: protocol });
   assert.equal(history.revisions.has(1), false);
-  assert.match(progress, /If you continue, run propose_changes for 1 alternative focused on: Avoid the weak first draft/);
+  assert.match(progress, /I recommend calling propose_changes to pursue the remaining alternatives/);
   assert.doesNotMatch(result.chat, /#1/);
   assert.match(result.chat, /#2/);
   assert.match(result.chat, /#3/);
