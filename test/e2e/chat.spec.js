@@ -80,6 +80,40 @@ test('CHAT history scrolls independently when its turns exceed the sidebar heigh
   }
 });
 
+test('CHAT virtualizes long histories while preserving the scroll position', async () => {
+  const application = await electron.launch({
+    args: [path.resolve('.')],
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
+  });
+  try {
+    const window = await application.firstWindow();
+    await window.waitForFunction(() => Boolean(window.__noirDraftTest?.editors?.CHAT));
+    const source = Array.from({ length: 100 }, (_, index) => `{{[INPUT]}}\nQuestion ${index + 1}\n{{[OUTPUT]}}\nAnswer ${index + 1}.`).join('\n\n');
+    await window.evaluate((text) => {
+      const { editors, models } = window.__noirDraftTest;
+      editors.CHAT.replace(0, models.CHAT.text.length, text);
+    }, source);
+    const history = window.getByLabel('Chat history');
+    await expect.poll(() => history.locator('.chat-turn').count()).toBeLessThan(40);
+    const middle = await history.evaluate((element) => {
+      element.scrollTop = Math.floor(element.scrollHeight / 2);
+      return element.scrollTop;
+    });
+    await expect.poll(() => history.locator('.chat-turn').count()).toBeLessThan(40);
+    await expect.poll(() => history.evaluate((element) => element.scrollTop)).toBeGreaterThan(middle - 2);
+    await expect(history.getByText(/Turn 5[0-9]/).first()).toBeVisible();
+    const prompt = window.getByLabel('Chat prompt');
+    await prompt.focus();
+    await window.evaluate(() => {
+      const { editors, models } = window.__noirDraftTest;
+      editors.CHAT.replace(models.CHAT.text.length, models.CHAT.text.length, '\n\n{{[INPUT]}}\nOne more\n{{[OUTPUT]}}\nAnswer.');
+    });
+    await expect(prompt).toBeFocused();
+  } finally {
+    await application.close();
+  }
+});
+
 test('CHAT anchors a short history to the bottom before it overflows', async () => {
   const application = await electron.launch({
     args: [path.resolve('.')],
@@ -212,7 +246,6 @@ test('retry does not record an identical rewrite as a second sibling', async () 
     await window.getByLabel('Chat prompt').fill('Rewrite it.');
     await window.getByRole('button', { name: 'Send' }).click();
     await expect(window.getByRole('button', { name: 'Retry call' })).toBeVisible();
-    window.once('dialog', (dialog) => dialog.accept());
     await window.getByRole('button', { name: 'Retry call' }).click();
     await expect.poll(() => window.evaluate(() => window.__noirDraftTest.getHistory().currentRevision)).toBe(1);
     const siblings = await window.evaluate(() => {
@@ -222,6 +255,31 @@ test('retry does not record an identical rewrite as a second sibling', async () 
     expect(siblings).toEqual([2]);
   } finally {
     await server.close();
+    await application.close();
+  }
+});
+
+test('a failed turn can be retried in place without confirmation', async () => {
+  const application = await electron.launch({
+    args: [path.resolve('.')],
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
+  });
+  const server = await startFakeKoboldServer();
+  try {
+    const window = await application.firstWindow();
+    await window.waitForFunction(() => Boolean(window.__noirDraftTest?.connectToKobold));
+    await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
+    await server.close();
+    await window.getByLabel('Chat prompt').fill('Try again.');
+    await window.getByRole('button', { name: 'Send' }).click();
+    const history = window.getByLabel('Chat history');
+    await expect(history).toContainText('KoboldCpp generation failed.');
+    await expect(history.getByRole('button', { name: 'Retry call' })).toBeVisible();
+    await expect(history.locator('.chat-turn-pending')).toHaveCount(1);
+    await history.getByRole('button', { name: 'Retry call' }).click();
+    await expect(history).toContainText('KoboldCpp generation failed.');
+    await expect(history.locator('.chat-turn-pending')).toHaveCount(1);
+  } finally {
     await application.close();
   }
 });

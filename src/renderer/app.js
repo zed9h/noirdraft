@@ -411,27 +411,14 @@ try {
   let nextChatJobId = 1;
   const chatJobs = [];
   let renderedChatTurnCount = 0;
+  const chatVirtualTurnHeight = 150;
+  const chatVirtualBuffer = 12;
+  let chatVirtualRange = null;
+  let chatVirtualScrollFrame = null;
   const chatContextStart = (turns) => {
     if (pinnedChatStart !== null && pinnedChatStart >= 0 && pinnedChatStart < turns.length) return pinnedChatStart;
     return Math.max(0, turns.length - chatHistoryMessageCount);
   };
-  let chatContextLineFrame = null;
-  const positionChatContextLine = () => {
-    chatContextLineFrame = null;
-    const startCard = chatHistory.querySelector('.context-start, .ghost-context-start');
-    const marker = startCard?.querySelector('.chat-context-marker');
-    const lastCard = chatHistory.querySelector('.chat-turn:last-of-type');
-    if (startCard && marker && lastCard) {
-      const top = startCard.offsetTop + marker.offsetTop + marker.offsetHeight;
-      const bottom = lastCard.offsetTop + lastCard.offsetHeight + Number.parseFloat(getComputedStyle(chatHistory).paddingBottom);
-      chatHistory.style.setProperty('--context-line-top', `${top}px`);
-      chatHistory.style.setProperty('--context-line-height', `${Math.max(0, bottom - top - 8)}px`);
-    }
-  };
-  const scheduleChatContextLinePosition = () => {
-    if (chatContextLineFrame === null) chatContextLineFrame = requestAnimationFrame(positionChatContextLine);
-  };
-  new ResizeObserver(scheduleChatContextLinePosition).observe(chatHistory);
   const updateChatContextPresentation = () => {
     const start = pinnedChatStart !== null && pinnedChatStart >= 0 && pinnedChatStart < renderedChatTurnCount
       ? pinnedChatStart
@@ -445,12 +432,12 @@ try {
       card.classList.toggle('context-start', index === start && isStoredTurn && pinnedChatStart !== null);
       card.classList.toggle('ghost-context-start', index === start && isStoredTurn && pinnedChatStart === null);
       const marker = card.querySelector('.chat-context-marker');
+      if (!marker) continue;
       marker.textContent = isPinned ? '●' : '○';
       marker.setAttribute('aria-label', isPinned ? 'Unpin context start' : `Use context from turn ${index + 1}`);
       marker.title = marker.getAttribute('aria-label');
       marker.disabled = !isStoredTurn;
     }
-    scheduleChatContextLinePosition();
   };
   const staticChatPreamble = () => composeContext({
     storyText: models.STORY.text, metadataText: models.METADATA.text,
@@ -489,7 +476,7 @@ try {
     const input = chatPrompt.value.trim();
     const hasTarget = ['STORY', 'METADATA'].includes(activeRoot) && models[activeRoot].selectionStart !== models[activeRoot].selectionEnd;
     contextToggle.dataset.targetColor = hasTarget ? String(nextChatJobId % 4) : '';
-    if (!input) { chatContextSummary.textContent = 'Draft context'; return; }
+    if (!input) { chatContextSummary.textContent = 'Draft content'; return; }
     const turns = parseChatTurns(models.CHAT.text);
     const roughTurn = composeContext({
       storyText: models.STORY.text, metadataText: models.METADATA.text,
@@ -616,16 +603,33 @@ try {
     }
   };
   const renderChatHistory = (pendingTurn = null) => {
+    const restorePromptFocus = document.activeElement === chatPrompt;
     const previousScrollTop = chatHistory.scrollTop;
     const wasAtBottom = chatHistory.scrollHeight - chatHistory.clientHeight - previousScrollTop <= 2;
+    const anchor = !wasAtBottom && [...chatHistory.querySelectorAll('.chat-turn[data-turn-index]')]
+      .find((card) => Number(card.dataset.turnIndex) < renderedChatTurnCount);
+    const anchorIndex = anchor ? Number(anchor.dataset.turnIndex) : null;
+    const anchorOffset = anchor ? anchor.offsetTop - previousScrollTop : null;
     const turns = parseChatTurns(models.CHAT.text);
     renderedChatTurnCount = turns.length;
     const start = chatContextStart(turns);
+    const pendingJobs = chatJobs.filter((job) => ['queued', 'generating', 'failed', 'cancelled'].includes(job.state));
+    const virtualize = turns.length > 40;
+    const visibleStart = virtualize ? Math.max(0, Math.floor(previousScrollTop / chatVirtualTurnHeight) - chatVirtualBuffer) : 0;
+    const visibleEnd = virtualize
+      ? Math.min(turns.length, Math.ceil((previousScrollTop + chatHistory.clientHeight) / chatVirtualTurnHeight) + chatVirtualBuffer)
+      : turns.length;
+    chatVirtualRange = virtualize ? { start: visibleStart, end: visibleEnd } : null;
     chatHistory.replaceChildren();
-    chatHistory.classList.toggle('has-context', turns.length > 0);
     updateDraftContextSummary();
-    const visibleTurns = pendingTurn ? [...turns, pendingTurn] : turns;
-    for (const [index, turn] of visibleTurns.entries()) {
+    if (visibleStart > 0) {
+      const spacer = document.createElement('div');
+      spacer.className = 'chat-history-spacer';
+      spacer.style.height = `${visibleStart * chatVirtualTurnHeight}px`;
+      chatHistory.append(spacer);
+    }
+    for (let index = visibleStart; index < visibleEnd; index += 1) {
+      const turn = turns[index];
       const job = chatJobs.find((candidate) => candidate.turnIndex === index && candidate.state !== 'removed');
       const card = document.createElement('article');
       card.className = 'chat-turn';
@@ -654,7 +658,10 @@ try {
         pinnedChatStart = pinnedChatStart === index ? null : index;
         updateChatContextPresentation();
       });
-      header.append(deleteTurn, title, marker);
+      const actions = document.createElement('div');
+      actions.className = 'chat-turn-actions';
+      actions.append(deleteTurn);
+      header.append(marker, title, actions);
       const createMessage = (role, text, call = null) => {
         const message = document.createElement('section');
         message.className = `chat-message chat-${role.toLowerCase()} chat-${role === 'user' ? 'input' : 'output'}`;
@@ -684,6 +691,11 @@ try {
         } else {
           labelTitle.setAttribute('aria-label', `Show raw response for turn ${index + 1}`);
           labelTitle.addEventListener('click', () => void openRawResponseDialog(call ?? { id: null, rawResponse: 'Raw response is available only during this session.' }));
+          const tokens = document.createElement('span');
+          tokens.className = 'chat-token-count';
+          const rawOutput = call?.rawResponse ?? turn.output;
+          tokens.textContent = `~${Math.ceil((turn.input.length + rawOutput.length) / 4)} tokens`;
+          label.append(tokens);
           if (call) label.append(renderChatCall(call));
         }
         const content = document.createElement('div');
@@ -696,15 +708,31 @@ try {
       card.append(header, createMessage('user', displayChatInput(turn.input), job), createMessage('agent', displayChatOutput(turn.output), job));
       chatHistory.append(card);
     }
-    const pendingJobs = chatJobs.filter((job) => ['queued', 'generating', 'failed', 'cancelled'].includes(job.state));
+    if (visibleEnd < turns.length) {
+      const spacer = document.createElement('div');
+      spacer.className = 'chat-history-spacer';
+      spacer.style.height = `${(turns.length - visibleEnd) * chatVirtualTurnHeight}px`;
+      chatHistory.append(spacer);
+    }
     for (const [pendingIndex, job] of pendingJobs.entries()) {
       chatHistory.append(renderPendingChatTurn(job, turns.length + pendingIndex));
     }
-    requestAnimationFrame(() => {
-      scheduleChatContextLinePosition();
-      chatHistory.scrollTop = wasAtBottom ? chatHistory.scrollHeight : previousScrollTop;
-    });
+    const replacementAnchor = anchorIndex === null ? null : chatHistory.querySelector(`.chat-turn[data-turn-index="${anchorIndex}"]`);
+    chatHistory.scrollTop = wasAtBottom
+      ? chatHistory.scrollHeight
+      : replacementAnchor ? replacementAnchor.offsetTop - anchorOffset : previousScrollTop;
+    if (restorePromptFocus) chatPrompt.focus({ preventScroll: true });
   };
+
+  chatHistory.addEventListener('scroll', () => {
+    if (!chatVirtualRange || chatVirtualScrollFrame !== null) return;
+    chatVirtualScrollFrame = requestAnimationFrame(() => {
+      chatVirtualScrollFrame = null;
+      const nextStart = Math.max(0, Math.floor(chatHistory.scrollTop / chatVirtualTurnHeight) - chatVirtualBuffer);
+      const nextEnd = Math.min(renderedChatTurnCount, Math.ceil((chatHistory.scrollTop + chatHistory.clientHeight) / chatVirtualTurnHeight) + chatVirtualBuffer);
+      if (nextStart !== chatVirtualRange.start || nextEnd !== chatVirtualRange.end) renderChatHistory();
+    });
+  });
 
   chatHistoryCount.addEventListener('change', async () => {
     chatHistoryMessageCount = Math.max(0, Number(chatHistoryCount.value) || 0);
@@ -741,7 +769,7 @@ try {
       cancel.setAttribute('aria-label', `Cancel call in turn ${job.turnIndex ?? 'pending'}`);
       cancel.addEventListener('click', () => cancelChatJob(job));
       call.append(cancel);
-    } else if (job.kind === 'rewrite' && job.state === 'complete') {
+    } else if (job.state === 'complete' || job.state === 'failed') {
       const retry = document.createElement('button');
       retry.type = 'button';
       retry.className = 'chat-call-icon';
@@ -757,6 +785,7 @@ try {
     const card = document.createElement('article');
     card.className = 'chat-turn chat-turn-pending';
     card.dataset.turnIndex = String(index);
+    card.dataset.jobId = String(job.id);
     const header = document.createElement('header');
     const deleteTurn = document.createElement('button');
     deleteTurn.type = 'button';
@@ -766,25 +795,33 @@ try {
     deleteTurn.addEventListener('click', () => deleteChatTurn(index, job));
     const title = document.createElement('span');
     title.textContent = `Turn ${index + 1}`;
-    header.append(deleteTurn, title);
+    const actions = document.createElement('div');
+    actions.className = 'chat-turn-actions';
+    actions.append(deleteTurn);
+    header.append(title, actions);
     const input = document.createElement('section');
     input.className = 'chat-message chat-user chat-input';
     const inputLabel = document.createElement('div');
     inputLabel.className = 'chat-message-label';
-    inputLabel.textContent = 'user';
-    inputLabel.classList.add('chat-role-action');
-    inputLabel.setAttribute('role', 'button');
-    inputLabel.tabIndex = 0;
-    inputLabel.setAttribute('aria-label', `Show raw request for pending turn ${index + 1}`);
-    inputLabel.addEventListener('click', () => void openContextDialog(job.packet ?? job.input, 'Raw user request'));
+    const inputTitle = document.createElement('button');
+    inputTitle.type = 'button';
+    inputTitle.className = 'chat-role-action';
+    inputTitle.textContent = 'user';
+    inputTitle.setAttribute('aria-label', `Show raw request for pending turn ${index + 1}`);
+    inputTitle.addEventListener('click', () => void openContextDialog(job.packet ?? job.input, 'Raw user request'));
     const inputTokens = document.createElement('span');
     inputTokens.className = 'chat-token-count';
     inputTokens.textContent = `~${Math.ceil((job.packet ?? job.input).length / 4)} tokens`;
-    inputLabel.append(inputTokens);
+    inputLabel.append(inputTitle, inputTokens);
     const inputContent = document.createElement('div');
     inputContent.className = 'chat-message-content';
     inputContent.textContent = job.input;
-    input.append(inputLabel, inputContent);
+    if (job.kind === 'rewrite' && job.anchor?.target) {
+      const selection = document.createElement('blockquote');
+      selection.className = 'chat-call-selection';
+      selection.textContent = job.anchor.target;
+      input.append(inputLabel, selection, inputContent);
+    } else input.append(inputLabel, inputContent);
     const output = document.createElement('section');
     output.className = 'chat-message chat-agent chat-output';
     const outputLabel = document.createElement('div');
@@ -797,19 +834,40 @@ try {
     outputTitle.setAttribute('aria-label', `Show raw response for pending turn ${index + 1}`);
     outputTitle.addEventListener('click', () => void openRawResponseDialog(job));
     outputLabel.append(outputTitle);
-    outputLabel.append(renderChatCall(job));
+    const totalTokens = Math.ceil(((job.packet ?? job.input).length + (job.rawResponse ?? job.output ?? '').length) / 4);
+    const outputTokens = document.createElement('span');
+    outputTokens.className = 'chat-token-count';
+    outputTokens.textContent = `~${totalTokens} tokens`;
+    outputLabel.append(outputTokens, renderChatCall(job));
     const outputContent = document.createElement('div');
     outputContent.className = 'chat-message-content';
-    renderChatMessageContent(outputContent, job.output || job.progress || 'Preparing the agent request…');
+    const isStatus = !job.output || job.state === 'failed';
+    if (isStatus) {
+      outputContent.classList.add('chat-message-status');
+      if (job.state === 'failed') outputContent.classList.add('chat-message-error');
+      outputContent.textContent = job.progress || 'Working…';
+    } else renderChatMessageContent(outputContent, job.output);
     output.append(outputLabel, outputContent);
     if (job.state === 'generating' && job.currentIntent?.intent) {
       const intent = document.createElement('div');
       intent.className = 'chat-agent-intent';
-      intent.textContent = `Current proposal intent: ${job.currentIntent.intent}`;
+      intent.textContent = job.currentIntent.intent;
       output.append(intent);
     }
     card.append(header, input, output);
     return card;
+  };
+  const refreshLiveChatTurn = (job) => {
+    const card = chatHistory.querySelector(`.chat-turn[data-job-id="${job.id}"]`);
+    if (!card) {
+      renderChatHistory();
+      return;
+    }
+    const restorePromptFocus = document.activeElement === chatPrompt;
+    const wasAtBottom = chatHistory.scrollHeight - chatHistory.clientHeight - chatHistory.scrollTop <= 2;
+    card.replaceWith(renderPendingChatTurn(job, Number(card.dataset.turnIndex)));
+    if (wasAtBottom) chatHistory.scrollTop = chatHistory.scrollHeight;
+    if (restorePromptFocus) chatPrompt.focus({ preventScroll: true });
   };
   const cancelChatJob = (job) => {
     if (job.state === 'generating') job.abortController?.abort();
@@ -838,13 +896,27 @@ try {
     await persistAfterCommit();
   };
   const retryChatJob = async (job) => {
-    if (!window.confirm('Retry this rewrite? The previous result will remain as a version branch.')) return;
-    const baseText = await reconstructRevision(job.history, job.baseRevisionId);
-    if (job.history.currentRevision === job.revisionId && job.model.text === await reconstructRevision(job.history, job.revisionId)) {
+    const baseText = job.kind === 'rewrite' ? await reconstructRevision(job.history, job.baseRevisionId) : null;
+    if (job.kind === 'rewrite' && job.revisionId !== null && job.revisionId !== undefined
+      && job.history.currentRevision === job.revisionId && job.model.text === await reconstructRevision(job.history, job.revisionId)) {
       await job.controller.checkout(job.baseRevisionId);
     }
+    if (job.state === 'failed') {
+      job.state = 'queued';
+      job.output = '';
+      job.rawResponse = '';
+      job.progress = '';
+      job.currentIntent = null;
+      job.revisionId = null;
+      job.revisionIds = [];
+      if (job.kind === 'rewrite') job.baseText = baseText;
+      refreshAgentTargetHighlights();
+      renderChatHistory();
+      void processChatQueue();
+      return;
+    }
     chatJobs.push({
-      id: nextChatJobId++, input: job.input, output: '', state: 'queued', kind: 'rewrite',
+      id: nextChatJobId++, input: job.input, output: '', state: 'queued', kind: job.kind,
       root: job.root, history: job.history, controller: job.controller, model: job.model,
       baseRevisionId: job.baseRevisionId, range: job.range, baseText, anchor: job.anchor, packet: job.packet,
       protocolPrompt: job.protocolPrompt,
@@ -868,7 +940,7 @@ try {
     if (!job) return;
     activeChatJob = job;
     job.state = 'generating';
-    job.progress = 'Requesting the agent plan…';
+    job.progress = 'Thinking…';
     job.abortController = new AbortController();
     chatAbortController = job.abortController;
     setChatSending();
@@ -897,10 +969,10 @@ try {
             job.revisionIds = revisions.map(({ id }) => id);
             job.revisionId = revisions[0]?.id ?? null;
             job.currentIntent = intent;
-            job.progress = intent?.intent ? 'Applying the current proposal plan…' : 'Processing the agent calls…';
+            job.progress = intent?.intent ? 'Working…' : 'Thinking…';
             refreshLiveRawResponse(job);
             renderVersions();
-            renderChatHistory();
+            refreshLiveChatTurn(job);
           },
           signal: job.abortController.signal,
         });
@@ -922,9 +994,9 @@ try {
           finishReason = event.finishReason ?? finishReason;
           job.output = output;
           job.rawResponse = rawResponse;
-          job.progress = output ? 'Writing reply…' : 'Receiving reply…';
+          job.progress = output ? 'Writing…' : 'Thinking…';
           refreshLiveRawResponse(job);
-          renderChatHistory();
+          refreshLiveChatTurn(job);
         }
         if (finishReason === 'length' || /\b(?:draft_chat|propose_changes|review_changes|finish_changes)\s*\(/i.test(output)) {
           const error = new Error(finishReason === 'length'
@@ -940,6 +1012,7 @@ try {
       job.state = error.name === 'AbortError' || error.code === 'ABORTED' ? 'cancelled' : 'failed';
       job.output = job.state === 'cancelled' ? 'Cancelled.' : error.message;
       job.rawResponse = error.rawText ?? null;
+      job.progress = job.output;
     } finally {
       chatAbortController = null;
       activeChatJob = null;
@@ -1354,11 +1427,6 @@ try {
     const currentHistory = activeHistory();
     if (!currentHistory) return;
     versionInspector.replaceChildren();
-    const title = document.createElement('h3');
-    title.textContent = pinnedRevisionIds.length
-      ? `Pinned variations (${pinnedRevisionIds.length})`
-      : 'Variation inspector';
-    versionInspector.append(title);
     const ids = pinnedRevisionIds.length ? pinnedRevisionIds : (inspectedRevisionId === null ? [] : [inspectedRevisionId]);
     if (ids.length === 0) {
       const hint = document.createElement('p');

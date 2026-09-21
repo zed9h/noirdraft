@@ -166,9 +166,9 @@
           <div class="chat-history" data-chat-history aria-label="Chat history"></div>
           <div class="chat-composer" data-chat-composer>
             <div data-pin-status hidden></div>
-            <div class="chat-context-preview">
-              <button type="button" data-context-toggle aria-label="Preview context for draft message">USER</button>
-              <span data-chat-context-summary aria-live="polite"></span>
+          <div class="chat-context-preview chat-message-label">
+              <button type="button" class="chat-role-action" data-context-toggle aria-label="Preview context for draft message">USER</button>
+              <span class="chat-token-count" data-chat-context-summary aria-live="polite"></span>
             </div>
             <textarea rows="3" data-chat-prompt aria-label="Chat prompt" placeholder="Message the agent…"></textarea>
             <div class="chat-composer-actions">
@@ -192,9 +192,7 @@
       <div class="pane-resizer pane-resizer-horizontal" data-pane-resizer="versions" data-resizer-for="versions-view" role="separator" aria-label="Resize versions pane" aria-orientation="horizontal" tabindex="0" hidden></div>
       <section id="versions-view" class="versions-view" aria-label="Versions graph" hidden>
         <div class="version-graph-panel" data-version-graph-panel>
-          <div class="versions-heading">
-            <div><p class="eyebrow">Versions</p><h3>Revision graph</h3></div>
-          </div>
+          <div class="versions-heading"><p class="eyebrow">Versions</p></div>
           <input type="text" data-version-search aria-label="Search revisions" placeholder="Search revisions (id, note, origin)…">
           <div class="version-search-results" data-version-search-results hidden></div>
           <div class="version-graph" data-version-graph aria-label="Version graph" tabindex="0"></div>
