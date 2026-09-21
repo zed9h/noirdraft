@@ -22,6 +22,46 @@ test('a reviewed chat draft is approved implicitly without a separate send call'
   assert.match(result.rawResponse, /"status":"approved"/);
 });
 
+test('chat approval accepts a repeated copy of the reviewed draft', async () => {
+  const history = await createHistory('Original.');
+  let calls = 0;
+  const draft = { intent: 'Greet the author.', message: 'Hello.' };
+  const client = { async chatCompletion() {
+    calls += 1;
+    return calls === 1
+      ? iterate({ chat: draft }, 'draft')
+      : iterate({ chat: { ...draft, editorial_comment: 'This greeting is complete.', verdict: 'approve' } }, 'approve');
+  } };
+  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 0], request: 'hi', agentProtocol: protocol });
+  assert.equal(result.chat, 'Hello.');
+});
+
+test('a new chat draft may approve itself in the first iteration', async () => {
+  const history = await createHistory('Original.');
+  const client = { async chatCompletion() {
+    return iterate({ chat: { intent: 'Acknowledge the author.', message: 'Understood.', verdict: 'approve' } }, 'immediate');
+  } };
+  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 0], request: 'Do not repeat yourself.', agentProtocol: protocol });
+  assert.equal(result.chat, 'Understood.');
+});
+
+test('an inferred chat-to-changes transition can retry a wrong cursor operation without getting stuck', async () => {
+  const history = await createHistory('Original.');
+  let calls = 0;
+  const client = { async chatCompletion() {
+    calls += 1;
+    if (calls === 1) return iterate({ chat: { intent: 'Consider the opening.', message: 'I can make this more evocative.' } }, 'chat');
+    if (calls === 2) return iterate({ chat: { editorial_comment: 'A concrete revision is better.' }, changes: { change_alternatives_count: 1, intent: 'Add one evocative phrase.', operation: 'replace', proposals: [{ text: 'Rain-dark glass' }] } }, 'wrong-operation');
+    if (calls === 3) return iterate({ chat: { editorial_comment: 'A concrete revision is better.' }, changes: { change_alternatives_count: 1, intent: 'Add one evocative phrase.', operation: 'insert', proposals: [{ text: 'Rain-dark glass ' }] } }, 'retry-operation');
+    if (calls === 4) return iterate({ changes: { intent: 'Approve the insertion.', operation: 'insert', reviews: [{ revision_id: 1, editorial_comment: 'It reads naturally at the cursor.', verdict: 'approve' }] }, chat: { intent: 'Conclude.', message: 'I added an evocative phrase.' } }, 'conclude');
+    return iterate({ chat: { editorial_comment: 'Complete.', verdict: 'approve' } }, 'finish');
+  } };
+  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 0], request: 'Make the opening vivid.', agentProtocol: protocol });
+  assert.equal(await reconstructRevision(history, 1), 'Rain-dark glass Original.');
+  assert.match(result.rawResponse, /No selection is marked/);
+  assert.match(result.chat, /#1/);
+});
+
 test('one iteration may switch from chat to changes, then from changes to conclusion chat', async () => {
   const story = 'Original.';
   const history = await createHistory(story);

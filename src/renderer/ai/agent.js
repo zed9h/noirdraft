@@ -17,8 +17,8 @@ export const TURN_ITERATE_TOOL = {
     description: 'The only NoirDraft turn function. Use chat for an author-facing draft and its assessment; use changes for manuscript proposals and their assessments. Both roots can occur in one valid chat-to-changes or changes-to-conclusion-chat transition.',
     parameters: { type: 'object', properties: {
       chat: { type: 'object', properties: {
-        intent: { type: 'string', description: 'Purpose of a new chat draft.' }, message: { type: 'string', description: 'Complete new author-facing draft.' },
-        editorial_comment: { type: 'string', description: 'Assessment of the preceding chat draft; write before verdict.' }, verdict: { type: 'string', enum: ['approve', 'rewrite', 'switch_to_changes'] },
+        intent: { type: 'string', description: 'Purpose of a new chat draft. It may be repeated while reviewing that draft.' }, message: { type: 'string', description: 'Complete new author-facing draft. It may be repeated unchanged while reviewing that draft.' },
+        editorial_comment: { type: 'string', description: 'Assessment of the preceding chat draft; write before verdict. When present, intent and message may remain as the reviewed draft.' }, verdict: { type: 'string', enum: ['approve', 'rewrite', 'switch_to_changes'], description: 'A new chat draft may use approve to send itself immediately; otherwise this is the verdict on the preceding draft.' },
       }, additionalProperties: false },
       changes: { type: 'object', properties: {
         change_alternatives_count: { type: 'integer', minimum: 1, description: 'Required only in the first changes batch: total alternatives the author asked this change to offer.' },
@@ -70,7 +70,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, r
   let objective = null;
   let pendingIntent = null;
   const pending = []; const approved = []; const active = []; const resultTexts = new Map(); const cached = new Map([[baseRevisionId, base]]);
-  let retries = 0; let invalid = 0; let retracted = 0; let complete = false;
+  let retries = 0; let chatRetries = 0; let invalid = 0; let retracted = 0; let complete = false;
   const finalChat = () => complete && chatDraft ? [...approved.filter((revision) => history.revisions.get(revision.id) === revision).map((revision) => `[#${revision.id}](noirdraft://version/${root}/${revision.id})`), chatDraft.message].join(' ') : approved.filter((revision) => history.revisions.get(revision.id) === revision).map((revision) => `[#${revision.id}](noirdraft://version/${root}/${revision.id})`).join(' ');
   const report = () => onProgress?.({ rawResponse: raw, chat: finalChat(), revisions: [...active], intent: pendingIntent ?? chatDraft });
   const remove = (revision) => { for (const collection of [active, pending, approved]) { const index = collection.indexOf(revision); if (index >= 0) collection.splice(index, 1); } history.revisions.delete(revision.id); history.retiredRevisionIdFloor = Math.max(history.retiredRevisionIdFloor ?? -1, revision.id); retracted += 1; };
@@ -86,7 +86,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, r
   const chatReview = () => [
     'NOIRDRAFT CHAT REVIEW', `Intent: ${chatDraft.intent}`,
     'Editorial concern: Is this reply accurate, helpful, complete, and appropriately concise? Does it postpone or delegate editorial work to the author, promise a change, or clearly entail a manuscript change?',
-    phase === 'conclusion' ? 'Managerial concern: This is the final conclusion. Use chat.editorial_comment followed by verdict approve or rewrite. Changes are unavailable.' : 'Managerial concern: Use chat.editorial_comment followed by verdict approve, rewrite, or switch_to_changes. switch_to_changes must include a changes root in this same call so NoirDraft does the work now.',
+    phase === 'conclusion' ? 'Managerial concern: This is the final conclusion. Approve it, or provide a revised message. Changes are unavailable.' : `Managerial concern: Approve this reply, provide a revised message, or include a changes root to do the edit now. This is chat revision ${chatRetries + 1} of 3; after three revisions NoirDraft sends the latest reply rather than continuing to loop.`,
     '----- PROPOSED REPLY -----', chatDraft.message, '----- END OF REPLY -----',
   ].join('\n');
   const changeReview = (managerial) => {
@@ -138,6 +138,10 @@ export async function requestRewrite({ client, history, baseRevisionId, range, r
     if (!changes || typeof changes !== 'object') return [reject('A changes root is required.')];
     if (first) {
       if (!Number.isSafeInteger(changes.change_alternatives_count) || changes.change_alternatives_count < 1 || typeof changes.intent !== 'string' || !changes.intent.trim() || !Array.isArray(changes.proposals) || !changes.proposals.length) return [reject('The first changes root requires positive change_alternatives_count, nonempty intent, and at least one proposal.')];
+      const expected = context.target.length ? 'replace' : 'insert';
+      if (changes.operation !== expected) return [reject(expected === 'insert'
+        ? 'No selection is marked. This is an insertion at the cursor: retry this changes root with operation "insert" and only new text at that point.'
+        : 'A selection is marked. This change must use operation "replace" with the complete replacement selection.')];
       objective = { change_alternatives_count: changes.change_alternatives_count, intent: changes.intent.trim() }; phase = 'changes';
     } else {
       if (changes.change_alternatives_count !== undefined) return [reject('The Objective count is already recorded; use intent only for the current pending batch.')];
@@ -153,12 +157,22 @@ export async function requestRewrite({ client, history, baseRevisionId, range, r
   const doChat = (chat, allowSwitch) => {
     if (!chat || typeof chat !== 'object') return [reject('A chat root is required.')];
     if (!chatDraft) {
-      if (chat.editorial_comment !== undefined || chat.verdict !== undefined || typeof chat.intent !== 'string' || !chat.intent.trim() || typeof chat.message !== 'string' || !chat.message.trim()) return [reject('A new chat draft requires nonempty chat.intent and chat.message.')];
-      chatDraft = { intent: chat.intent.trim(), message: chat.message.trim() }; return [{ type: 'chat' }];
+      if (typeof chat.intent !== 'string' || !chat.intent.trim() || typeof chat.message !== 'string' || !chat.message.trim()) return [reject('A new chat draft requires nonempty chat.intent and chat.message.')];
+      if (chat.editorial_comment !== undefined || (chat.verdict !== undefined && chat.verdict !== 'approve')) return [reject('A new chat draft may omit verdict for review, or use verdict approve to send it immediately.')];
+      chatDraft = { intent: chat.intent.trim(), message: chat.message.trim() };
+      if (chat.verdict === 'approve') { complete = true; return [{ type: 'receipt', text: receipt('approved') }]; }
+      return [{ type: 'chat' }];
     }
-    if (typeof chat.editorial_comment !== 'string' || !chat.editorial_comment.trim() || !['approve', 'rewrite', 'switch_to_changes'].includes(chat.verdict)) return [reject('Assess the pending chat draft with editorial_comment followed by verdict approve, rewrite, or switch_to_changes.')];
-    if (chat.verdict === 'approve') { if (chat.intent !== undefined || chat.message !== undefined) return [reject('chat approve must not include a replacement draft.')]; complete = true; return [{ type: 'receipt', text: receipt('approved') }]; }
-    if (chat.verdict === 'rewrite') { if (typeof chat.message !== 'string' || !chat.message.trim()) return [reject('chat rewrite requires a replacement chat.message.')]; chatDraft = { intent: typeof chat.intent === 'string' && chat.intent.trim() ? chat.intent.trim() : chatDraft.intent, message: chat.message.trim() }; return [{ type: 'chat' }]; }
+    if (chat.verdict === 'approve') { complete = true; return [{ type: 'receipt', text: receipt('approved') }]; }
+    const revisedMessage = typeof chat.message === 'string' && chat.message.trim() && chat.message.trim() !== chatDraft.message;
+    if (chat.verdict === 'rewrite' || (chat.verdict === undefined && revisedMessage)) {
+      if (!revisedMessage) return [reject('A chat rewrite needs a different nonempty message. To keep the current reply, use verdict "approve".')];
+      chatDraft = { intent: typeof chat.intent === 'string' && chat.intent.trim() ? chat.intent.trim() : chatDraft.intent, message: chat.message.trim() };
+      chatRetries += 1;
+      if (chatRetries >= 3) { complete = true; return [{ type: 'receipt', text: receipt('approved', 'The chat retry limit selected the latest revised reply.') }]; }
+      return [{ type: 'chat' }];
+    }
+    if (typeof chat.editorial_comment !== 'string' || !chat.editorial_comment.trim() || chat.verdict !== 'switch_to_changes') return [reject('Keep the current reply with verdict "approve", provide a different chat.message to revise it, or include a changes root to edit the document.')];
     if (!allowSwitch || phase === 'conclusion') return [reject('The final conclusion chat cannot switch back to changes.')];
     return [{ type: 'switch' }];
   };
@@ -167,12 +181,16 @@ export async function requestRewrite({ client, history, baseRevisionId, range, r
     let payload; try { payload = JSON.parse(calls[0].function.arguments); } catch { payload = null; }
     if (!payload || typeof payload !== 'object' || (!payload.chat && !payload.changes)) { invalid += 1; return [reject('turn_iterate requires a chat root, a changes root, or a valid transition with both.')]; }
     if (phase === 'chat') {
-      if (chatDraft && payload.chat?.verdict === 'switch_to_changes') {
-        const review = doChat(payload.chat, true); if (review.some(({ type }) => type === 'json')) return review;
-        if (!payload.changes) return [reject('chat switch_to_changes requires a changes root in the same call.')];
-        chatDraft = null; return doChanges(payload.changes, true);
+      if (payload.changes) {
+        if (chatDraft && payload.chat) {
+          const review = doChat({ ...payload.chat, verdict: 'switch_to_changes' }, true); if (review.some(({ type }) => type === 'json')) return review;
+        }
+        const precedingDraft = chatDraft;
+        chatDraft = null;
+        const results = await doChanges(payload.changes, true);
+        if (phase === 'chat') chatDraft = precedingDraft;
+        return results;
       }
-      if (payload.changes) return [reject('A changes root may accompany chat only after chat verdict switch_to_changes.')];
       return doChat(payload.chat, true);
     }
     if (phase === 'changes') {
@@ -188,9 +206,13 @@ export async function requestRewrite({ client, history, baseRevisionId, range, r
   for (let round = 0; round < 32 && !complete; round += 1) {
     const results = await iterate();
     const hasJson = results.some(({ type }) => type === 'json');
-    const content = complete || hasJson ? results.map(({ text }) => text).join('\n') : phase === 'changes' ? changeReview(manager()) : chatReview();
+    const applied = results.some(({ type }) => type !== 'json');
+    const content = complete || (hasJson && !applied) ? results.map(({ text }) => text).join('\n') : phase === 'changes' ? changeReview(manager()) : chatReview();
     const toolResult = { role: 'tool', tool_call_id: calls[0].id, content };
-    transcript.push(message, toolResult); trace.push(`[noirdraft tool result: ${calls[0].id}]\n${content}\n[noirdraft end tool result: ${calls[0].id}]`); raw = trace.join('\n\n'); report();
+    trace.push(`[noirdraft tool result: ${calls[0].id}]\n${content}\n[noirdraft end tool result: ${calls[0].id}]`); raw = trace.join('\n\n');
+    if (hasJson && !applied) transcript.push({ role: 'user', content: `<noirdraft_manager_correction><![CDATA[The last turn_iterate was not applied. ${results.map(({ text }) => JSON.parse(text).reason).join(' ')} Return one corrected turn_iterate call; do not repeat the rejected call.]]></noirdraft_manager_correction>` });
+    else transcript.push(message, toolResult);
+    report();
     if (complete) break;
     try {
       const response = await client.chatCompletion({ messages: transcript, tools: AGENT_TOOLS, toolChoice: 'required', maxTokens: Math.max(MIN_TOOL_RESPONSE_TOKENS, generationOptions.max_length ?? 0), temperature: generationOptions.temperature ?? 0, signal });
