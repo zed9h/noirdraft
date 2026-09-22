@@ -1,6 +1,54 @@
+@font-face {
+  font-family: "Noto Sans";
+  src: url("fonts/NotoSans-Variable.woff2") format("woff2-variations"), url("fonts/NotoSans-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Noto Serif";
+  src: url("fonts/NotoSerif-Variable.woff2") format("woff2-variations"), url("fonts/NotoSerif-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Noto Serif";
+  src: url("fonts/NotoSerif-Italic-Variable.woff2") format("woff2-variations"), url("fonts/NotoSerif-Italic-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Noto Sans Mono";
+  src: url("fonts/NotoSansMono-Variable.woff2") format("woff2-variations"), url("fonts/NotoSansMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Toolbar icons use a dedicated icon font (ligature text like "menu" maps to
+   a glyph via GSUB) instead of Unicode symbol characters. Generic symbol
+   fonts (e.g. Noto Sans Symbols) position glyphs relative to a text
+   baseline and rendered several px off-center per glyph, inconsistently
+   between Linux/FreeType and Windows/DirectWrite for the same font file.
+   Material Symbols is designed for square UI buttons, so its glyphs sit
+   centered in the em box by construction — verified within 0.5px of
+   center across every icon used here, on this platform. */
+@font-face {
+  font-family: "Material Symbols Outlined";
+  src: url("fonts/MaterialSymbolsOutlined.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   color-scheme: dark;
-  font-family: Inter, "Segoe UI", system-ui, sans-serif;
+  font-family: "Noto Sans", sans-serif;
   color: #e2dbd1;
   background: #12100e;
   scrollbar-color: #5c4938 #15120f;
@@ -40,8 +88,8 @@ button { font: inherit; }
 }
 
 .header-left, .header-actions { display: flex; align-items: center; gap: .4rem; }
-.app-title { font: 600 .85rem/1 Georgia, serif; letter-spacing: .04em; color: #cdc0af; margin-right: .25rem; }
-.doc-name { margin: 0; font: 500 .85rem/1 Inter, sans-serif; color: #ddd4ca; }
+.app-title { font: 600 .85rem/1 "Noto Serif", serif; letter-spacing: .04em; color: #cdc0af; margin-right: .25rem; }
+.doc-name { margin: 0; font: 500 .85rem/1 "Noto Sans", sans-serif; color: #ddd4ca; }
 .status { color: #8a8074; font-size: .78rem; }
 .status-error { color: #ffb4a9; }
 
@@ -66,23 +114,12 @@ button { font: inherit; }
 .icon-button:disabled { opacity: .4; cursor: default; }
 .icon-button:disabled:hover { background: #1c1916; }
 
-/* Flexbox centers each button's line box, but individual glyphs don't paint
-   centered within that box — Unicode arrows in particular sit noticeably
-   above the visual middle in this font stack. .icon-glyph carries the nudge
-   (not the button) so only the glyph moves, not its border box; offsets are
-   from measured ink bounding boxes (screenshot pixel scan) and only apply
-   where the toolbar visibly reads as a staggered row — re-check if the font
-   stack changes. */
-.icon-glyph { display: inline-block; }
-/* [data-undo] .icon-glyph, [data-redo] .icon-glyph { transform: translateY(2px); font-weight: 700; color: white; }
-[data-nav-timeline-back] .icon-glyph { transform: translateY(2px); }
-[data-nav-timeline-forward] .icon-glyph { transform: translateY(-1px); }
-[data-toggle-left] .icon-glyph { transform: translateY(1.5px); }
-[data-save] .icon-glyph { transform: translateY(1px); } */
+.icon-glyph { display: inline-block; font-family: "Material Symbols Outlined"; font-feature-settings: "liga"; }
+[data-undo] .icon-glyph, [data-redo] .icon-glyph { color: #eee; }
 
-/* Glyphs picked for recognizability over the plain monochrome set (open,
-   save, and the overflow menu's more detailed icons) come from the color
-   emoji font; grayscale keeps them from clashing with the rest of the
+/* The overflow menu's decorative prefixes stay color emoji (they sit next to
+   a text label, not centered in a square button, so baseline placement
+   doesn't matter); grayscale keeps them from clashing with the rest of the
    black-and-white chrome while staying legible. */
 .emoji-icon { filter: grayscale(1) brightness(0.85); }
 
@@ -185,7 +222,7 @@ button { font: inherit; }
 .app-info-dialog::backdrop { background: rgba(0, 0, 0, .55); }
 .app-info-dialog form { padding: 1rem; }
 .app-info-heading { display: flex; align-items: start; justify-content: space-between; gap: 1rem; }
-.app-info-heading h2 { margin: 0; font: 600 1.3rem/1.2 Georgia, serif; }
+.app-info-heading h2 { margin: 0; font: 600 1.3rem/1.2 "Noto Serif", serif; }
 .app-info-heading p { margin: .3rem 0 0; color: #a99e91; font-size: .82rem; }
 .app-info-details { margin: 1rem 0 0; }
 .app-info-group { margin: 1.15rem 0 -0.55rem; color: #bd8f61; font-size: .76rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
@@ -402,7 +439,7 @@ button { font: inherit; }
   background: #17140f;
   position: relative;
   caret-color: transparent;
-  font: 17px/1.7 Georgia, "Times New Roman", serif;
+  font: 17px/1.7 "Noto Serif", serif;
   white-space: pre-wrap;
   overflow-wrap: break-word;
   user-select: text;
@@ -414,10 +451,10 @@ button { font: inherit; }
 .chat-turn { flex: 0 0 auto; position: relative; margin-left: .8rem; padding: .45rem .55rem; border: 1px solid #302b26; border-radius: .25rem; background: transparent; }
 .chat-turn.context-included { border-color: #6f5843; background: #211c17; }
 .chat-turn-pending { border-style: dashed; border-color: #806346; }
-.chat-call { display: flex; align-items: center; gap: .35rem; margin-left: auto; color: #b8aea2; font: 600 .66rem/1.25 Inter, sans-serif; letter-spacing: .03em; }
+.chat-call { display: flex; align-items: center; gap: .35rem; margin-left: auto; color: #b8aea2; font: 600 .66rem/1.25 "Noto Sans", sans-serif; letter-spacing: .03em; }
 .chat-call-generating { border-color: #bd8f61; color: #e8ad70; }
 .chat-call-failed { border-color: #9d5555; }
-.chat-call-selection { min-width: 0; margin: .3rem 0 0; padding-left: .6rem; border-left: 3px solid #6f5843; color: #b9afa3; font: italic .78rem/1.4 Georgia, serif; letter-spacing: 0; white-space: pre-wrap; }
+.chat-call-selection { min-width: 0; margin: .3rem 0 0; padding-left: .6rem; border-left: 3px solid #6f5843; color: #b9afa3; font: italic .78rem/1.4 "Noto Serif", serif; letter-spacing: 0; white-space: pre-wrap; }
 .chat-call-selection summary { overflow: hidden; cursor: pointer; text-overflow: ellipsis; white-space: nowrap; }
 .chat-call-selection[open] summary { overflow: visible; text-overflow: clip; white-space: pre-wrap; }
 .chat-call-icon, .chat-turn-delete, .chat-context-marker { display: inline-grid; place-items: center; box-sizing: border-box; width: 1.2rem; height: 1.2rem; padding: 0; border: 1px solid #3a342e; border-radius: .2rem; color: #a99e91; background: #26221d; font: inherit; line-height: 1; cursor: pointer; }
@@ -432,16 +469,16 @@ button { font: inherit; }
 .chat-turn.context-start { border-color: #bd8f61; }
 .chat-turn > header { position: relative; z-index: 3; display: flex; align-items: center; justify-content: flex-start; min-height: 1.2rem; gap: .35rem; color: #bd8f61; font-size: .68rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
 .chat-turn-actions { display: flex; align-items: center; gap: .2rem; margin-left: auto; }
-.chat-message { position: relative; z-index: 3; margin-top: .28rem; font: 14px/1.45 Georgia, serif; }
+.chat-message { position: relative; z-index: 3; margin-top: .28rem; font: 14px/1.45 "Noto Serif", serif; }
 .chat-message + .chat-message { margin-top: .38rem; }
-.chat-agent-intent { margin-top: .32rem; padding: .24rem .38rem; border-left: 2px solid #6f5843; color: #a99e91; font: italic .72rem/1.35 Georgia, serif; }
-.chat-message-label { position: relative; display: flex; align-items: center; gap: .35rem; margin-bottom: .08rem; padding: .1rem .35rem; color: #8a8074; background: #302b26; font: 600 .62rem/1 Inter, sans-serif; letter-spacing: .08em; text-transform: uppercase; }
+.chat-agent-intent { margin-top: .32rem; padding: .24rem .38rem; border-left: 2px solid #6f5843; color: #a99e91; font: italic .72rem/1.35 "Noto Serif", serif; }
+.chat-message-label { position: relative; display: flex; align-items: center; gap: .35rem; margin-bottom: .08rem; padding: .1rem .35rem; color: #8a8074; background: #302b26; font: 600 .62rem/1 "Noto Sans", sans-serif; letter-spacing: .08em; text-transform: uppercase; }
 .chat-token-count { position: absolute; left: 50%; margin: 0; color: #9d9286; font-weight: 400; letter-spacing: 0; text-transform: none; transform: translateX(-50%); }
 .chat-role-action { padding: 0; border: 0; color: inherit; background: transparent; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
 .chat-role-action:hover { color: #e8ad70; }
 .chat-version-reference { display: inline; margin: 0 .12rem; padding: .04rem .2rem; border: 0; border-radius: .15rem; cursor: pointer; line-height: 1; vertical-align: .08em; }
-.chat-version-reference-story { color: #e8ad70; background: #30251c; font: 700 .72rem/1 Georgia, serif; }
-.chat-version-reference-metadata { color: #a8c8d8; background: #202b31; font: 700 .68rem/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.chat-version-reference-story { color: #e8ad70; background: #30251c; font: 700 .72rem/1 "Noto Serif", serif; }
+.chat-version-reference-metadata { color: #a8c8d8; background: #202b31; font: 700 .68rem/1 "Noto Sans Mono", monospace; }
 .chat-agent .chat-message-label { color: #a99e91; }
 .chat-message-content { white-space: pre-wrap; }
 .chat-agent .chat-message-content { color: #eee7dc; }
@@ -456,11 +493,11 @@ button { font: inherit; }
 [data-target-color="1"] { background: color-mix(in srgb, #6c93b8 36%, #302b26); }
 [data-target-color="2"] { background: color-mix(in srgb, #8b9b62 36%, #302b26); }
 [data-target-color="3"] { background: color-mix(in srgb, #9b6e9c 36%, #302b26); }
-.chat-selection-summary { margin: .3rem 0; color: #948a7f; font: .68rem/1.3 Inter, sans-serif; }
+.chat-selection-summary { margin: .3rem 0; color: #948a7f; font: .68rem/1.3 "Noto Sans", sans-serif; }
 .chat-context-controls, .chat-composer-actions { display: flex; align-items: center; gap: .4rem; color: #948a7f; font-size: .7rem; }
 .chat-context-controls input { width: 3.5rem; padding: .18rem .25rem; border: 1px solid #3a342e; border-radius: .18rem; color: #ddd4ca; background: #12100e; }
 .chat-context-controls span { margin-left: auto; text-align: right; }
-[data-chat-prompt] { width: 100%; margin: .4rem 0; padding: .45rem .5rem; border: 1px solid #3a342e; border-radius: .25rem; color: #e2dbd1; background: #12100e; font: 14px/1.4 Georgia, serif; resize: vertical; }
+[data-chat-prompt] { width: 100%; margin: .4rem 0; padding: .45rem .5rem; border: 1px solid #3a342e; border-radius: .25rem; color: #e2dbd1; background: #12100e; font: 14px/1.4 "Noto Serif", serif; resize: vertical; }
 .chat-composer-actions button { padding: .25rem .5rem; border: 1px solid #3a342e; border-radius: .22rem; color: #ccc2b6; background: #26221d; font-size: .72rem; }
 .chat-composer-actions [data-chat-send], .chat-composer-actions [data-chat-cancel] { margin-left: auto; }
 .chat-composer-actions [data-chat-send] { color: #e8ad70; }
@@ -483,7 +520,7 @@ button { font: inherit; }
 .version-graph-panel, .version-inspector { overflow: auto; padding: 1rem; }
 .version-graph-panel { border-right: 1px solid #2c2722; display: flex; flex-direction: column; gap: .6rem; }
 .versions-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-.versions-heading h3 { margin: .15rem 0 0; font: 600 1rem/1.1 Georgia, serif; }
+.versions-heading h3 { margin: .15rem 0 0; font: 600 1rem/1.1 "Noto Serif", serif; }
 .versions-heading button, .versions-reveal {
   padding: .25rem .55rem; border: 1px solid #3a342e; border-radius: .25rem;
   color: #ccc2b6; background: #1c1916; font-size: .76rem;
@@ -533,7 +570,7 @@ button { font: inherit; }
   font-size: .78rem;
 }
 .version-inspector pre { padding: .75rem; overflow: auto; color: #cfc6bb; background: #12100e; white-space: pre-wrap; }
-.version-inspector > h3 { margin: 0 0 .5rem; font: 600 1rem/1.2 Georgia, serif; }
+.version-inspector > h3 { margin: 0 0 .5rem; font: 600 1rem/1.2 "Noto Serif", serif; }
 .version-inspector > p { color: #948a7f; font-size: .8rem; }
 .pinned-variation, .pinned-comparison { margin-top: .6rem; padding-top: .6rem; border-top: 1px solid #302b26; }
 .pinned-variation h4, .pinned-comparison h4 { margin: 0; color: #d7c7b5; font-size: .84rem; }
@@ -584,7 +621,7 @@ button { font: inherit; }
   height: 1lh;
   vertical-align: top;
 }
-.block-heading { color: #f0e9de; font-family: Georgia, "Times New Roman", serif; font-weight: 700; }
+.block-heading { color: #f0e9de; font-family: "Noto Serif", serif; font-weight: 700; }
 .block-heading[data-level="1"] { font-size: 1.7em; line-height: 1.35; }
 .block-heading[data-level="2"] { font-size: 1.45em; line-height: 1.4; }
 .block-heading[data-level="3"] { font-size: 1.25em; line-height: 1.45; }
@@ -594,7 +631,7 @@ button { font: inherit; }
 .block-unordered-list, .block-ordered-list { padding-left: 1rem; }
 .block-horizontal-rule { color: #9d7957; letter-spacing: .08em; }
 .block-fenced-code, .token-inline-code {
-  font-family: "Cascadia Mono", Consolas, monospace;
+  font-family: "Noto Sans Mono", monospace;
   font-size: .88em;
   background: #100e0c;
 }

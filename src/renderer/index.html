@@ -10,31 +10,31 @@
     <div class="shell">
       <header class="app-header">
         <div class="header-left">
-          <button type="button" class="icon-button" data-toggle-left aria-label="Toggle navigation sidebar" aria-expanded="true"><span class="icon-glyph">☰</span></button>
+          <button type="button" class="icon-button" data-toggle-left aria-label="Toggle navigation sidebar" aria-expanded="true"><span class="icon-glyph">menu</span></button>
           <span class="app-title">NoirDraft</span>
           <h2 id="editor-title" class="doc-name">Untitled story</h2>
           <span class="status" data-document-status>No document open</span>
         </div>
         <div class="header-actions toolbar" data-toolbar>
-          <button type="button" class="icon-button" data-nav-stop-back title="Previous stop (Alt+←)" aria-label="Previous stop">◂</button>
-          <button type="button" class="icon-button" data-nav-stop-forward title="Next stop (Alt+→)" aria-label="Next stop">▸</button>
+          <button type="button" class="icon-button" data-nav-stop-back title="Previous stop (Alt+←)" aria-label="Previous stop"><span class="icon-glyph">chevron_left</span></button>
+          <button type="button" class="icon-button" data-nav-stop-forward title="Next stop (Alt+→)" aria-label="Next stop"><span class="icon-glyph">chevron_right</span></button>
           <span class="toolbar-divider" aria-hidden="true"></span>
-          <button type="button" class="icon-button" data-nav-timeline-back title="Previous visited revision (Shift+Alt+←)" aria-label="Previous visited revision"><span class="icon-glyph">⏪&#xFE0E;</span></button>
-          <button type="button" class="icon-button" data-nav-timeline-forward title="Next visited revision (Shift+Alt+→)" aria-label="Next visited revision"><span class="icon-glyph">⏩&#xFE0E;</span></button>
+          <button type="button" class="icon-button" data-nav-timeline-back title="Previous visited revision (Shift+Alt+←)" aria-label="Previous visited revision"><span class="icon-glyph">fast_rewind</span></button>
+          <button type="button" class="icon-button" data-nav-timeline-forward title="Next visited revision (Shift+Alt+→)" aria-label="Next visited revision"><span class="icon-glyph">fast_forward</span></button>
           <span class="toolbar-divider" aria-hidden="true"></span>
           <div class="split-button" data-undo-group>
-            <button type="button" class="icon-button" data-undo title="Undo (Ctrl+Z)" aria-label="Undo"><span class="icon-glyph">↶</span></button>
+            <button type="button" class="icon-button" data-undo title="Undo (Ctrl+Z)" aria-label="Undo"><span class="icon-glyph">undo</span></button>
           </div>
           <div class="split-button" data-redo-group>
-            <button type="button" class="icon-button" data-redo title="Redo (Ctrl+Y)" aria-label="Redo"><span class="icon-glyph">↷</span></button>
-            <button type="button" class="icon-button split-caret" data-redo-menu-toggle hidden aria-haspopup="true" aria-expanded="false" aria-label="Choose redo branch" title="Choose redo branch">…</button>
+            <button type="button" class="icon-button" data-redo title="Redo (Ctrl+Y)" aria-label="Redo"><span class="icon-glyph">redo</span></button>
+            <button type="button" class="icon-button split-caret" data-redo-menu-toggle hidden aria-haspopup="true" aria-expanded="false" aria-label="Choose redo branch" title="Choose redo branch"><span class="icon-glyph">arrow_drop_down</span></button>
             <div class="dropdown-menu" data-redo-menu hidden aria-label="Redo branches"></div>
           </div>
           <span class="toolbar-divider" aria-hidden="true"></span>
-          <button type="button" class="icon-button emoji-icon" data-open title="Open a document…" aria-label="Open…">📂</button>
-          <button type="button" class="icon-button emoji-icon" data-save title="Save" aria-label="Save"><span class="icon-glyph">💾</span></button>
+          <button type="button" class="icon-button" data-open title="Open a document…" aria-label="Open…"><span class="icon-glyph">folder_open</span></button>
+          <button type="button" class="icon-button" data-save title="Save" aria-label="Save"><span class="icon-glyph">save</span></button>
           <div class="overflow" data-overflow>
-            <button type="button" class="icon-button" data-overflow-toggle aria-haspopup="true" aria-expanded="false" aria-label="More actions" title="More actions">⋮</button>
+            <button type="button" class="icon-button" data-overflow-toggle aria-haspopup="true" aria-expanded="false" aria-label="More actions" title="More actions"><span class="icon-glyph">more_vert</span></button>
             <div class="overflow-menu" data-overflow-menu hidden>
               <button type="button" data-save-as title="Save this document to a new file"><span class="menu-icon emoji-icon" aria-hidden="true">📄</span>Save as…</button>
               <button type="button" data-save-note title="Save with a short note describing this revision"><span class="menu-icon emoji-icon" aria-hidden="true">📝</span>Save with note…</button>
@@ -44,7 +44,7 @@
               <button type="button" data-app-info title="Show document and application details"><span class="menu-icon emoji-icon" aria-hidden="true">ℹ️</span>App info…</button>
             </div>
           </div>
-          <button type="button" class="icon-button" data-toggle-right aria-label="Toggle chat sidebar" title="Toggle chat sidebar" aria-expanded="true">💬</button>
+          <button type="button" class="icon-button" data-toggle-right aria-label="Toggle chat sidebar" title="Toggle chat sidebar" aria-expanded="true"><span class="icon-glyph">chat</span></button>
         </div>
       </header>
       <div class="save-note-popover" data-save-note-popover hidden>
@@ -66,7 +66,7 @@
               <h2 id="app-info-title">NoirDraft</h2>
               <p>A local-first Markdown editor for fiction.</p>
             </div>
-            <button type="submit" class="icon-button" aria-label="Close app info">×</button>
+            <button type="submit" class="icon-button" aria-label="Close app info"><span class="icon-glyph">close</span></button>
           </div>
           <dl class="app-info-details">
             <div><dt>Document</dt><dd data-app-document>Untitled story</dd></div>
@@ -96,7 +96,7 @@
         <form method="dialog">
           <div class="app-info-heading">
             <h2 id="context-dialog-title">Raw model context</h2>
-            <button type="submit" class="icon-button" aria-label="Close context">×</button>
+            <button type="submit" class="icon-button" aria-label="Close context"><span class="icon-glyph">close</span></button>
           </div>
           <div class="context-budget" data-context-dialog-summary></div>
           <pre class="context-prompt" data-context-dialog-prompt></pre>
@@ -126,7 +126,7 @@
             <div class="passage-multi-compare" data-passage-multi-compare aria-label="Compare two revisions" hidden></div>
           </div>
           <div class="sidebar-footer">
-            <button type="button" class="icon-button versions-reveal" data-toggle-versions aria-label="Versions" aria-expanded="false" title="Versions">▤</button>
+            <button type="button" class="icon-button versions-reveal" data-toggle-versions aria-label="Versions" aria-expanded="false" title="Versions"><span class="icon-glyph">history</span></button>
             <label class="context-rows-control" title="Rows of document context before and after the cursor or selection">
               Context
               <input type="number" data-context-rows min="1" max="200" step="1" value="12" aria-label="Context rows around cursor or selection">
