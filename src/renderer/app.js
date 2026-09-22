@@ -15,6 +15,9 @@ import { mapRange, passageHistory } from './history/lineage.js';
 import { buildLocalGraph, searchRevisions } from './history/local-graph.js';
 import { wordDiff } from './history/word-diff.js';
 import { extractHeadings, resolveHeadingPath } from './project/headings.js';
+import { createVisitLog, jumpVisitLog, recordVisit, stepVisitLog } from './history/visit-log.js';
+import { endScrub, startScrub, stepScrub } from './history/scrub-session.js';
+import { createSectionNav, recallPosition, savePosition, stepSectionNav, visitSection } from './editor/section-position.js';
 import { parseProjectDocument } from './project/parse.js';
 import { readPins, writePins } from './project/pins.js';
 import { projectRoot } from './project/projection.js';
@@ -1137,9 +1140,14 @@ try {
       event.preventDefault();
       const lastCard = chatHistory.querySelector('.chat-turn:last-of-type');
       const last = chatTurnFocusStop(lastCard);
-      if (!last) return;
-      last.focus({ preventScroll: true });
-      lastCard.scrollIntoView({ block: 'end' });
+      if (last) {
+        last.focus({ preventScroll: true });
+        lastCard.scrollIntoView({ block: 'end' });
+      } else {
+        // An empty history has no turn to step into first; go straight to
+        // the editor rather than leaving Escape with nowhere to land.
+        focusPanel('TEXT');
+      }
       return;
     }
     if (event.key !== 'Enter') return;
@@ -1412,11 +1420,14 @@ try {
   const attachHistory = (nextHistory) => {
     commitController?.destroy();
     history = nextHistory;
+    visitLogs.STORY = createVisitLog(history.currentRevision);
+    lastVisitedRevisionId.STORY = history.currentRevision;
     commitController = new CommitController({
       history,
       model: models.STORY,
       onError: (error) => showStatus(error.message, true),
       onChange: () => {
+        recordVisitIfChanged('STORY');
         refreshHistoryControls();
         renderVersions();
       },
@@ -1431,11 +1442,14 @@ try {
   const attachMetadataHistory = (nextHistory) => {
     metadataCommitController?.destroy();
     metadataHistory = nextHistory;
+    visitLogs.METADATA = createVisitLog(metadataHistory.currentRevision);
+    lastVisitedRevisionId.METADATA = metadataHistory.currentRevision;
     metadataCommitController = new CommitController({
       history: metadataHistory,
       model: models.METADATA,
       onError: (error) => showStatus(error.message, true),
       onChange: () => {
+        recordVisitIfChanged('METADATA');
         if (activeRoot === 'METADATA') {
           refreshHistoryControls();
           renderVersions();
@@ -1503,6 +1517,60 @@ try {
   let inspectedRevisionId = null;
   let pinnedRevisionIds = [];
   let renderedGraphNodeIds = [];
+
+  // Visit-time timeline (Shift+Alt+Arrow) — independent of the graph's own
+  // parent/child ancestry, one log per root since STORY and METADATA keep
+  // separate histories. In-memory only: this is session browsing state, not
+  // manuscript content, so it never gets persisted.
+  const visitLogs = { STORY: createVisitLog(), METADATA: createVisitLog() };
+  const lastVisitedRevisionId = { STORY: null, METADATA: null };
+  const recordVisitIfChanged = (rootName) => {
+    const currentHistory = rootName === 'METADATA' ? metadataHistory : history;
+    if (!currentHistory) return;
+    const currentId = currentHistory.currentRevision;
+    if (lastVisitedRevisionId[rootName] === currentId) return;
+    lastVisitedRevisionId[rootName] = currentId;
+    visitLogs[rootName] = recordVisit(visitLogs[rootName], currentId);
+  };
+
+  // Ctrl+Alt+Arrow (structural) / Shift+Alt+Arrow (visit-time) scrub state: a
+  // held-modifier preview that only commits (real checkout) on release.
+  let scrubSession = null;
+  let scrubMode = null; // 'structural' | 'visit-time' | null
+  let scrubRoot = null; // 'STORY' | 'METADATA'
+  let scrubStarting = false;
+  let scrubPanelWasOpen = false;
+
+  // Alt+Arrow section back/forward (browser-tab style), remembering caret
+  // and scroll position per section.
+  const sectionNav = createSectionNav();
+
+  // Natural caret movement (typing, arrow keys, clicking straight into the
+  // text) also becomes an Alt+Arrow stop, not just outline/pin clicks — but
+  // only once the caret has settled in a *different* highlighted section for
+  // a moment, so scrubbing through many sections quickly (arrow-key repeat,
+  // a big selection drag) doesn't spam the stack with transient stops.
+  const AUTO_SECTION_VISIT_DELAY = 800;
+  let lastHighlightedSectionPath = null;
+  let autoSectionVisitTimer = null;
+  const noteHighlightedSection = (rootName, path) => {
+    // Keeps the departure position accurate: this runs on every caret move,
+    // so by the time the caret leaves a section, that section's last known
+    // position was already saved on the previous call while still inside it.
+    if (path) {
+      savePosition(sectionNav, path, {
+        offset: models[rootName].selectionStart,
+        scrollTop: editors[rootName]?.element.scrollTop ?? 0,
+      });
+    }
+    if (path === lastHighlightedSectionPath) return;
+    lastHighlightedSectionPath = path;
+    if (autoSectionVisitTimer) clearTimeout(autoSectionVisitTimer);
+    autoSectionVisitTimer = path === null ? null : setTimeout(() => {
+      autoSectionVisitTimer = null;
+      visitSection(sectionNav, path);
+    }, AUTO_SECTION_VISIT_DELAY);
+  };
 
   const renderPinnedVariations = async () => {
     const currentHistory = activeHistory();
@@ -1713,6 +1781,7 @@ try {
       document.querySelector(`[data-fold="${rootName}"]`).classList.toggle('is-active-root', rootName === activeRoot);
       const headings = extractHeadings(models[rootName].text, rootName);
       const currentPath = currentHeadingPath(headings, models[rootName].selectionStart);
+      if (rootName === activeRoot) noteHighlightedSection(rootName, currentPath);
       const currentAncestorPaths = ancestorPathsOf(currentPath);
       const hasChildren = (heading) => headings.some((candidate) => candidate.path.startsWith(`${heading.path}/`));
       const isHiddenByAncestor = (heading) => {
@@ -1759,11 +1828,7 @@ try {
         target.title = heading.path;
         target.dataset.root = rootName;
         target.dataset.from = String(heading.from);
-        target.addEventListener('click', () => {
-          switchView(rootName);
-          editors[rootName].setSelection(heading.from, heading.from);
-          elements[rootName].focus();
-        });
+        target.addEventListener('click', () => navigateToSection(heading.path));
         row.append(target);
         const toggle = document.createElement('button');
         toggle.type = 'button';
@@ -1796,12 +1861,7 @@ try {
       item.className = 'pinned-entry';
       item.textContent = result.path;
       item.title = `Open pinned ${result.path}`;
-      item.addEventListener('click', () => {
-        const [rootName] = result.path.split('/');
-        switchView(rootName);
-        editors[rootName].setSelection(result.heading.from, result.heading.from);
-        elements[rootName].focus();
-      });
+      item.addEventListener('click', () => navigateToSection(result.path));
       pinStatus.append(item);
     }
     for (const result of unresolved) {
@@ -1954,19 +2014,25 @@ try {
     }
     event.preventDefault();
   });
+  // Shared by the panel's own arrow keys below and the Ctrl+Alt scrub
+  // navigator: parent / first child / current rendered-neighbor step, ←/→/↑↓.
+  const stepStructural = (currentHistory, currentId, key) => {
+    const revision = currentHistory.revisions.get(currentId);
+    if (key === 'left') return revision?.parents[0] ?? null;
+    if (key === 'right') return childrenOf(currentHistory, currentId)[0]?.id ?? null;
+    const index = renderedGraphNodeIds.indexOf(currentId);
+    const offset = key === 'up' ? -1 : 1;
+    return renderedGraphNodeIds[index + offset] ?? null;
+  };
+
   versionGraph.addEventListener('keydown', (event) => {
     const currentHistory = activeHistory();
     if (!currentHistory) return;
     const currentId = focusedRevisionId ?? currentHistory.currentRevision;
     const revision = currentHistory.revisions.get(currentId);
     let nextId = null;
-    if (event.key === 'ArrowLeft') nextId = revision?.parents[0] ?? null;
-    if (event.key === 'ArrowRight') nextId = childrenOf(currentHistory, currentId)[0]?.id ?? null;
-    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-      const index = renderedGraphNodeIds.indexOf(currentId);
-      const offset = event.key === 'ArrowUp' ? -1 : 1;
-      nextId = renderedGraphNodeIds[index + offset] ?? null;
-    }
+    const key = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' }[event.key];
+    if (key) nextId = stepStructural(currentHistory, currentId, key);
     if (event.key === 'Home') nextId = renderedGraphNodeIds[0] ?? null;
     if (event.key === 'End') nextId = renderedGraphNodeIds.at(-1) ?? null;
     if (event.key === ' ' || event.key === 'Enter') {
@@ -1981,6 +2047,166 @@ try {
       requestAnimationFrame(() => versionGraph.focus());
     }
   });
+
+  // --- Ctrl+Alt / Shift+Alt scrub navigation -------------------------------
+  // Hold-to-preview, release-to-commit. Live-previews content via a
+  // 'scrub-preview'-origin model.replace (ignored by CommitController, see
+  // commits.js) without ever touching history.currentRevision mid-hold; the
+  // real checkout() only runs once, on release.
+
+  const structuralProvider = {
+    step: (providerState, currentId, key) => {
+      const currentHistory = scrubRoot === 'METADATA' ? metadataHistory : history;
+      if (!currentHistory) return null;
+      const nextId = stepStructural(currentHistory, currentId, key);
+      return nextId == null ? null : { id: nextId, providerState };
+    },
+  };
+
+  const visitTimeProvider = {
+    step: (providerState, currentId, key) => {
+      const log = visitLogs[scrubRoot];
+      const result = key === 'left' ? stepVisitLog(log, -1)
+        : key === 'right' ? stepVisitLog(log, 1)
+        : key === 'up' ? jumpVisitLog(log, 'first')
+        : jumpVisitLog(log, 'last');
+      if (result.id == null) return null;
+      visitLogs[scrubRoot] = result.log;
+      return { id: result.id, providerState };
+    },
+  };
+
+  const applyScrubStep = (mode, key) => {
+    if (!scrubSession) return;
+    const provider = mode === 'structural' ? structuralProvider : visitTimeProvider;
+    const next = stepScrub(scrubSession, provider, key);
+    if (next === scrubSession) return; // boundary — no candidate in that direction
+    scrubSession = next;
+    const targetId = scrubSession.currentId;
+    focusedRevisionId = targetId;
+    renderVersions();
+    const currentHistory = scrubRoot === 'METADATA' ? metadataHistory : history;
+    const targetModel = models[scrubRoot];
+    void reconstructRevision(currentHistory, targetId).then((story) => {
+      if (!scrubSession || scrubSession.currentId !== targetId) return; // superseded by a later step
+      targetModel.replace(0, targetModel.text.length, story, { origin: 'scrub-preview' });
+    });
+  };
+
+  const handleScrubKeydown = (mode, event) => {
+    const key = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' }[event.key];
+    if (!key) return;
+    event.preventDefault();
+    if (scrubSession && scrubMode === mode) {
+      applyScrubStep(mode, key);
+      return;
+    }
+    if (scrubSession || scrubStarting) return; // a different mode is mid-hold — ignore until it releases
+    const currentController = activeCommitController();
+    if (!currentController) return;
+    const rootName = activeRoot === 'METADATA' ? 'METADATA' : 'STORY';
+    scrubStarting = true;
+    void currentController.commitPending({ origin: 'user' }).then(() => {
+      scrubStarting = false;
+      scrubRoot = rootName;
+      scrubMode = mode;
+      scrubPanelWasOpen = versionsOpen;
+      const currentHistory = rootName === 'METADATA' ? metadataHistory : history;
+      scrubSession = startScrub({ originId: currentHistory.currentRevision, providerState: null });
+      focusedRevisionId = currentHistory.currentRevision;
+      setVersionsOpen(true);
+      applyScrubStep(mode, key);
+    });
+  };
+
+  const cancelScrub = () => {
+    if (!scrubSession) return;
+    const { originId } = endScrub(scrubSession);
+    const controller = scrubRoot === 'METADATA' ? metadataCommitController : commitController;
+    const wasPanelOpen = scrubPanelWasOpen;
+    scrubSession = null;
+    scrubMode = null;
+    focusedRevisionId = null;
+    void controller.checkout(originId).then(() => {
+      refreshHistoryControls();
+      if (wasPanelOpen) renderVersions(); else setVersionsOpen(false);
+    });
+  };
+
+  const releaseScrub = () => {
+    if (!scrubSession) return;
+    const { finalId } = endScrub(scrubSession);
+    const controller = scrubRoot === 'METADATA' ? metadataCommitController : commitController;
+    const wasPanelOpen = scrubPanelWasOpen;
+    scrubSession = null;
+    scrubMode = null;
+    focusedRevisionId = null;
+    void controller.checkout(finalId).then(() => {
+      refreshHistoryControls();
+      if (wasPanelOpen) renderVersions(); else setVersionsOpen(false);
+    });
+  };
+
+  window.addEventListener('keyup', (event) => {
+    if (!scrubSession) return;
+    if (scrubMode === 'structural' && event.ctrlKey && event.altKey) return; // still held
+    if (scrubMode === 'visit-time' && event.shiftKey && event.altKey) return; // still held
+    releaseScrub();
+  });
+  window.addEventListener('blur', cancelScrub);
+
+  // --- Alt+Arrow section back/forward --------------------------------------
+  // Immediate (no hold/release — nothing here touches revision history), so
+  // it fires directly on keydown.
+
+  const currentSectionPath = (rootName) => {
+    const headings = extractHeadings(models[rootName].text, rootName);
+    return currentHeadingPath(headings, models[rootName].selectionStart);
+  };
+
+  const saveCurrentSectionPosition = () => {
+    if (!['STORY', 'METADATA'].includes(activeRoot)) return;
+    const path = currentSectionPath(activeRoot);
+    if (!path) return;
+    savePosition(sectionNav, path, {
+      offset: models[activeRoot].selectionStart,
+      scrollTop: editors[activeRoot]?.element.scrollTop ?? 0,
+    });
+  };
+
+  const goToSection = (headingPath) => {
+    const resolved = resolveHeadingPath(documentsForPins(), headingPath);
+    if (resolved.status !== 'resolved') return false;
+    const [rootName] = headingPath.split('/');
+    saveCurrentSectionPosition();
+    switchView(rootName);
+    const saved = recallPosition(sectionNav, headingPath);
+    const offset = saved?.offset ?? resolved.heading.from;
+    editors[rootName].setSelection(offset, offset);
+    elements[rootName].focus();
+    requestAnimationFrame(() => {
+      if (saved) editors[rootName].element.scrollTop = saved.scrollTop;
+      else editors[rootName].revealOffset(resolved.heading.from);
+    });
+    return true;
+  };
+
+  // Click-driven jumps (outline rows, pinned entries) push onto the stack;
+  // Alt+Arrow only steps through what's already there — see
+  // handleLocationScrub below.
+  const navigateToSection = (headingPath) => {
+    if (goToSection(headingPath)) visitSection(sectionNav, headingPath);
+  };
+
+  const handleLocationScrub = (event) => {
+    if (!['STORY', 'METADATA'].includes(activeRoot)) return;
+    const direction = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : null;
+    if (direction === null) return;
+    event.preventDefault();
+    const targetPath = stepSectionNav(sectionNav, direction);
+    if (!targetPath) return;
+    goToSection(targetPath);
+  };
 
   for (const [name, element] of Object.entries(elements)) {
     element.addEventListener('editorstatechange', ({ detail }) => {
@@ -2180,11 +2406,12 @@ try {
   redoButton.addEventListener('click', () => void runRedo());
 
   // Ctrl+Tab / Ctrl+Shift+Tab cycle the four top-level panels in a fixed
-  // order; plain Tab is left to the browser's native focus traversal (PLAN.md
-  // keyboard navigation). "Current panel" is always derived from wherever
-  // focus actually is, so any other way of moving focus (click, native Tab,
-  // programmatic focus) keeps the cycle consistent rather than drifting from
-  // a separately tracked position.
+  // order; plain Tab is trapped within whichever panel currently holds focus
+  // (see the focus trap below), so it can never walk out to an unrelated
+  // field in another panel. "Current panel" is always derived from wherever
+  // focus actually is, so any other way of moving focus (click, Tab within a
+  // panel, programmatic focus) keeps the cycle consistent rather than
+  // drifting from a separately tracked position.
   const KEYBOARD_PANELS = ['NAVIGATION', 'TEXT', 'CHAT', 'VERSIONS'];
   const panelLastFocus = { NAVIGATION: null, CHAT: null };
   const panelForElement = (target) => {
@@ -2219,7 +2446,40 @@ try {
     (isReachable(remembered) ? remembered : fallback)?.focus();
   };
 
+  // Plain Tab / Shift+Tab is trapped inside whichever panel it's pressed in:
+  // it cycles that panel's own focusable elements and wraps at the ends
+  // rather than walking into the next panel (or a pane-resizer between
+  // them). Crossing panels is Ctrl+Tab's job, not Tab's — this keeps a
+  // field's Tab/Shift+Tab from ever landing somewhere the author didn't mean
+  // to go, at the cost of Tab no longer reaching the resizers.
+  const FOCUSABLE_SELECTOR = 'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  const focusableIn = (container) => [...container.querySelectorAll(FOCUSABLE_SELECTOR)]
+    .filter((el) => el.offsetParent !== null || el === document.activeElement);
+  const trapTabWithin = (container) => {
+    container.addEventListener('keydown', (event) => {
+      if (event.key !== 'Tab' || event.ctrlKey || event.metaKey || event.altKey) return;
+      const stops = focusableIn(container);
+      const index = stops.indexOf(event.target);
+      if (index === -1) return;
+      event.preventDefault();
+      const direction = event.shiftKey ? -1 : 1;
+      stops[(index + direction + stops.length) % stops.length].focus();
+    });
+  };
+  for (const container of [sidebarLeft, workspace, sidebarRight, versionsView]) trapTabWithin(container);
+
   window.addEventListener('keydown', (event) => {
+    if (scrubSession && event.key === 'Escape') {
+      event.preventDefault();
+      cancelScrub();
+      return;
+    }
+    if (event.altKey && !event.metaKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
+      if (event.ctrlKey) { handleScrubKeydown('structural', event); return; }
+      if (event.shiftKey) { handleScrubKeydown('visit-time', event); return; }
+      handleLocationScrub(event);
+      return;
+    }
     // Escape backs out of a panel toward the editor. The prompt textarea has
     // its own Escape handler (it steps into the turn list first); everywhere
     // else in Navigation, Chat, or Versions, Escape returns focus to Text.
@@ -2288,6 +2548,11 @@ try {
     buildProjectContents,
     loadDocument,
     getAgentReferences: () => agentReferences,
+    getVisitLog: (rootName = 'STORY') => visitLogs[rootName],
+    getScrubSession: () => scrubSession,
+    getScrubMode: () => scrubMode,
+    getSectionNav: () => sectionNav,
+    isVersionsOpen: () => versionsOpen,
   });
 } catch (error) {
   elements.STORY.textContent = error.message;

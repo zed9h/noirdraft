@@ -1,7 +1,7 @@
 import { childrenOf, commitRevision, reconstructRevision } from './graph.js';
 import { normalizeVisibleRootText } from '../project/projection.js';
 
-const ignoredOrigins = new Set(['open', 'checkout', 'agent', 'local-undo', 'local-redo', 'history']);
+const ignoredOrigins = new Set(['open', 'checkout', 'agent', 'local-undo', 'local-redo', 'history', 'scrub-preview']);
 
 export class CommitController {
   #idleHandle = null;
