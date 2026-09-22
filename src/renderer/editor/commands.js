@@ -34,7 +34,6 @@ export function createCommandHandler({ model, replace, setSelection, moveVertica
 
     if (command && event.key.toLowerCase() === 'a') setSelection(0, text.length);
     else if (event.key === 'Enter') replace(start, end, '\n');
-    else if (event.key === 'Tab') replace(start, end, '\t');
     else if (event.key === 'Backspace') {
       const from = start === end ? previousBoundary(text, start, command ? words : graphemes) : start;
       replace(from, end, '');

@@ -57,6 +57,15 @@ export class EditContextEditor {
     this.#updateVisualCaret(rect, selectionStart === selectionEnd);
   }
 
+  /** Scrolls an offset into view without moving the selection or focus. */
+  revealOffset(offset) {
+    this.mapping.refresh();
+    const rect = this.mapping.rangeRect(offset);
+    const viewport = this.element.getBoundingClientRect();
+    const padding = 24;
+    this.element.scrollTop += rect.top - viewport.top - padding;
+  }
+
   /** Transient, non-document decorations expressed in canonical UTF-16 offsets. */
   setHighlights(ranges = []) {
     this.highlights = ranges

@@ -25,6 +25,7 @@ const runtime = window.noirDraft?.runtime;
 
 const sidebarLeft = document.querySelector('[data-sidebar-left]');
 const sidebarRight = document.querySelector('[data-sidebar-right]');
+const workspace = document.querySelector('.workspace');
 const shell = document.querySelector('.shell');
 const body = document.querySelector('.body');
 const paneResizers = {
@@ -616,8 +617,18 @@ try {
     });
     return selection;
   };
+  // A turn's keyboard "stop" for arrow navigation: its pin (context-start)
+  // button, or — for a still-processing turn, which has none — its delete
+  // button, so every card in the history is reachable by keyboard.
+  const chatTurnFocusStop = (card) => card?.querySelector('.chat-context-marker') ?? card?.querySelector('.chat-turn-delete') ?? null;
+
   const renderChatHistory = (pendingTurn = null) => {
     const restorePromptFocus = document.activeElement === chatPrompt;
+    // Any render (including one triggered by an unrelated turn finishing in
+    // the background) rebuilds every turn card from scratch, which would
+    // otherwise silently drop focus out of the panel entirely if a card's
+    // focus stop currently held it.
+    const focusedTurnIndex = document.activeElement?.closest?.('.chat-turn[data-turn-index]')?.dataset.turnIndex;
     const previousScrollTop = chatHistory.scrollTop;
     const wasAtBottom = chatHistory.scrollHeight - chatHistory.clientHeight - previousScrollTop <= 2;
     const anchor = !wasAtBottom && [...chatHistory.querySelectorAll('.chat-turn[data-turn-index]')]
@@ -731,6 +742,9 @@ try {
       ? chatHistory.scrollHeight
       : replacementAnchor ? replacementAnchor.offsetTop - anchorOffset : previousScrollTop;
     if (restorePromptFocus) chatPrompt.focus({ preventScroll: true });
+    else if (focusedTurnIndex !== undefined) {
+      chatTurnFocusStop(chatHistory.querySelector(`.chat-turn[data-turn-index="${focusedTurnIndex}"]`))?.focus({ preventScroll: true });
+    }
   };
 
   chatHistory.addEventListener('scroll', () => {
@@ -741,6 +755,31 @@ try {
       const nextEnd = Math.min(renderedChatTurnCount, Math.ceil((chatHistory.scrollTop + chatHistory.clientHeight) / chatVirtualTurnHeight) + chatVirtualBuffer);
       if (nextStart !== chatVirtualRange.start || nextEnd !== chatVirtualRange.end) renderChatHistory();
     });
+  });
+
+  // Anywhere in the chat panel except the prompt textarea itself, Up/Down
+  // step focus between turns — this covers the history list (finished turns
+  // and still-processing ones alike), the draft context header above the
+  // prompt, and anywhere else focus can land in the panel. Scrolling makes
+  // the far edge of the destination turn visible — its top when moving up,
+  // its bottom when moving down — so an oversized turn can still be read
+  // from either end while navigating.
+  sidebarRight.addEventListener('keydown', (event) => {
+    if (event.target === chatPrompt) return;
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+    const cards = [...chatHistory.querySelectorAll('.chat-turn')];
+    if (!cards.length) return;
+    const currentCard = event.target.closest('.chat-turn');
+    // Focus outside any turn card (e.g. the draft context header) has no
+    // natural index of its own; treat it as just past the last turn, since
+    // that composer-side UI sits visually below the history list.
+    const currentIndex = currentCard ? cards.indexOf(currentCard) : cards.length;
+    const nextCard = cards[currentIndex + (event.key === 'ArrowUp' ? -1 : 1)];
+    const next = chatTurnFocusStop(nextCard);
+    if (!next) return;
+    event.preventDefault();
+    next.focus({ preventScroll: true });
+    nextCard.scrollIntoView({ block: event.key === 'ArrowUp' ? 'start' : 'end' });
   });
 
   chatHistoryCount.addEventListener('change', async () => {
@@ -870,10 +909,17 @@ try {
       return;
     }
     const restorePromptFocus = document.activeElement === chatPrompt;
+    // Streaming progress updates replace just this one card, which would
+    // otherwise drop focus if its delete button (a processing card's only
+    // focus stop) currently held it.
+    const wasFocusedInCard = card.contains(document.activeElement);
     const wasAtBottom = chatHistory.scrollHeight - chatHistory.clientHeight - chatHistory.scrollTop <= 2;
     card.replaceWith(renderPendingChatTurn(job, Number(card.dataset.turnIndex)));
     if (wasAtBottom) chatHistory.scrollTop = chatHistory.scrollHeight;
     if (restorePromptFocus) chatPrompt.focus({ preventScroll: true });
+    else if (wasFocusedInCard) {
+      chatTurnFocusStop(chatHistory.querySelector(`.chat-turn[data-job-id="${job.id}"]`))?.focus({ preventScroll: true });
+    }
   };
   const cancelChatJob = (job) => {
     if (job.state === 'generating') job.abortController?.abort();
@@ -1087,6 +1133,15 @@ try {
   });
   chatCancelButton.addEventListener('click', () => activeChatJob && cancelChatJob(activeChatJob));
   chatPrompt.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      const lastCard = chatHistory.querySelector('.chat-turn:last-of-type');
+      const last = chatTurnFocusStop(lastCard);
+      if (!last) return;
+      last.focus({ preventScroll: true });
+      lastCard.scrollIntoView({ block: 'end' });
+      return;
+    }
     if (event.key !== 'Enter') return;
     if (!event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
       event.preventDefault();
@@ -1548,7 +1603,10 @@ try {
     if (!targetHistory?.revisions.has(revisionId)) return;
     focusedRevisionId = revisionId;
     inspectedRevisionId = revisionId;
-    switchView('VERSIONS');
+    // Reveal the revision without moving keyboard focus off the citation the
+    // author just clicked — the panel opens and shows it, but the author
+    // stays where they were unless they choose to move into Versions.
+    switchView('VERSIONS', { focus: false });
   };
 
   const renderLocalGraph = () => {
@@ -1631,13 +1689,31 @@ try {
     void renderPinnedVariations();
   };
 
+  // The deepest heading whose range contains offset, or null in the
+  // section's preamble. Used to keep the navigation outline showing where
+  // the caret currently is, independent of keyboard focus.
+  const currentHeadingPath = (headings, offset) => headings
+    .filter((heading) => offset >= heading.from && offset <= heading.to)
+    .reduce((deepest, heading) => (!deepest || heading.from > deepest.from ? heading : deepest), null)
+    ?.path ?? null;
+  const ancestorPathsOf = (path) => {
+    const ancestors = new Set();
+    if (!path) return ancestors;
+    const segments = path.split('/');
+    for (let depth = 2; depth < segments.length; depth += 1) ancestors.add(segments.slice(0, depth).join('/'));
+    return ancestors;
+  };
+
   const refreshSidebar = () => {
     const pins = readPins(models.METADATA.text);
     const pinned = new Set(pins);
     for (const rootName of ['STORY', 'METADATA']) {
       const outline = outlines[rootName];
       outline.replaceChildren();
+      document.querySelector(`[data-fold="${rootName}"]`).classList.toggle('is-active-root', rootName === activeRoot);
       const headings = extractHeadings(models[rootName].text, rootName);
+      const currentPath = currentHeadingPath(headings, models[rootName].selectionStart);
+      const currentAncestorPaths = ancestorPathsOf(currentPath);
       const hasChildren = (heading) => headings.some((candidate) => candidate.path.startsWith(`${heading.path}/`));
       const isHiddenByAncestor = (heading) => {
         let ancestorPath = heading.path.slice(0, heading.path.lastIndexOf('/'));
@@ -1653,6 +1729,8 @@ try {
         if ((!openFolds.has(rootName) || isHiddenByAncestor(heading)) && !pinned.has(heading.path)) continue;
         const row = document.createElement('div');
         row.className = `outline-row${pinned.has(heading.path) ? ' is-pinned' : ''}`;
+        row.classList.toggle('is-current-leaf', heading.path === currentPath);
+        row.classList.toggle('is-current-ancestor', currentAncestorPaths.has(heading.path));
         row.style.setProperty('--level', heading.level);
         if (hasChildren(heading)) {
           const sectionToggle = document.createElement('button');
@@ -1679,6 +1757,8 @@ try {
         target.className = 'outline-target';
         target.textContent = heading.title;
         target.title = heading.path;
+        target.dataset.root = rootName;
+        target.dataset.from = String(heading.from);
         target.addEventListener('click', () => {
           switchView(rootName);
           editors[rootName].setSelection(heading.from, heading.from);
@@ -1733,9 +1813,9 @@ try {
     updateDraftContextSummary();
   };
 
-  const switchView = (rootName) => {
+  const switchView = (rootName, { focus = true } = {}) => {
     if (rootName === 'VERSIONS') {
-      setVersionsOpen(true);
+      setVersionsOpen(true, { focus });
       return;
     }
     activeRoot = rootName;
@@ -1765,7 +1845,7 @@ try {
     }
   };
 
-  const setVersionsOpen = (open) => {
+  const setVersionsOpen = (open, { focus = true } = {}) => {
     versionsOpen = open;
     versionsView.hidden = !open;
     paneResizers.versions.hidden = !open;
@@ -1776,7 +1856,7 @@ try {
     }
     if (open) {
       renderVersions();
-      requestAnimationFrame(() => versionGraph.focus());
+      if (focus) requestAnimationFrame(() => versionGraph.focus());
     }
     updateEditorBounds();
   };
@@ -1803,18 +1883,74 @@ try {
       elements[rootName].focus();
     });
   }
+  // A "nav stop" is one focusable row in visual (top-to-bottom) order: a
+  // root-target or an outline-target. Up/Down rove between stops; Left/Right
+  // fold or unfold whichever toggle belongs to the row under focus, whether
+  // focus is on the toggle itself or on the row's target button.
+  const navStops = () => [...sidebarLeft.querySelectorAll('.root-target, .outline-target')];
+  const navRowInfo = (target) => {
+    if (!target) return null;
+    if (target.matches('.root-target')) return { root: target.dataset.rootTarget, from: 0 };
+    if (target.matches('.outline-target')) return { root: target.dataset.root, from: Number(target.dataset.from) };
+    return null;
+  };
   sidebarLeft.addEventListener('keydown', (event) => {
-    if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
-    if (event.target.matches('[data-fold-toggle]')) {
-      const rootName = event.target.dataset.foldToggle;
-      const shouldOpen = event.key === 'ArrowRight';
-      if (openFolds.has(rootName) !== shouldOpen) event.target.click();
-    } else if (event.target.matches('.section-toggle')) {
-      const isExpanded = event.target.getAttribute('aria-expanded') === 'true';
-      const shouldExpand = event.key === 'ArrowRight';
-      if (isExpanded !== shouldExpand) event.target.click();
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      const stops = navStops();
+      const index = stops.indexOf(event.target);
+      if (index === -1) return;
+      const next = stops[index + (event.key === 'ArrowUp' ? -1 : 1)];
+      if (!next) return;
+      event.preventDefault();
+      next.focus();
+      return;
+    }
+    if (event.key === 'Home' || event.key === 'End') {
+      const stops = navStops();
+      if (stops.indexOf(event.target) === -1) return;
+      event.preventDefault();
+      (event.key === 'Home' ? stops[0] : stops.at(-1))?.focus();
+      return;
+    }
+    if (event.key === ' ') {
+      const info = navRowInfo(event.target);
+      if (!info) return;
+      event.preventDefault();
+      switchView(info.root);
+      // switchView() refreshes the outline, which recreates outline-target
+      // rows and would otherwise drop focus out of the panel entirely.
+      // Root-target buttons are static and survive the refresh untouched.
+      if (!event.target.isConnected) {
+        sidebarLeft.querySelector(`.outline-target[data-root="${info.root}"][data-from="${info.from}"]`)?.focus();
+      }
+      requestAnimationFrame(() => editors[info.root].revealOffset(info.from));
+      return;
+    }
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    let toggle = null;
+    if (event.target.matches('[data-fold-toggle]') || event.target.matches('.section-toggle')) {
+      toggle = event.target;
+    } else if (event.target.matches('.root-target')) {
+      toggle = sidebarLeft.querySelector(`[data-fold-toggle="${event.target.dataset.rootTarget}"]`);
+    } else if (event.target.matches('.outline-target')) {
+      toggle = event.target.closest('.outline-row').querySelector('.section-toggle');
     } else {
       return;
+    }
+    if (!toggle) return;
+    const isOpen = toggle.matches('[data-fold-toggle]')
+      ? openFolds.has(toggle.dataset.foldToggle)
+      : toggle.getAttribute('aria-expanded') === 'true';
+    const shouldOpen = event.key === 'ArrowRight';
+    if (isOpen !== shouldOpen) {
+      // Folding rebuilds the outline DOM, which can discard the row that
+      // currently holds keyboard focus. Recover it by identity after the
+      // rebuild rather than letting focus fall out of the panel.
+      const restoreInfo = navRowInfo(event.target) ?? navRowInfo(event.target.closest('.outline-row')?.querySelector('.outline-target'));
+      toggle.click();
+      if (restoreInfo && !event.target.isConnected) {
+        sidebarLeft.querySelector(`.outline-target[data-root="${restoreInfo.root}"][data-from="${restoreInfo.from}"]`)?.focus();
+      }
     }
     event.preventDefault();
   });
@@ -1831,6 +1967,8 @@ try {
       const offset = event.key === 'ArrowUp' ? -1 : 1;
       nextId = renderedGraphNodeIds[index + offset] ?? null;
     }
+    if (event.key === 'Home') nextId = renderedGraphNodeIds[0] ?? null;
+    if (event.key === 'End') nextId = renderedGraphNodeIds.at(-1) ?? null;
     if (event.key === ' ' || event.key === 'Enter') {
       event.preventDefault();
       if (event.key === ' ') togglePinnedRevision(currentId);
@@ -2040,21 +2178,72 @@ try {
   };
   undoButton.addEventListener('click', () => void runUndo());
   redoButton.addEventListener('click', () => void runRedo());
+
+  // Ctrl+Tab / Ctrl+Shift+Tab cycle the four top-level panels in a fixed
+  // order; plain Tab is left to the browser's native focus traversal (PLAN.md
+  // keyboard navigation). "Current panel" is always derived from wherever
+  // focus actually is, so any other way of moving focus (click, native Tab,
+  // programmatic focus) keeps the cycle consistent rather than drifting from
+  // a separately tracked position.
+  const KEYBOARD_PANELS = ['NAVIGATION', 'TEXT', 'CHAT', 'VERSIONS'];
+  const panelLastFocus = { NAVIGATION: null, CHAT: null };
+  const panelForElement = (target) => {
+    if (!target) return null;
+    if (sidebarLeft.contains(target)) return 'NAVIGATION';
+    if (workspace.contains(target)) return 'TEXT';
+    if (sidebarRight.contains(target)) return 'CHAT';
+    if (versionsView.contains(target)) return 'VERSIONS';
+    return null;
+  };
+  const isReachable = (target) => Boolean(target?.isConnected) && !target.closest('[hidden]');
+  const isPanelOpen = (panelName) => {
+    if (panelName === 'NAVIGATION') return !sidebarLeft.hidden;
+    if (panelName === 'CHAT') return !sidebarRight.hidden;
+    if (panelName === 'VERSIONS') return versionsOpen;
+    return true; // TEXT is always present.
+  };
+  document.addEventListener('focusin', (event) => {
+    const panel = panelForElement(event.target);
+    if (panel === 'NAVIGATION' || panel === 'CHAT') panelLastFocus[panel] = event.target;
+  });
+  const focusPanel = (panelName) => {
+    if (panelName === 'VERSIONS') { setVersionsOpen(true); return; }
+    if (panelName === 'TEXT') { elements[activeRoot]?.focus(); return; }
+    if (panelName === 'CHAT') {
+      const remembered = panelLastFocus.CHAT;
+      (isReachable(remembered) ? remembered : chatPrompt).focus();
+      return;
+    }
+    const remembered = panelLastFocus.NAVIGATION;
+    const fallback = sidebarLeft.querySelector(`[data-root-target="${activeRoot}"]`) ?? sidebarLeft.querySelector('button, [tabindex]');
+    (isReachable(remembered) ? remembered : fallback)?.focus();
+  };
+
   window.addEventListener('keydown', (event) => {
-    if (event.key === 'Tab' && !event.ctrlKey && !event.metaKey && !event.altKey) {
-      const target = event.target;
-      const panelTarget = target === elements.STORY || target === elements.METADATA || target === elements.CHAT || target === versionGraph;
-      if (panelTarget) {
+    // Escape backs out of a panel toward the editor. The prompt textarea has
+    // its own Escape handler (it steps into the turn list first); everywhere
+    // else in Navigation, Chat, or Versions, Escape returns focus to Text.
+    if (event.key === 'Escape' && !event.ctrlKey && !event.metaKey && !event.altKey && event.target !== chatPrompt) {
+      const panel = panelForElement(event.target);
+      if (panel === 'NAVIGATION' || panel === 'CHAT' || panel === 'VERSIONS') {
         event.preventDefault();
-        const panels = ['STORY', 'METADATA', 'CHAT', 'VERSIONS'];
-        const current = target === elements.CHAT ? 'CHAT' : target === versionGraph ? 'VERSIONS' : activeRoot;
-        const direction = event.shiftKey ? -1 : 1;
-        const next = panels[(panels.indexOf(current) + direction + panels.length) % panels.length];
-        if (next === 'VERSIONS') setVersionsOpen(true);
-        else if (next === 'CHAT') elements.CHAT.focus();
-        else switchView(next);
-        if (next === 'STORY' || next === 'METADATA') elements[next].focus();
+        focusPanel('TEXT');
       }
+      return;
+    }
+    if (event.key === 'Tab' && (event.ctrlKey || event.metaKey) && !event.altKey) {
+      event.preventDefault();
+      const direction = event.shiftKey ? -1 : 1;
+      let index = KEYBOARD_PANELS.indexOf(panelForElement(event.target));
+      let next = null;
+      // Closed panels (a hidden sidebar, or Versions collapsed) are not
+      // stops in the cycle. TEXT can never be closed, so this always finds
+      // a panel within one full lap.
+      for (let step = 0; step < KEYBOARD_PANELS.length; step += 1) {
+        index = (index + direction + KEYBOARD_PANELS.length) % KEYBOARD_PANELS.length;
+        if (isPanelOpen(KEYBOARD_PANELS[index])) { next = KEYBOARD_PANELS[index]; break; }
+      }
+      if (next) focusPanel(next);
       return;
     }
     if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
