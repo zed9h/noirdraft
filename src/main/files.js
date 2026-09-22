@@ -6,12 +6,13 @@ import { writeBackup } from './backups.js';
 import { timestampedSavePathFor } from './timestamped-save-path.js';
 
 export class FilePersistenceError extends Error {
-  constructor(message, { code, filePath, cause, currentFingerprint } = {}) {
+  constructor(message, { code, filePath, cause, currentFingerprint, currentContents } = {}) {
     super(message, { cause });
     this.name = 'FilePersistenceError';
     this.code = code;
     this.filePath = filePath;
     this.currentFingerprint = currentFingerprint;
+    this.currentContents = currentContents;
   }
 }
 
@@ -121,6 +122,7 @@ export async function safeSaveDocument({
       code: 'EXTERNAL_CHANGE',
       filePath,
       currentFingerprint: previous.fingerprint,
+      currentContents: previous.contents,
     });
   }
 

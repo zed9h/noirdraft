@@ -74,7 +74,14 @@ export class CommitController {
 
   async commitPending({ origin = 'user', note = null } = {}) {
     this.#cancelIdle();
-    if (!this.pending) return null;
+    // this.pending only means "nothing new since the last flush" — a prior
+    // commitPending (the idle timer, or the structural-edit threshold in
+    // #modelChanged) may have already flipped it false while its own
+    // commitRevision + onCommit are still resolving on commitInFlight. A
+    // caller here (e.g. beforeAgentRequest, right before reading
+    // history.currentRevision) must still wait for that to land, or it can
+    // observe model text ahead of the revision that's supposed to record it.
+    if (!this.pending) return this.commitInFlight;
     const base = normalizeVisibleRootText(this.pendingBase);
     const result = normalizeVisibleRootText(this.model.text);
     if (result !== this.model.text) {

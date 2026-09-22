@@ -56,6 +56,24 @@ test('idle, close, and structural boundaries commit pending work', async () => {
   assert.equal(structural.history.revisions.size, 2);
 });
 
+test('commitPending waits for an already in-flight commit instead of returning past it', async () => {
+  const { history, model, controller } = await setup();
+  controller.structuralThreshold = 5;
+  // Triggers #modelChanged's fire-and-forget structural commit: `pending`
+  // flips false synchronously, but commitRevision itself is still queued on
+  // commitInFlight when control returns here.
+  model.replace(4, 4, ' large paste');
+  assert.equal(controller.pending, false);
+  assert.equal(history.revisions.size, 1); // not landed yet
+
+  // A caller relying on "nothing pending" (e.g. beforeAgentRequest, right
+  // before reading history.currentRevision) must still observe the settled
+  // state, not race past the queued commit.
+  await controller.commitPending();
+  assert.equal(history.revisions.size, 2);
+  assert.equal(await reconstructRevision(history, history.currentRevision), model.text);
+});
+
 test('local undo/redo operates before durable graph traversal', async () => {
   const { history, model, controller } = await setup();
   model.replace(4, 4, ' one');

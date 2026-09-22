@@ -2,6 +2,7 @@ import { app, BrowserWindow, Menu, dialog, ipcMain } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { readDocument, safeSaveDocument, uniqueTimestampedSavePath } from './files.js';
+import { baseStemFor } from './timestamped-save-path.js';
 import { readPreferences, writePreferences } from './preferences.js';
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -19,6 +20,7 @@ function publicError(error) {
     message: error.message,
     code: error.code ?? 'UNKNOWN',
     currentFingerprint: error.currentFingerprint ?? null,
+    currentContents: error.currentContents ?? null,
   };
 }
 
@@ -43,9 +45,17 @@ function registerDocumentHandlers() {
     if (filePath && !request.saveAs && !authorizedDocumentPaths.has(filePath)) {
       return { canceled: false, error: { code: 'PATH_NOT_AUTHORIZED', message: 'Choose this save location through NoirDraft first.' } };
     }
+    const preferences = await readPreferences(preferencesPath);
+    const timestampedSaves = preferences.saveTimestampedCopies !== false;
     if (!filePath || request.saveAs) {
+      // With timestamped saves on, a previously saved path already carries a
+      // generated suffix; the dialog should offer its plain basename rather
+      // than a name the user would otherwise re-timestamp by hand.
+      const defaultPath = filePath && timestampedSaves
+        ? path.join(path.dirname(filePath), `${baseStemFor(filePath)}${path.extname(filePath)}`)
+        : filePath ?? 'story.md';
       const result = await dialog.showSaveDialog({
-        defaultPath: filePath ?? 'story.md',
+        defaultPath,
         filters: [{ name: 'Markdown', extensions: ['md'] }],
       });
       if (result.canceled || !result.filePath) return { canceled: true };
@@ -53,8 +63,7 @@ function registerDocumentHandlers() {
       authorizedDocumentPaths.add(filePath);
     }
     try {
-      const preferences = await readPreferences(preferencesPath);
-      if (preferences.saveTimestampedCopies !== false) {
+      if (timestampedSaves) {
         // Every save writes a fresh file so no save ever overwrites the last;
         // the opened (or previously saved) name only supplies the base.
         filePath = await uniqueTimestampedSavePath(filePath);

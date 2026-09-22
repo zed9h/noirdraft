@@ -53,7 +53,73 @@ button { font: inherit; }
   background: #1c1916;
 }
 .icon-button:hover, .header-actions button:hover, .overflow-menu button:hover { background: #26221d; }
-.icon-button { padding: .3rem .45rem; }
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
+  font-size: 1rem;
+  line-height: 1;
+}
+.icon-button:disabled { opacity: .4; cursor: default; }
+.icon-button:disabled:hover { background: #1c1916; }
+
+/* Flexbox centers each button's line box, but individual glyphs don't paint
+   centered within that box — Unicode arrows in particular sit noticeably
+   above the visual middle in this font stack. .icon-glyph carries the nudge
+   (not the button) so only the glyph moves, not its border box; offsets are
+   from measured ink bounding boxes (screenshot pixel scan) and only apply
+   where the toolbar visibly reads as a staggered row — re-check if the font
+   stack changes. */
+.icon-glyph { display: inline-block; }
+[data-undo] .icon-glyph, [data-redo] .icon-glyph { transform: translateY(2px); font-weight: 700; color: white; }
+[data-nav-timeline-back] .icon-glyph { transform: translateY(2px); }
+[data-nav-timeline-forward] .icon-glyph { transform: translateY(-1px); }
+[data-toggle-left] .icon-glyph { transform: translateY(1.5px); }
+[data-save] .icon-glyph { transform: translateY(1px); }
+
+/* Glyphs picked for recognizability over the plain monochrome set (open,
+   save, and the overflow menu's more detailed icons) come from the color
+   emoji font; grayscale keeps them from clashing with the rest of the
+   black-and-white chrome while staying legible. */
+.emoji-icon { filter: grayscale(1) brightness(0.85); }
+
+.toolbar-divider { width: 1px; align-self: stretch; margin: .2rem .15rem; background: #2c2722; }
+
+.split-button { position: relative; display: flex; align-items: stretch; }
+.split-button .icon-button + .split-caret { margin-left: -1px; padding: .3rem .3rem; font-size: .7rem; }
+.split-caret[hidden] { display: none; }
+.dropdown-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + .3rem);
+  display: flex;
+  flex-direction: column;
+  min-width: 14rem;
+  max-width: 20rem;
+  padding: .3rem;
+  gap: .2rem;
+  border: 1px solid #3a342e;
+  border-radius: .3rem;
+  background: #1c1916;
+  box-shadow: 0 .5rem 1.5rem rgba(0, 0, 0, .5);
+  z-index: 10;
+}
+.dropdown-menu[hidden] { display: none; }
+.dropdown-menu button {
+  padding: .35rem .5rem;
+  border: 0;
+  border-radius: .2rem;
+  color: #ccc2b6;
+  background: transparent;
+  text-align: left;
+  font-size: .78rem;
+}
+.dropdown-menu button:hover { background: #26221d; }
+
+.menu-icon { display: inline-flex; align-items: center; justify-content: center; width: 1.3rem; margin-right: .2rem; }
 
 .overflow { position: relative; }
 .overflow-menu {
@@ -72,7 +138,7 @@ button { font: inherit; }
   z-index: 10;
 }
 .overflow-menu[hidden] { display: none; }
-.overflow-menu button { text-align: left; border: 0; background: transparent; }
+.overflow-menu button { display: flex; align-items: center; text-align: left; border: 0; background: transparent; }
 .overflow-menu button[aria-pressed="true"] { color: #e8ad70; }
 
 .save-note-popover {
@@ -280,7 +346,6 @@ button { font: inherit; }
 .pinned-entry:hover { color: #e2dbd1; background: transparent; }
 .pinned-entry:focus-visible { outline: 1px solid #6a5a44; outline-offset: -1px; }
 .unresolved-pin { color: #ffb4a9; overflow-wrap: anywhere; }
-.branch-choices { margin-top: .5rem; color: #d9b38b; font-size: .75rem; }
 
 .passage-history { margin-top: .5rem; }
 .passage-history-toggle, [data-passage-history-toggle] {

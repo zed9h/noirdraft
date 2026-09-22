@@ -165,6 +165,20 @@ for (const [pane, resizer] of Object.entries(paneResizers)) {
   });
 }
 
+// Mirrors the `_yyyymmdd_HHMMSS` suffix that timestamped saves append
+// (src/main/timestamped-save-path.js), so the header title reads the same
+// whichever timestamped copy of a document happens to be open. Stripping it
+// only makes sense while timestamped saves are turned on: with the option
+// off, a filename's timestamp-shaped suffix (if any) is just part of the
+// name the user chose, not one NoirDraft generated, so it stays as-is.
+const TIMESTAMP_SUFFIX = /_\d{8}_\d{6}$/;
+const displayBaseName = (filePath, stripTimestamp) => {
+  const name = filePath.split(/[\\/]/).at(-1) ?? '';
+  const dot = name.lastIndexOf('.');
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  return stripTimestamp ? stem.replace(TIMESTAMP_SUFFIX, '') : stem;
+};
+
 const byteSize = (text) => new TextEncoder().encode(String(text)).length;
 const formatSize = (bytes) => {
   if (bytes < 1024) return `${bytes} B`;
@@ -354,7 +368,6 @@ const outlines = {
   METADATA: document.querySelector('[data-outline-metadata]'),
 };
 const pinStatus = document.querySelector('[data-pin-status]');
-const branchChoices = document.querySelector('[data-branch-choices]');
 const passageHistoryContainer = document.querySelector('[data-passage-history]');
 const passageHistoryToggle = document.querySelector('[data-passage-history-toggle]');
 const passageHistoryList = document.querySelector('[data-passage-history-list]');
@@ -369,7 +382,12 @@ const versionSearchResults = document.querySelector('[data-version-search-result
 const versionToggleButtons = document.querySelectorAll('[data-toggle-versions]');
 const undoButton = document.querySelector('[data-undo]');
 const redoButton = document.querySelector('[data-redo]');
-const recordExternalButton = document.querySelector('[data-record-external]');
+const redoMenuToggle = document.querySelector('[data-redo-menu-toggle]');
+const redoMenu = document.querySelector('[data-redo-menu]');
+const navStopBackButton = document.querySelector('[data-nav-stop-back]');
+const navStopForwardButton = document.querySelector('[data-nav-stop-forward]');
+const navTimelineBackButton = document.querySelector('[data-nav-timeline-back]');
+const navTimelineForwardButton = document.querySelector('[data-nav-timeline-forward]');
 const saveNoteMenuButton = document.querySelector('[data-save-note]');
 const saveNoteConfirm = document.querySelector('[data-save-note-confirm]');
 const saveNoteCancel = document.querySelector('[data-save-note-cancel]');
@@ -391,8 +409,6 @@ let history = null; // STORY history; retained as the story-specific alias.
 let metadataHistory = null;
 let commitController = null; // STORY controller; retained for story workbench APIs.
 let metadataCommitController = null;
-let historyMismatch = null;
-let metadataHistoryMismatch = null;
 let suppressAutoPersist = false;
 let persistAfterCommit = async () => {};
 
@@ -1181,7 +1197,6 @@ try {
   const updatePassageHistoryVisibility = () => {
     const hasSelection = activeRoot === 'STORY'
       && Boolean(commitController)
-      && !historyMismatch
       && model.selectionStart !== model.selectionEnd;
     passageHistoryContainer.hidden = !hasSelection;
     if (!hasSelection) collapsePassageHistory();
@@ -1425,7 +1440,8 @@ try {
     undoButton.disabled = !currentController || (!currentController.undoOperations.length && !current?.parents.length);
     const children = currentHistory ? childrenOf(currentHistory, currentHistory.currentRevision) : [];
     redoButton.disabled = !currentController || (!currentController.redoOperations.length && children.length === 0);
-    redoButton.textContent = children.length > 1 ? 'Redo…' : 'Redo';
+    redoMenuToggle.hidden = children.length < 2;
+    if (children.length < 2) closeRedoMenu();
   };
 
   const attachHistory = (nextHistory) => {
@@ -1885,6 +1901,14 @@ try {
   };
 
   const switchView = (rootName, { focus = true } = {}) => {
+    // Leaving STORY or METADATA entirely (a tab click, not just moving
+    // between sections within one) is the same kind of boundary as
+    // saveCurrentSectionPosition's flush below — catches direct tab
+    // switches that skip goToSection.
+    if (rootName !== activeRoot && ['STORY', 'METADATA'].includes(activeRoot)) {
+      const outgoingController = activeRoot === 'METADATA' ? metadataCommitController : commitController;
+      void outgoingController?.commitPending({ origin: 'user' }).catch((error) => showStatus(error.message, true));
+    }
     if (rootName === 'VERSIONS') {
       setVersionsOpen(true, { focus });
       return;
@@ -2178,11 +2202,18 @@ try {
   const saveCurrentSectionPosition = () => {
     if (!['STORY', 'METADATA'].includes(activeRoot)) return;
     const path = currentSectionPath(activeRoot);
-    if (!path) return;
-    savePosition(sectionNav, path, {
-      offset: models[activeRoot].selectionStart,
-      scrollTop: editors[activeRoot]?.element.scrollTop ?? 0,
-    });
+    if (path) {
+      savePosition(sectionNav, path, {
+        offset: models[activeRoot].selectionStart,
+        scrollTop: editors[activeRoot]?.element.scrollTop ?? 0,
+      });
+    }
+    // Leaving a section is a natural editing-interval boundary: flush
+    // whatever's pending into its own revision instead of leaving it to
+    // ride along, uncommitted, with edits made after returning to a
+    // different section entirely.
+    const controller = activeRoot === 'METADATA' ? metadataCommitController : commitController;
+    void controller?.commitPending({ origin: 'user' }).catch((error) => showStatus(error.message, true));
   };
 
   const goToSection = (headingPath) => {
@@ -2209,15 +2240,42 @@ try {
     if (goToSection(headingPath)) visitSection(sectionNav, headingPath);
   };
 
-  const handleLocationScrub = (event) => {
+  const runStopStep = (direction) => {
     if (!['STORY', 'METADATA'].includes(activeRoot)) return;
-    const direction = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : null;
-    if (direction === null) return;
-    event.preventDefault();
     const targetPath = stepSectionNav(sectionNav, direction);
     if (!targetPath) return;
     goToSection(targetPath);
   };
+
+  const handleLocationScrub = (event) => {
+    const direction = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : null;
+    if (direction === null) return;
+    event.preventDefault();
+    runStopStep(direction);
+  };
+
+  navStopBackButton.addEventListener('click', () => runStopStep(-1));
+  navStopForwardButton.addEventListener('click', () => runStopStep(1));
+
+  // Discrete tap-and-release version of the Shift+Alt+Arrow visit-time scrub
+  // for the toolbar buttons: no hold-to-preview, just step and commit.
+  const runTimelineStep = async (direction) => {
+    if (!['STORY', 'METADATA'].includes(activeRoot)) return;
+    const currentController = activeCommitController();
+    if (!currentController) return;
+    await currentController.commitPending({ origin: 'user' });
+    const rootName = activeRoot === 'METADATA' ? 'METADATA' : 'STORY';
+    const result = stepVisitLog(visitLogs[rootName], direction);
+    if (result.id == null) return;
+    visitLogs[rootName] = result.log;
+    await currentController.checkout(result.id);
+    focusedRevisionId = result.id;
+    renderVersions();
+    refreshHistoryControls();
+  };
+
+  navTimelineBackButton.addEventListener('click', () => void runTimelineStep(-1));
+  navTimelineForwardButton.addEventListener('click', () => void runTimelineStep(1));
 
   for (const [name, element] of Object.entries(elements)) {
     element.addEventListener('editorstatechange', ({ detail }) => {
@@ -2278,15 +2336,12 @@ try {
       await recordExternalEdit(nextMetadataHistory, metadata?.text ?? '');
       recoveredRoots.push('METADATA');
     }
-    historyMismatch = null;
-    metadataHistoryMismatch = null;
-    recordExternalButton.hidden = true;
     attachHistory(nextHistory);
     attachMetadataHistory(nextMetadataHistory);
     metadataDirty = false;
     chatDirty = false;
     currentDocument = openedDocument;
-    editorTitle.textContent = openedDocument.filePath.split(/[\\/]/).at(-1);
+    editorTitle.textContent = displayBaseName(openedDocument.filePath, saveTimestampedCopiesEnabled);
     if (recoveredRoots.length) await persistAfterCommit();
     showStatus(recoveredRoots.length
       ? `Recorded external ${recoveredRoots.join(' and ')} edit as a recovery revision.`
@@ -2304,15 +2359,50 @@ try {
   };
   getStorageContents = buildProjectContents;
 
+  // If the file on disk changed since NoirDraft last read it (another
+  // program edited it while this document was open — timestamped saves off
+  // is what makes this reachable at all), a save is refused rather than
+  // silently clobbering that edit. Fold the external text in as its own
+  // recorded revision, then re-commit the in-memory buffer on top of it, so
+  // nothing is lost on either side and the retry proceeds with a fingerprint
+  // the file system will actually accept.
+  const reconcileExternalChange = async (error) => {
+    if (typeof error.currentContents !== 'string') return false;
+    let externalProject;
+    try {
+      externalProject = parseProjectDocument(error.currentContents);
+    } catch {
+      return false;
+    }
+    const externalStory = projectRoot(externalProject, 'STORY')?.text ?? '';
+    const externalMetadata = projectRoot(externalProject, 'METADATA')?.text ?? '';
+    await recordExternalEdit(history, externalStory);
+    await recordExternalEdit(metadataHistory, externalMetadata);
+    await commitRevision(history, externalStory, models.STORY.text, { origin: 'user', note: 'Reconciled after an external change to the file.' });
+    await commitRevision(metadataHistory, externalMetadata, models.METADATA.text, { origin: 'user', note: 'Reconciled after an external change to the file.' });
+    refreshHistoryControls();
+    renderVersions();
+    return true;
+  };
+
   persistAfterCommit = async () => {
-    if (!currentDocument || historyMismatch || metadataHistoryMismatch) return;
-    const contents = buildProjectContents();
-    const result = await window.noirDraft.documents.save({
+    if (!currentDocument) return;
+    let contents = buildProjectContents();
+    let result = await window.noirDraft.documents.save({
       filePath: currentDocument.filePath,
       expectedFingerprint: currentDocument.fingerprint,
       contents,
       saveAs: false,
     });
+    if (result.error?.code === 'EXTERNAL_CHANGE' && await reconcileExternalChange(result.error)) {
+      contents = buildProjectContents();
+      result = await window.noirDraft.documents.save({
+        filePath: currentDocument.filePath,
+        expectedFingerprint: result.error.currentFingerprint,
+        contents,
+        saveAs: false,
+      });
+    }
     if (result.error) return showStatus(result.error.message, true);
     if (!result.canceled) {
       currentDocument = result.document;
@@ -2324,7 +2414,7 @@ try {
   };
 
   const saveDocument = async (saveAs = false, note = null) => {
-    if (!commitController || !metadataCommitController) return showStatus('Record the external STORY or METADATA edit before saving.', true);
+    if (!commitController || !metadataCommitController) return showStatus('The document is not ready to save yet.', true);
     showStatus('Saving…');
     suppressAutoPersist = true;
     try {
@@ -2335,13 +2425,22 @@ try {
     } finally {
       suppressAutoPersist = false;
     }
-    const contents = buildProjectContents();
-    const result = await window.noirDraft.documents.save({
+    let contents = buildProjectContents();
+    let result = await window.noirDraft.documents.save({
       filePath: currentDocument?.filePath ?? null,
       expectedFingerprint: saveAs ? null : currentDocument?.fingerprint ?? null,
       contents,
       saveAs,
     });
+    if (result.error?.code === 'EXTERNAL_CHANGE' && await reconcileExternalChange(result.error)) {
+      contents = buildProjectContents();
+      result = await window.noirDraft.documents.save({
+        filePath: currentDocument.filePath,
+        expectedFingerprint: result.error.currentFingerprint,
+        contents,
+        saveAs: false,
+      });
+    }
     if (result.canceled) return showStatus('Save canceled');
     if (result.error) return showStatus(result.error.message, true);
     await loadDocument(result.document);
@@ -2379,21 +2478,28 @@ try {
     else if (event.key === 'Escape') { event.preventDefault(); closeSaveNotePopover(); }
   });
 
-  recordExternalButton.addEventListener('click', async () => {
-    if (historyMismatch) await recordExternalEdit(history, models.STORY.text);
-    if (metadataHistoryMismatch) await recordExternalEdit(metadataHistory, models.METADATA.text);
-    historyMismatch = null;
-    metadataHistoryMismatch = null;
-    recordExternalButton.hidden = true;
-    attachHistory(history);
-    attachMetadataHistory(metadataHistory);
-    showStatus('External STORY/METADATA edit recorded as a recovery revision.');
-  });
-
+  const closeRedoMenu = () => {
+    redoMenu.hidden = true;
+    redoMenuToggle.setAttribute('aria-expanded', 'false');
+  };
+  const openRedoMenu = (choices) => {
+    redoMenu.replaceChildren(...choices.map((choice) => {
+      const option = document.createElement('button');
+      option.type = 'button';
+      option.textContent = `Revision ${choice.id}${choice.note ? ` — ${choice.note}` : ` — ${choice.origin}`}`;
+      option.addEventListener('click', () => {
+        closeRedoMenu();
+        void runRedo(choice.id);
+      });
+      return option;
+    }));
+    redoMenu.hidden = false;
+    redoMenuToggle.setAttribute('aria-expanded', 'true');
+  };
   const runUndo = async () => {
     const currentController = activeCommitController();
     if (!currentController) return;
-    branchChoices.replaceChildren();
+    closeRedoMenu();
     await currentController.undo();
     refreshHistoryControls();
   };
@@ -2401,20 +2507,24 @@ try {
     const currentController = activeCommitController();
     if (!currentController) return;
     const result = await currentController.redo(revisionId);
-    branchChoices.replaceChildren();
-    if (result.type === 'choose') {
-      // Reuse the bounded local graph as the branch chooser instead of a
-      // separate branch-selection UI: switching to Versions centers the
-      // graph on the current node, showing every sibling branch as its own
-      // node with its own Checkout button.
-      branchChoices.textContent = `${result.choices.length} branches — choose one below in Versions.`;
-      focusedRevisionId = null;
-      switchView('VERSIONS');
+    if (result.type === 'choose' || result.type === 'invalid-choice') {
+      openRedoMenu(result.choices);
+    } else {
+      closeRedoMenu();
     }
     refreshHistoryControls();
   };
   undoButton.addEventListener('click', () => void runUndo());
   redoButton.addEventListener('click', () => void runRedo());
+  redoMenuToggle.addEventListener('click', () => {
+    if (!redoMenu.hidden) { closeRedoMenu(); return; }
+    const currentHistory = activeHistory();
+    const choices = currentHistory ? childrenOf(currentHistory, currentHistory.currentRevision) : [];
+    openRedoMenu(choices);
+  });
+  document.addEventListener('click', (event) => {
+    if (!redoMenu.hidden && !redoMenu.contains(event.target) && !redoMenuToggle.contains(event.target) && !redoButton.contains(event.target)) closeRedoMenu();
+  });
 
   // Ctrl+Tab / Ctrl+Shift+Tab cycle the four top-level panels in a fixed
   // order; plain Tab is trapped within whichever panel currently holds focus

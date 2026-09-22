@@ -1,7 +1,7 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import path from 'node:path';
 
-test('transient undo and branch-aware persistent Redo… use one STORY graph', async () => {
+test('transient undo and branch-aware persistent Redo use one STORY graph', async () => {
   const application = await electron.launch({
     args: [path.resolve('.')],
     env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
@@ -28,16 +28,15 @@ test('transient undo and branch-aware persistent Redo… use one STORY graph', a
       await getCommitController().undo();
     });
     await window.evaluate(() => window.__noirDraftTest.refreshSidebar());
-    const redo = window.getByRole('button', { name: 'Redo…', exact: true });
+    const redo = window.getByRole('button', { name: 'Redo', exact: true });
     await expect(redo).toBeEnabled();
     await redo.click();
 
-    // Redo… opens the bottom graph, centered on the branch point.
-    await expect(window.getByLabel('Redo branches')).toContainText('2 branches');
-    const graphPanel = window.getByLabel('Versions graph');
-    await expect(graphPanel.locator('.graph-node')).toHaveCount(3);
-    await graphPanel.getByRole('button', { name: 'Revision 2' }).click();
-    await window.getByLabel('Pinned variations').getByRole('button', { name: 'Checkout' }).click();
+    // With more than one branch, Redo opens a dropdown of the choices
+    // instead of checking one out directly.
+    const redoMenu = window.getByLabel('Redo branches');
+    await expect(redoMenu).toBeVisible();
+    await redoMenu.getByRole('button', { name: /^Revision 2/ }).click();
     await expect.poll(() => window.evaluate(() => window.__noirDraftTest.model.text)).toContain('Second branch.');
     const graph = await window.evaluate(() => {
       const history = window.__noirDraftTest.getHistory();
