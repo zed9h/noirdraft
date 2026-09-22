@@ -93,6 +93,14 @@ function createWindow() {
   });
 
   window.once('ready-to-show', () => window.show());
+  window.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    const isF11 = input.key === 'F11';
+    const isAltEnter = input.key === 'Enter' && input.alt;
+    if (!isF11 && !isAltEnter) return;
+    window.setFullScreen(!window.isFullScreen());
+    event.preventDefault();
+  });
   void window.loadFile(path.join(sourceDirectory, '../renderer/index.html'));
   return window;
 }
