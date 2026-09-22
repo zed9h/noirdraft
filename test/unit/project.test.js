@@ -6,7 +6,6 @@ import {
   parseProjectDocument,
 } from '../../src/renderer/project/parse.js';
 import {
-  ProjectionError,
   demoteVisibleHeadings,
   projectRoot,
   promoteStoredHeadings,
@@ -16,11 +15,11 @@ import { serializeProjectDocument } from '../../src/renderer/project/serialize.j
 test('project parser finds reserved roots outside fences in physical order', () => {
   const source = [
     'Preamble.\n\n',
-    '# METADATA\n\n## Style\nQuiet.\n\n',
-    '# NOTES-FOR-PUBLISHER\nKeep this.\n\n',
-    '# STORY\n\n## Chapter\nText.\n\n',
-    '# CHAT\n\n```markdown\n# VERSIONS\n```\n',
-    '# VERSIONS\n',
+    'METADATA\n========\n\n# Style\nQuiet.\n\n',
+    'NOTES-FOR-PUBLISHER\n===================\nKeep this.\n\n',
+    'STORY\n=====\n\n# Chapter\nText.\n\n',
+    'CHAT\n====\n\n```markdown\n# VERSIONS\n```\n',
+    'VERSIONS\n========\n',
   ].join('');
   const project = parseProjectDocument(source);
   assert.deepEqual(project.segments.map((segment) => segment.name ?? segment.type), [
@@ -32,82 +31,75 @@ test('project parser finds reserved roots outside fences in physical order', () 
 });
 
 test('fake roots in backtick and tilde fences are ignored', () => {
-  const source = '```md\n# STORY\n```\n~~~\n# CHAT\n~~~\n# METADATA\n';
+  const source = '```md\nSTORY\n=====\n```\n~~~\nCHAT\n====\n~~~\nMETADATA\n========\n';
   assert.deepEqual(findTopLevelHeadings(source).map(({ name }) => name), ['METADATA']);
 });
 
 test('duplicate reserved roots produce a recoverable error with partial project', () => {
-  const source = '# STORY\nOne.\n# STORY\nTwo.\n';
+  const source = 'STORY\n=====\nOne.\nSTORY\n=====\nTwo.\n';
   assert.throws(
     () => parseProjectDocument(source),
     (error) => {
       assert.ok(error instanceof ProjectDocumentError);
       assert.equal(error.code, 'DUPLICATE_RESERVED_ROOT');
       assert.equal(error.root, 'STORY');
-      assert.deepEqual(error.offsets, [0, 13]);
+      assert.deepEqual(error.offsets, [0, 17]);
       assert.equal(error.project.segments.length, 2);
       return true;
     },
   );
 });
 
-test('STORY projection hides its root separator and promotes only real headings', () => {
-  const source = '# STORY\r\n\r\n## Chapter\r\n### Scene\r\n```md\r\n## literal\r\n```\r\n\\## escaped\r\n';
+test('STORY projection normalizes LF, boundary whitespace, and Setext headings', () => {
+  const source = '\uFEFFSTORY\r\n=====\r\n\r\nChapter\r\n-------\r\n```md\r\n## literal\r\n```\r\n\\## escaped\r\n\r\n';
   const project = parseProjectDocument(source);
   const story = projectRoot(project, 'STORY');
-  assert.equal(story.separator, '\r\n');
-  assert.equal(story.text, '# Chapter\r\n## Scene\r\n```md\r\n## literal\r\n```\r\n\\## escaped\r\n');
+  assert.equal(story.separator, '\n');
+  assert.equal(story.text, '## Chapter\n```md\n## literal\n```\n\\## escaped');
 });
 
-test('heading projection round-trips H1-H5 with fences, escapes, and CRLF', () => {
-  const visible = '# One\r\n## Two\r\n### Three\r\n#### Four\r\n##### Five\r\n```md\r\n# literal\r\n```\r\n\\# escaped\r\n';
+test('heading projection keeps ATX levels H1-H6 and normalizes Setext input', () => {
+  const visible = '# One\n## Two\n### Three\n#### Four\n##### Five\n###### Six\n```md\n# literal\n```\n\\# escaped\n';
   assert.equal(promoteStoredHeadings(demoteVisibleHeadings(visible)), visible);
 });
 
-test('visible H6 is explicitly rejected rather than serialized as H7', () => {
-  assert.throws(
-    () => demoteVisibleHeadings('###### Unsupported\n'),
-    (error) => error instanceof ProjectionError && error.code === 'UNSUPPORTED_VISIBLE_H6',
-  );
-});
-
 test('serializer replaces projections while preserving unknown roots and order', () => {
-  const source = '# METADATA\n\n## Old\n\n# UNKNOWN\nKeep exactly.\n\n# STORY\n\n## Old chapter\n';
+  const source = 'METADATA\n========\n\n# Old\n\nUNKNOWN\n=======\nKeep exactly.\n\nSTORY\n=====\n\n# Old chapter\n';
   const project = parseProjectDocument(source);
   const serialized = serializeProjectDocument(project, {
     STORY: '# New chapter\nText.',
     METADATA: '# Style\nSparse.\n',
   });
-  assert.equal(serialized, '# METADATA\n\n## Style\nSparse.\n# UNKNOWN\nKeep exactly.\n\n# STORY\n\n## New chapter\nText.');
+  assert.equal(serialized, 'METADATA\n========\n\n# Style\nSparse.\nUNKNOWN\n=======\nKeep exactly.\n\nSTORY\n=====\n\n# New chapter\nText.\n');
 });
 
 test('serializer creates missing optional roots using the existing line ending', () => {
-  const project = parseProjectDocument('# STORY\r\n\r\n## Chapter\r\n');
-  const serialized = serializeProjectDocument(project, { CHAT: '# Session\r\n' });
-  assert.equal(serialized, '# STORY\r\n\r\n## Chapter\r\n# CHAT\r\n\r\n## Session\r\n');
+  const project = parseProjectDocument('STORY\n=====\n\n# Chapter\n');
+  const serialized = serializeProjectDocument(project, { CHAT: '# Session\n' });
+  assert.equal(serialized, 'STORY\n=====\n\n# Chapter\nCHAT\n====\n\n# Session\n');
 });
 
 test('serializer places newly created reserved roots in preferred order', () => {
   const project = parseProjectDocument([
-    '# STORY\n\n## Chapter\n',
-    '# AUTHOR-NOTES\nKeep this section in place.\n',
-    '# VERSIONS\n\nVersion data\n',
+    'STORY\n=====\n\n# Chapter\n',
+    'AUTHOR-NOTES\n============\nKeep this section in place.\n',
+    'VERSIONS\n========\n\nVersion data\n',
   ].join(''));
   const serialized = serializeProjectDocument(project, new Map([
     ['CHAT', '## Session\n'],
     ['METADATA', '# Notes\n'],
   ]));
   assert.equal(serialized, [
-    '# STORY\n\n## Chapter\n',
-    '# AUTHOR-NOTES\nKeep this section in place.\n',
-    '# VERSIONS\n\nVersion data\n',
-    '# CHAT\n\n### Session\n',
-    '# METADATA\n\n## Notes\n',
+    'STORY\n=====\n\n# Chapter\n',
+    'AUTHOR-NOTES\n============\nKeep this section in place.\n',
+    'VERSIONS\n========\n\nVersion data\n',
+    'CHAT\n====\n\n## Session\n',
+    'METADATA\n========\n\n# Notes\n',
   ].join(''));
 });
 
-test('unknown-only and rootless documents remain byte-identical when untouched', () => {
-  for (const source of ['free text\n', '# UNKNOWN\nvalue\n']) {
+test('unknown-only and rootless documents remain canonical when untouched', () => {
+  for (const source of ['free text\n', 'UNKNOWN\n=======\nvalue\n']) {
     assert.equal(serializeProjectDocument(parseProjectDocument(source)), source);
   }
 });
@@ -119,10 +111,10 @@ test('heading projection round-trips randomized supported story structures', () 
     return seed / 0x1_0000_0000;
   };
   for (let sample = 0; sample < 500; sample += 1) {
-    const eol = random() > 0.5 ? '\n' : '\r\n';
+    const eol = '\n';
     const lines = [];
     for (let index = 0; index < 20; index += 1) {
-      const level = 1 + Math.floor(random() * 5);
+      const level = 1 + Math.floor(random() * 6);
       lines.push(`${'#'.repeat(level)} Heading ${sample}-${index}${eol}`);
       if (random() < 0.15) lines.push(`\`\`\`md${eol}# literal${eol}\`\`\`${eol}`);
       if (random() < 0.2) lines.push(`\\# escaped ${index}${eol}`);

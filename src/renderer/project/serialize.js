@@ -6,9 +6,11 @@ function normalizedReplacements(replacements) {
 }
 
 function appendRoot(output, name, visibleValue, lineEnding) {
-  const visible = String(visibleValue);
+  const visible = (name === 'STORY' || name === 'METADATA'
+    ? demoteVisibleHeadings(String(visibleValue)).trim()
+    : String(visibleValue).trim());
   if (output && !output.endsWith(lineEnding)) output += lineEnding;
-  return `${output}# ${name}${lineEnding}${lineEnding}${demoteVisibleHeadings(visible)}`;
+  return `${output}${name}${lineEnding}${'='.repeat(name.length)}${lineEnding}${lineEnding}${visible}${lineEnding}`;
 }
 
 export function serializeProjectDocument(project, replacements = new Map()) {
@@ -36,11 +38,13 @@ export function serializeProjectDocument(project, replacements = new Map()) {
     }
     const visible = String(changes.get(segment.name));
     const { separator } = splitRootSeparator(segment.content, project.lineEnding);
-    let stored = demoteVisibleHeadings(visible);
+    let stored = (segment.name === 'STORY' || segment.name === 'METADATA'
+      ? demoteVisibleHeadings(visible).trim()
+      : visible.trim());
     if (index < project.segments.length - 1 && stored && !stored.endsWith(project.lineEnding)) {
       stored += project.lineEnding;
     }
-    output += segment.headingSource + (separator || project.lineEnding) + stored;
+    output += segment.headingSource + (separator || project.lineEnding) + stored + (stored && index === project.segments.length - 1 ? project.lineEnding : '');
   }
 
   for (const name of pending) {

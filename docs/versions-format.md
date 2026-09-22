@@ -1,9 +1,10 @@
 # NoirDraft VERSIONS format
 
-Phase 15 stores two independent graphs inside the visible projection of `# VERSIONS`: `# STORY:REV` and `# METADATA:REV`. Each group has its own revision IDs, checkpoints, and `Current-Revision`. When stored in the complete project file, projection serialization shifts each heading one level beneath the reserved root. Existing unscoped VERSIONS documents remain valid legacy STORY graphs and are read without loss.
+VERSIONS stores two independent graphs under Setext H2 headings: `STORY:REV` and `METADATA:REV`. Each group has its own revision IDs, checkpoints, and `Current-Revision`. The format is canonical and has no legacy parser.
 
 `````markdown
-# STORY:REV
+STORY:REV
+---------
 
 Current-Revision: 2
 Checkpoint-Interval: 50
@@ -37,7 +38,8 @@ Note: null
 ````
 `````
 
-# METADATA:REV
+METADATA:REV
+------------
 
 Current-Revision: 1
 Checkpoint-Interval: 50
@@ -53,7 +55,7 @@ Rules:
 - `Parents` is `none` for the initial checkpoint or a comma-separated list. Phase 6 writes one parent but the grammar permits more for future compatibility.
 - `Origin` initially accepts `user`, `agent`, `import`, `recovery`, or `system`.
 - `Time` is an ISO-8601 timestamp.
-- Hashes are lowercase SHA-256 of the exact UTF-8 visible root string.
+- Hashes are lowercase SHA-256 of canonical UTF-8 visible-root text: LF line endings, no file BOM, normalized Setext editor headings, and outer whitespace trimmed.
 - `Note` is a JSON string or `null`, keeping escaping deterministic and readable.
 - `Payload-Length` stores the exact JavaScript UTF-16 length so a checkpoint without a trailing newline remains lossless despite fenced-block layout.
 - A revision contains exactly one fenced payload: `markdown` for a full checkpoint or `diff` for a strict unified patch.

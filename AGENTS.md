@@ -29,7 +29,7 @@ Keep deterministic logic in its focused subsystem, then wire it through `app.js`
 ## Architecture invariants
 
 - The Markdown file is authoritative: no hidden database, binary sidecar, or second canonical manuscript state.
-- Preserve unknown roots and line-ending conventions on parse/serialize.
+- Use the canonical UTF-8-without-BOM, LF-only project representation on parse/serialize; preserve unknown roots within that representation.
 - `StoryModel` is canonical text and selection. DOM, renderer, EditContext, caret geometry, and AI operations project from it.
 - Source offsets are UTF-16. Keep DOM/source mappings reversible, including formatted and terminal-empty rows.
 - AI output is a proposal until explicit application; a missing KoboldCpp server must not block editing/saving.
@@ -37,6 +37,7 @@ Keep deterministic logic in its focused subsystem, then wire it through `app.js`
 
 ## Prototype protocol policy
 
+- This is a pre-deployment prototype: use one ideal, current file format and one canonical set of data structures. Do not retain legacy formats, parsers, compatibility layers, fallbacks, or migrations unless the user explicitly asks for them.
 - Prefer one direct, current protocol over compatibility layers during this prototype. Do not retain legacy prompt formats, parsers, fallbacks, or migrations unless the user explicitly asks for them.
 - Native KoboldCpp/OpenAI tool calls are the only agent mutation protocol. Keep long context as XML input data and function-call arguments as schema-validated JSON.
 - Design protocol management as a helpful secretary, not a bureaucratic gatekeeper: NoirDraft owns phases and bookkeeping while the model states creative intent in model-facing terms. Require only essential fields, name them from the model’s point of view, and make every constraint or rejection point toward a constructive next action.

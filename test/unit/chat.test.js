@@ -22,13 +22,13 @@ test('default chat convention remains readable ordinary Markdown', () => {
   ]);
 });
 
-test('CHAT projection serializes under its root and round-trips CRLF', () => {
-  const project = parseProjectDocument('# STORY\r\n\r\nText.\r\n');
+test('CHAT projection serializes under its root and canonicalizes LF', () => {
+  const project = parseProjectDocument('STORY\r\n=====\r\n\r\nText.\r\n');
   let chat = appendConversation('', 'General');
   chat = appendChatMessage(chat, 'User', 'Question?').replaceAll('\n', '\r\n');
   const stored = serializeProjectDocument(project, { CHAT: chat });
   const reparsed = parseProjectDocument(stored);
-  assert.equal(projectRoot(reparsed, 'CHAT').text, chat);
+  assert.equal(projectRoot(reparsed, 'CHAT').text, chat.replaceAll('\r\n', '\n').trim());
 });
 
 test('chat helper rejects unclear participant labels', () => {

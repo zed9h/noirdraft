@@ -17,16 +17,24 @@ Start KoboldCpp separately, then set its server URL in the top-bar overflow menu
 
 ## Project format
 
-NoirDraft recognizes ordinary top-level Markdown roots:
+NoirDraft uses Setext H1 headings for its structural roots, leaving all six
+ATX heading levels available in the editor:
 
 ```markdown
-# STORY
-# VERSIONS
-# CHAT
-# METADATA
+STORY
+=====
+
+VERSIONS
+========
+
+CHAT
+====
+
+METADATA
+========
 ```
 
-There is no database, proprietary project file, or binary sidecar. STORY is shown without its storage heading, so visible story heading levels are promoted in the editor and restored on save. Unknown roots are preserved. See [PLAN.md](PLAN.md) for the complete contract.
+There is no database, proprietary project file, or binary sidecar. Files are UTF-8 without a BOM and are normalized to LF on load/save. STORY and METADATA content is trimmed at its outer boundaries and versioned exactly as shown in the editor. See [PLAN.md](PLAN.md) for the complete contract.
 
 ## Development
 

@@ -1,65 +1,46 @@
-export class ProjectionError extends Error {
-  constructor(message, { code, offset } = {}) {
-    super(message);
-    this.name = 'ProjectionError';
-    this.code = code;
-    this.offset = offset;
-  }
-}
-
-function mapHeadingLevels(source, direction) {
+function normalizeSetextHeadings(source) {
+  const canonical = String(source).replace(/\r\n?/g, '\n');
   const output = [];
-  let offset = 0;
   let fence = null;
-  const linePattern = /.*(?:\r\n|\n|$)/g;
-  for (const match of source.matchAll(linePattern)) {
+  const linePattern = /.*(?:\n|$)/g;
+  for (const match of canonical.matchAll(linePattern)) {
     const line = match[0];
-    if (line === '' && offset === source.length) break;
+    if (line === '' && match.index === canonical.length) break;
     if (fence) {
-      const closePattern = new RegExp(`^ {0,3}${fence.character === '`' ? '`' : '~'}{${fence.length},}[ \\t]*(?:\\r?\\n)?$`);
+      const closePattern = new RegExp(`^ {0,3}${fence.character === '`' ? '`' : '~'}{${fence.length},}[ \\t]*(?:\\n)?$`);
       if (closePattern.test(line)) fence = null;
       output.push(line);
-      offset += line.length;
       continue;
     }
     const opening = line.match(/^ {0,3}(`{3,}|~{3,})/);
     if (opening) {
       fence = { character: opening[1][0], length: opening[1].length };
       output.push(line);
-      offset += line.length;
       continue;
     }
-    const heading = line.match(/^( {0,3})(#{1,6})(?=[ \t]|\r?$)/);
-    if (!heading) {
-      output.push(line);
-      offset += line.length;
-      continue;
+    if (/^ {0,3}(=+|-+)[ \t]*\n?$/.test(line) && output.length) {
+      const previous = output.at(-1);
+      if (previous.trim() && !previous.startsWith('    ')) {
+        output[output.length - 1] = `${line.includes('=') ? '# ' : '## '}${previous.trim()}\n`;
+        continue;
+      }
     }
-    const level = heading[2].length;
-    if (direction === 'demote' && level === 6) {
-      throw new ProjectionError('Visible H6 cannot be stored beneath a reserved H1 root.', {
-        code: 'UNSUPPORTED_VISIBLE_H6',
-        offset: offset + heading[1].length,
-      });
-    }
-    if (direction === 'promote' && level === 1) {
-      output.push(line);
-      offset += line.length;
-      continue;
-    }
-    const hashes = direction === 'promote' ? '#'.repeat(level - 1) : '#'.repeat(level + 1);
-    output.push(heading[1] + hashes + line.slice(heading[0].length));
-    offset += line.length;
+    output.push(line);
   }
   return output.join('');
 }
 
 export function promoteStoredHeadings(source) {
-  return mapHeadingLevels(String(source), 'promote');
+  return normalizeSetextHeadings(String(source));
 }
 
 export function demoteVisibleHeadings(source) {
-  return mapHeadingLevels(String(source), 'demote');
+  return normalizeSetextHeadings(String(source));
+}
+
+/** Canonical content used by editors, diffs, and revision hashes. */
+export function normalizeVisibleRootText(source) {
+  return promoteStoredHeadings(String(source).replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')).trim();
 }
 
 export function splitRootSeparator(content, lineEnding = '\n') {
@@ -74,7 +55,9 @@ export function projectRoot(project, name) {
   const { separator, body } = splitRootSeparator(root.content, project.lineEnding);
   return {
     name,
-    text: promoteStoredHeadings(body),
+    text: name === 'STORY' || name === 'METADATA'
+      ? normalizeVisibleRootText(body)
+      : body.trim(),
     separator,
     sourceFrom: root.contentFrom + separator.length,
     sourceTo: root.contentTo,

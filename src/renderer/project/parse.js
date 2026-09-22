@@ -11,6 +11,11 @@ export class ProjectDocumentError extends Error {
   }
 }
 
+/** The sole on-disk text representation: UTF-8 decoded, BOM-free, LF-delimited. */
+export function normalizeProjectSource(source) {
+  return String(source).replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+}
+
 function lineRecords(source) {
   const records = [];
   let from = 0;
@@ -33,17 +38,13 @@ function closesFence(line, fence) {
   return new RegExp(`^ {0,3}${marker}{${fence.length},}[ \\t]*(?:\\r?\\n)?$`).test(line);
 }
 
-function h1Name(line) {
-  const match = line.match(/^ {0,3}#(?:[ \t]+)(.*?)(?:\r?\n)?$/);
-  if (!match) return null;
-  const withoutClosing = match[1].replace(/[ \t]+#+[ \t]*$/, '');
-  return withoutClosing.trim();
-}
-
 export function findTopLevelHeadings(source) {
+  const text = normalizeProjectSource(source);
   const headings = [];
   let fence = null;
-  for (const line of lineRecords(source)) {
+  const lines = lineRecords(text);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     if (fence) {
       if (closesFence(line.text, fence)) fence = null;
       continue;
@@ -53,19 +54,18 @@ export function findTopLevelHeadings(source) {
       fence = opening;
       continue;
     }
-    const name = h1Name(line.text);
-    if (name !== null) headings.push({ name, from: line.from, to: line.to, source: line.text });
+    const underline = lines[index + 1];
+    if (!underline || !/^ {0,3}=+[ \t]*\n?$/.test(underline.text)) continue;
+    const name = line.text.replace(/\n$/, '').trim();
+    if (!name) continue;
+    headings.push({ name, from: line.from, to: underline.to, source: text.slice(line.from, underline.to) });
+    index += 1;
   }
   return headings;
 }
 
-function detectLineEnding(source) {
-  const match = source.match(/\r\n|\n/);
-  return match?.[0] ?? '\n';
-}
-
 export function parseProjectDocument(source) {
-  const text = String(source);
+  const text = normalizeProjectSource(source);
   const headings = findTopLevelHeadings(text);
   const segments = [];
   if (headings.length === 0) {
@@ -109,7 +109,7 @@ export function parseProjectDocument(source) {
 
   const project = {
     source: text,
-    lineEnding: detectLineEnding(text),
+    lineEnding: '\n',
     segments,
     roots,
     unknownRoots: segments.filter((segment) => segment.type === 'root' && !segment.reserved),

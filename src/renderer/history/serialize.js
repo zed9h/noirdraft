@@ -1,4 +1,3 @@
-import { findTopLevelHeadings } from '../project/parse.js';
 import { HistoryError } from './graph.js';
 
 const origins = new Set(['user', 'agent', 'import', 'recovery', 'system']);
@@ -93,7 +92,7 @@ export function parseHistory(source, { revisionHeadingLevel = 1 } = {}) {
   if (!currentMatch || !intervalMatch || Number(intervalMatch[1]) < 1) {
     throw new HistoryError('VERSIONS header is missing or malformed.', { code: 'MALFORMED_HISTORY' });
   }
-  const headings = (revisionHeadingLevel === 1 ? findTopLevelHeadings(text) : findHeadingsAtLevel(text, revisionHeadingLevel))
+  const headings = findHeadingsAtLevel(text, revisionHeadingLevel)
     .map((heading) => ({ ...heading, match: heading.name.match(/^Revision (\d+)$/) }))
     .filter(({ match }) => match);
   const revisions = new Map();
@@ -161,21 +160,32 @@ export function parseHistory(source, { revisionHeadingLevel = 1 } = {}) {
 const ROOTS = Object.freeze(['STORY', 'METADATA']);
 
 /**
- * Serializes the two independently recoverable document graphs. The legacy
- * unscoped form remains accepted by parseHistories() as STORY history.
+ * Serializes the two independently recoverable document graphs in the one
+ * canonical visible VERSIONS format.
  */
 export function serializeHistories(histories) {
   const groups = ROOTS.filter((root) => histories?.[root]);
   if (groups.length === 0) throw new TypeError('At least one root history is required.');
-  return groups.map((root) => `# ${root}:REV\n\n${serializeHistory(histories[root], { revisionHeadingLevel: 2 })}`).join('\n');
+  return groups.map((root) => `${root}:REV\n${'-'.repeat(root.length + 4)}\n\n${serializeHistory(histories[root], { revisionHeadingLevel: 2 })}`).join('\n');
 }
 
 export function parseHistories(source) {
   const text = String(source);
-  const groups = findTopLevelHeadings(text)
-    .map((heading) => ({ ...heading, root: heading.name.match(/^(STORY|METADATA):REV$/)?.[1] }))
-    .filter(({ root }) => root);
-  if (groups.length === 0) return { STORY: parseHistory(text), METADATA: null, legacy: true };
+  const lines = [...text.matchAll(/.*(?:\n|$)/g)];
+  const groups = [];
+  let offset = 0;
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    const title = lines[index][0];
+    const underline = lines[index + 1][0];
+    const match = title.replace(/\n$/, '').trim().match(/^(STORY|METADATA):REV$/);
+    if (match && /^ {0,3}-+[ \t]*\n?$/.test(underline)) {
+      groups.push({ root: match[1], from: offset, to: offset + title.length + underline.length });
+      index += 1;
+      offset += title.length + underline.length;
+      continue;
+    }
+    offset += title.length;
+  }
   const histories = { STORY: null, METADATA: null, legacy: false };
   for (let index = 0; index < groups.length; index += 1) {
     const group = groups[index];
@@ -183,6 +193,6 @@ export function parseHistories(source) {
     const end = groups[index + 1]?.from ?? text.length;
     histories[group.root] = parseHistory(text.slice(group.to, end), { revisionHeadingLevel: 2 });
   }
-  if (!histories.STORY) throw new HistoryError('VERSIONS is missing STORY:REV.', { code: 'MISSING_HISTORY_ROOT' });
+  if (!histories.STORY || !histories.METADATA) throw new HistoryError('VERSIONS must contain STORY:REV and METADATA:REV.', { code: 'MISSING_HISTORY_ROOT' });
   return histories;
 }

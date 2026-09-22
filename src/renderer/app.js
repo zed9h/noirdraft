@@ -365,7 +365,7 @@ const models = {
   COMPOSITE: new StoryModel(''),
 };
 let currentDocument = null;
-let project = parseProjectDocument('# STORY\n\n');
+let project = parseProjectDocument('STORY\n=====\n\n');
 let activeRoot = 'STORY';
 let versionsOpen = false;
 const openFolds = new Set(['STORY', 'METADATA']);
@@ -1865,7 +1865,7 @@ try {
 
   const loadDocument = async (openedDocument) => {
     const parsed = parseProjectDocument(openedDocument.contents);
-    if (!parsed.roots.STORY) throw new Error('This document has no # STORY root.');
+    if (!parsed.roots.STORY) throw new Error('This document has no STORY root.');
     project = parsed;
     // A newly opened project must expose both roots immediately. Collapse
     // state belongs to the current outline projection, not the document.
@@ -1894,27 +1894,28 @@ try {
       verifyCurrentStory(nextHistory, story.text),
       verifyCurrentStory(nextMetadataHistory, metadata?.text ?? ''),
     ]);
-    historyMismatch = storyVerification.matches ? null : storyVerification;
-    metadataHistoryMismatch = metadataVerification.matches ? null : metadataVerification;
-    if (historyMismatch || metadataHistoryMismatch) {
-      commitController?.destroy();
-      commitController = null;
-      metadataCommitController?.destroy();
-      metadataCommitController = null;
-      history = nextHistory;
-      metadataHistory = nextMetadataHistory;
-      recordExternalButton.hidden = false;
-      showStatus('STORY or METADATA differs from recorded history. Record the external edit before continuing.', true);
-    } else {
-      recordExternalButton.hidden = true;
-      attachHistory(nextHistory);
-      attachMetadataHistory(nextMetadataHistory);
+    const recoveredRoots = [];
+    if (!storyVerification.matches) {
+      await recordExternalEdit(nextHistory, story.text);
+      recoveredRoots.push('STORY');
     }
+    if (!metadataVerification.matches) {
+      await recordExternalEdit(nextMetadataHistory, metadata?.text ?? '');
+      recoveredRoots.push('METADATA');
+    }
+    historyMismatch = null;
+    metadataHistoryMismatch = null;
+    recordExternalButton.hidden = true;
+    attachHistory(nextHistory);
+    attachMetadataHistory(nextMetadataHistory);
     metadataDirty = false;
     chatDirty = false;
     currentDocument = openedDocument;
     editorTitle.textContent = openedDocument.filePath.split(/[\\/]/).at(-1);
-    if (!historyMismatch && !metadataHistoryMismatch) showStatus('Saved');
+    if (recoveredRoots.length) await persistAfterCommit();
+    showStatus(recoveredRoots.length
+      ? `Recorded external ${recoveredRoots.join(' and ')} edit as a recovery revision.`
+      : 'Saved');
     refreshSidebar();
     refreshChatOutline();
   };

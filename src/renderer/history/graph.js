@@ -1,5 +1,6 @@
 import { applyUnifiedDiff, createUnifiedDiff } from './diff.js';
 import { hashStory } from './hash.js';
+import { normalizeVisibleRootText } from '../project/projection.js';
 
 export class HistoryError extends Error {
   constructor(message, { code, revisionId, cause } = {}) {
@@ -11,7 +12,7 @@ export class HistoryError extends Error {
 }
 
 export async function createHistory(initialStory, options = {}) {
-  const story = String(initialStory);
+  const story = normalizeVisibleRootText(initialStory);
   const resultHash = await hashStory(story);
   const revision = {
     id: 0,
@@ -94,8 +95,8 @@ export async function reconstructRevision(history, revisionId, cache = new Map()
 }
 
 export async function commitRevision(history, baseStory, resultStory, options = {}) {
-  const before = String(baseStory);
-  const after = String(resultStory);
+  const before = normalizeVisibleRootText(baseStory);
+  const after = normalizeVisibleRootText(resultStory);
   if (before === after) return null;
   const parentId = options.parentId ?? history.currentRevision;
   const parentStory = await reconstructRevision(history, parentId);
@@ -124,21 +125,23 @@ export async function commitRevision(history, baseStory, resultStory, options = 
 
 export async function verifyCurrentStory(history, story) {
   const recorded = await reconstructRevision(history, history.currentRevision);
-  const actualHash = await hashStory(String(story));
+  const externalStory = normalizeVisibleRootText(story);
+  const actualHash = await hashStory(externalStory);
   const expectedHash = history.revisions.get(history.currentRevision).resultHash;
   return {
-    matches: actualHash === expectedHash && recorded === String(story),
+    matches: actualHash === expectedHash && recorded === externalStory,
     expectedHash,
     actualHash,
     recordedStory: recorded,
-    externalStory: String(story),
+    externalStory,
   };
 }
 
 export async function recordExternalEdit(history, externalStory, options = {}) {
   const recordedStory = await reconstructRevision(history, history.currentRevision);
-  if (recordedStory === String(externalStory)) return null;
-  return commitRevision(history, recordedStory, String(externalStory), {
+  const normalized = normalizeVisibleRootText(externalStory);
+  if (recordedStory === normalized) return null;
+  return commitRevision(history, recordedStory, normalized, {
     origin: options.origin ?? 'recovery',
     timestamp: options.timestamp,
     note: options.note ?? 'Recorded externally edited STORY.',

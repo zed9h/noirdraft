@@ -18,8 +18,8 @@ test('restricted IPC saves, backs up, and rejects an external overwrite', async 
   try {
     const window = await application.firstWindow();
     await window.waitForFunction(() => Boolean(window.noirDraft?.documents));
-    const firstSource = '# STORY\n\n## First\n';
-    const secondSource = '# STORY\n\n## Second\n';
+    const firstSource = 'STORY\n=====\n\n# First\n';
+    const secondSource = 'STORY\n=====\n\n# Second\n';
     const first = await window.evaluate(
       ({ target, contents }) => window.noirDraft.documents.save({ filePath: target, contents }),
       { target: filePath, contents: firstSource },
@@ -41,7 +41,7 @@ test('restricted IPC saves, backs up, and rejects an external overwrite', async 
     expect(backups).toHaveLength(1);
     expect(await readFile(path.join(directory, 'backup', backups[0]), 'utf8')).toBe(firstSource);
 
-    const externalSource = '# STORY\n\nExternally edited.\n';
+    const externalSource = 'STORY\n=====\n\nExternally edited.\n';
     await writeFile(filePath, externalSource, 'utf8');
     const conflict = await window.evaluate(
       ({ target, contents, fingerprint }) => window.noirDraft.documents.save({
@@ -84,10 +84,10 @@ test('STORY:REV and METADATA:REV persist and reload as independent current graph
         metadata: { current: app.getMetadataHistory().currentRevision, text: app.models.METADATA.text },
       };
     }, filePath);
-    expect(saved.contents).toContain('# STORY:REV');
-    expect(saved.contents).toContain('# METADATA:REV');
-    expect(saved.story).toEqual({ current: 1, text: 'Story revision.\n' });
-    expect(saved.metadata).toEqual({ current: 1, text: '# Notes\n\nMetadata revision.\n' });
+    expect(saved.contents).toContain('STORY:REV\n---------');
+    expect(saved.contents).toContain('METADATA:REV\n------------');
+    expect(saved.story).toEqual({ current: 1, text: 'Story revision.' });
+    expect(saved.metadata).toEqual({ current: 1, text: '# Notes\n\nMetadata revision.' });
     expect(await readFile(filePath, 'utf8')).toBe(saved.contents);
   } finally {
     await application.close();

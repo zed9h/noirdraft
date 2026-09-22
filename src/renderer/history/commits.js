@@ -1,4 +1,5 @@
 import { childrenOf, commitRevision, reconstructRevision } from './graph.js';
+import { normalizeVisibleRootText } from '../project/projection.js';
 
 const ignoredOrigins = new Set(['open', 'checkout', 'agent', 'local-undo', 'local-redo', 'history']);
 
@@ -74,8 +75,11 @@ export class CommitController {
   async commitPending({ origin = 'user', note = null } = {}) {
     this.#cancelIdle();
     if (!this.pending) return null;
-    const base = this.pendingBase;
-    const result = this.model.text;
+    const base = normalizeVisibleRootText(this.pendingBase);
+    const result = normalizeVisibleRootText(this.model.text);
+    if (result !== this.model.text) {
+      this.model.replace(0, this.model.text.length, result, { origin: 'history' });
+    }
     this.pending = false;
     this.pendingBase = null;
     this.undoOperations = [];
@@ -103,8 +107,8 @@ export class CommitController {
 
   async applyAgentStory(story, options = {}) {
     await this.beforeAgentRequest();
-    const base = this.model.text;
-    const result = String(story);
+    const base = normalizeVisibleRootText(this.model.text);
+    const result = normalizeVisibleRootText(story);
     if (base === result) return null;
     this.model.replace(0, base.length, result, { origin: 'agent' });
     const revision = await commitRevision(this.history, base, result, {

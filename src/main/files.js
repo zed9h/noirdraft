@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { open, readFile, rename, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { parseProjectDocument, ProjectDocumentError } from '../renderer/project/parse.js';
+import { normalizeProjectSource, parseProjectDocument, ProjectDocumentError } from '../renderer/project/parse.js';
 import { writeBackup } from './backups.js';
 
 export class FilePersistenceError extends Error {
@@ -15,19 +15,19 @@ export class FilePersistenceError extends Error {
 }
 
 export function hashText(contents) {
-  return createHash('sha256').update(contents, 'utf8').digest('hex');
+  return createHash('sha256').update(normalizeProjectSource(contents), 'utf8').digest('hex');
 }
 
 async function fingerprint(filePath, contents = null) {
   const [metadata, source] = await Promise.all([
     stat(filePath),
-    contents === null ? readFile(filePath, 'utf8') : contents,
+    contents === null ? readFile(filePath, 'utf8').then(normalizeProjectSource) : normalizeProjectSource(contents),
   ]);
   return { size: metadata.size, mtimeMs: metadata.mtimeMs, hash: hashText(source) };
 }
 
 export async function readDocument(filePath) {
-  const contents = await readFile(filePath, 'utf8');
+  const contents = normalizeProjectSource(await readFile(filePath, 'utf8'));
   return { filePath, contents, fingerprint: await fingerprint(filePath, contents) };
 }
 
@@ -53,7 +53,7 @@ export function validateProjectSource(contents) {
     throw error;
   }
   if (!project.roots.STORY) {
-    throw new FilePersistenceError('A NoirDraft document must contain exactly one # STORY root.', {
+    throw new FilePersistenceError('A NoirDraft document must contain exactly one STORY root.', {
       code: 'MISSING_STORY_ROOT',
     });
   }
@@ -82,7 +82,7 @@ export async function safeSaveDocument({
   now = new Date(),
   operations = {},
 }) {
-  const source = String(contents);
+  const source = normalizeProjectSource(contents);
   validateProjectSource(source);
   const writeTemporary = operations.writeTemporary ?? writeAndFlush;
   const replace = operations.replace ?? replaceFile;

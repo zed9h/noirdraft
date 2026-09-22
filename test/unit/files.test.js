@@ -28,8 +28,8 @@ afterEach(async () => {
 test('safe save backs up, flushes, replaces, and verifies an existing document', async () => {
   const directory = await temporaryDirectory();
   const filePath = path.join(directory, 'novel.md');
-  const oldSource = '# STORY\n\n## Old\n';
-  const newSource = '# STORY\n\n## New\nText.\n';
+  const oldSource = 'STORY\n=====\n\n# Old\n';
+  const newSource = 'STORY\n=====\n\n# New\nText.\n';
   await writeFile(filePath, oldSource, 'utf8');
   const opened = await readDocument(filePath);
 
@@ -49,43 +49,43 @@ test('safe save backs up, flushes, replaces, and verifies an existing document',
 test('new documents save without creating a meaningless backup', async () => {
   const directory = await temporaryDirectory();
   const filePath = path.join(directory, 'new.md');
-  const source = '# STORY\r\n\r\n## Chapter\r\n';
+  const source = 'STORY\r\n=====\r\n\r\n# Chapter\r\n';
   const saved = await safeSaveDocument({ filePath, contents: source });
   assert.equal(saved.backupPath, null);
-  assert.equal(await readFile(filePath, 'utf8'), source);
+  assert.equal(await readFile(filePath, 'utf8'), source.replaceAll('\r\n', '\n'));
 });
 
 test('external changes are detected and never overwritten', async () => {
   const directory = await temporaryDirectory();
   const filePath = path.join(directory, 'novel.md');
-  await writeFile(filePath, '# STORY\n\nOriginal.\n', 'utf8');
+  await writeFile(filePath, 'STORY\n=====\n\nOriginal.\n', 'utf8');
   const opened = await readDocument(filePath);
-  await writeFile(filePath, '# STORY\n\nChanged outside.\n', 'utf8');
+  await writeFile(filePath, 'STORY\n=====\n\nChanged outside.\n', 'utf8');
   assert.equal(await hasExternalChange(filePath, opened.fingerprint), true);
 
   await assert.rejects(
     safeSaveDocument({
       filePath,
-      contents: '# STORY\n\nApp change.\n',
+      contents: 'STORY\n=====\n\nApp change.\n',
       expectedFingerprint: opened.fingerprint,
     }),
     (error) => error instanceof FilePersistenceError && error.code === 'EXTERNAL_CHANGE',
   );
-  assert.equal(await readFile(filePath, 'utf8'), '# STORY\n\nChanged outside.\n');
+  assert.equal(await readFile(filePath, 'utf8'), 'STORY\n=====\n\nChanged outside.\n');
   assert.deepEqual(await readdir(directory), ['novel.md']);
 });
 
 test('replacement failure preserves the original and its backup', async () => {
   const directory = await temporaryDirectory();
   const filePath = path.join(directory, 'novel.md');
-  const original = '# STORY\n\nOriginal.\n';
+  const original = 'STORY\n=====\n\nOriginal.\n';
   await writeFile(filePath, original, 'utf8');
   const opened = await readDocument(filePath);
 
   await assert.rejects(
     safeSaveDocument({
       filePath,
-      contents: '# STORY\n\nReplacement.\n',
+      contents: 'STORY\n=====\n\nReplacement.\n',
       expectedFingerprint: opened.fingerprint,
       now: new Date('2026-09-18T00:00:00Z'),
       operations: { replace: async () => { throw new Error('injected replacement failure'); } },
@@ -103,16 +103,16 @@ test('replacement failure preserves the original and its backup', async () => {
 test('invalid project structure fails before touching disk', async () => {
   const directory = await temporaryDirectory();
   const filePath = path.join(directory, 'novel.md');
-  const original = '# STORY\n\nOriginal.\n';
+  const original = 'STORY\n=====\n\nOriginal.\n';
   await writeFile(filePath, original, 'utf8');
   await assert.rejects(
-    safeSaveDocument({ filePath, contents: '# STORY\nOne\n# STORY\nTwo\n' }),
+    safeSaveDocument({ filePath, contents: 'STORY\n=====\nOne\nSTORY\n=====\nTwo\n' }),
     (error) => error instanceof FilePersistenceError && error.code === 'INVALID_PROJECT_STRUCTURE',
   );
   assert.equal(await readFile(filePath, 'utf8'), original);
   assert.deepEqual(await readdir(directory), ['novel.md']);
   assert.throws(
-    () => validateProjectSource('# METADATA\nOnly.\n'),
+    () => validateProjectSource('METADATA\n========\nOnly.\n'),
     (error) => error.code === 'MISSING_STORY_ROOT',
   );
 });

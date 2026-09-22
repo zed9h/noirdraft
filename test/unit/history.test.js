@@ -13,16 +13,16 @@ import {
 import { hashStory } from '../../src/renderer/history/hash.js';
 import { parseHistories, parseHistory, serializeHistories, serializeHistory } from '../../src/renderer/history/serialize.js';
 
-test('SHA-256 hashes exact UTF-8 STORY contents deterministically', async () => {
+test('SHA-256 hashes canonical UTF-8 visible-root contents deterministically', async () => {
   assert.equal(await hashStory('abc'), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
-  assert.notEqual(await hashStory('line\n'), await hashStory('line\r\n'));
+  assert.equal(await hashStory('\n line\r\n'), await hashStory('line'));
 });
 
 for (const [name, before, after] of [
   ['replacement', 'one\ntwo\nthree\n', 'one\nchanged\nthree\n'],
   ['insertion into empty', '', 'first\nsecond'],
   ['deletion to empty', 'first\nsecond', ''],
-  ['CRLF preservation', 'one\r\ntwo\r\n', 'one\r\nchanged\r\n'],
+  ['CRLF source', 'one\r\ntwo\r\n', 'one\r\nchanged\r\n'],
   ['no trailing newline', 'one\ntwo', 'one\nlast'],
   ['Unicode', 'Maria 😀\n', 'María 🚪\n'],
 ]) {
@@ -65,7 +65,7 @@ test('history commits reconstruct, checkpoint, and preserve branches', async () 
   await commitRevision(history, '# One\nText.\n', '# One\nText changed.\n', {
     timestamp: '2026-09-18T10:02:00.000Z', origin: 'agent',
   });
-  assert.equal(await reconstructRevision(history, 2), '# One\nText changed.\n');
+  assert.equal(await reconstructRevision(history, 2), '# One\nText changed.');
 
   history.currentRevision = 1;
   await commitRevision(history, '# One\nText.\n', '# One\nAlternative.\n', {
@@ -73,8 +73,8 @@ test('history commits reconstruct, checkpoint, and preserve branches', async () 
   });
   assert.equal(history.revisions.get(3).payloadType, 'checkpoint');
   assert.deepEqual(childrenOf(history, 1).map(({ id }) => id), [2, 3]);
-  assert.equal(await reconstructRevision(history, 2), '# One\nText changed.\n');
-  assert.equal(await reconstructRevision(history, 3), '# One\nAlternative.\n');
+  assert.equal(await reconstructRevision(history, 2), '# One\nText changed.');
+  assert.equal(await reconstructRevision(history, 3), '# One\nAlternative.');
 });
 
 test('history serialization round-trips exact checkpoints, patches, notes, and current node', async () => {
@@ -95,23 +95,20 @@ test('history serialization round-trips exact checkpoints, patches, notes, and c
   assert.equal(serializeHistory(parsed), serialized);
 });
 
-test('root-scoped VERSIONS graphs round-trip independently and legacy history remains STORY', async () => {
+test('root-scoped VERSIONS graphs use canonical Setext groups and round-trip independently', async () => {
   const story = await createHistory('Story base\n');
   const metadata = await createHistory('# Characters\n');
   await commitRevision(story, 'Story base\n', 'Story changed\n');
   await commitRevision(metadata, '# Characters\n', '# Characters\n\nMaria\n');
   const source = serializeHistories({ STORY: story, METADATA: metadata });
-  assert.match(source, /^# STORY:REV$/m);
-  assert.match(source, /^# METADATA:REV$/m);
+  assert.match(source, /^STORY:REV\n---------$/m);
+  assert.match(source, /^METADATA:REV\n------------$/m);
   assert.match(source, /^## Revision 0$/m);
   const parsed = parseHistories(source);
   assert.equal(parsed.legacy, false);
-  assert.equal(await reconstructRevision(parsed.STORY, 1), 'Story changed\n');
-  assert.equal(await reconstructRevision(parsed.METADATA, 1), '# Characters\n\nMaria\n');
-  const legacy = parseHistories(serializeHistory(story));
-  assert.equal(legacy.legacy, true);
-  assert.equal(await reconstructRevision(legacy.STORY, 1), 'Story changed\n');
-  assert.equal(legacy.METADATA, null);
+  assert.equal(await reconstructRevision(parsed.STORY, 1), 'Story changed');
+  assert.equal(await reconstructRevision(parsed.METADATA, 1), '# Characters\n\nMaria');
+  assert.throws(() => parseHistories(serializeHistory(story)));
 });
 
 test('reconstruction detects corrupted patches and result hashes', async () => {
@@ -136,8 +133,8 @@ test('current STORY verification distinguishes legitimate external edits', async
   assert.equal((await verifyCurrentStory(history, '# Story\nOriginal.\n')).matches, true);
   const mismatch = await verifyCurrentStory(history, '# Story\nEdited outside.\n');
   assert.equal(mismatch.matches, false);
-  assert.equal(mismatch.recordedStory, '# Story\nOriginal.\n');
-  assert.equal(mismatch.externalStory, '# Story\nEdited outside.\n');
+  assert.equal(mismatch.recordedStory, '# Story\nOriginal.');
+  assert.equal(mismatch.externalStory, '# Story\nEdited outside.');
 
   const revision = await recordExternalEdit(history, mismatch.externalStory, {
     timestamp: '2026-09-18T11:00:00.000Z',
@@ -154,7 +151,7 @@ test('metadata-root recovery uses the same strict graph contract', async () => {
   assert.equal(mismatch.matches, false);
   const revision = await recordExternalEdit(history, external);
   assert.equal(revision.origin, 'recovery');
-  assert.equal(await reconstructRevision(history, history.currentRevision), external);
+  assert.equal(await reconstructRevision(history, history.currentRevision), external.trim());
 });
 
 test('parser rejects duplicate IDs and missing parents', async () => {
