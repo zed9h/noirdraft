@@ -13,6 +13,8 @@ npm test
 
 Read `README.md` for user behavior, `PLAN.md` for the product/storage contract, `TODO.md` for implementation evidence and scope, and `REVIEW.md` for remaining manual release work. Preserve unrelated dirty-worktree changes.
 
+Git is read-only for the agent: use `git status`, `git diff`, `git log`, and similar inspection commands freely, but do not `git add`, `git commit`, `git push`, `git checkout`, `git reset`, `git stash`, `git branch -D`, or otherwise change repository or working-tree state. Leave commits, staging, branch changes, and pushes to the user.
+
 ## Find the right code
 
 | Task | Start here | Tests to read |
