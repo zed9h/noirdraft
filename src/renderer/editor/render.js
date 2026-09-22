@@ -28,7 +28,7 @@ function renderBlock(text, block) {
   element.dataset.to = String(block.to);
   if (block.level) element.dataset.level = String(block.level);
 
-  const boundaries = new Set([block.from, block.to]);
+  const boundaries = new Set([block.from, block.to, ...(block.lineBreaks ?? [])]);
   for (const span of block.spans) {
     boundaries.add(span.from);
     boundaries.add(span.to);
@@ -61,6 +61,7 @@ function shiftBlock(block, delta) {
     from: block.from + delta,
     to: block.to + delta,
     spans: block.spans.map((span) => ({ ...span, from: span.from + delta, to: span.to + delta })),
+    lineBreaks: (block.lineBreaks ?? []).map((offset) => offset + delta),
   };
 }
 

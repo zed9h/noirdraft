@@ -178,9 +178,22 @@ export class EditContextEditor {
   #moveVertically(direction, extend) {
     const offset = direction < 0 ? this.model.selectionStart : this.model.selectionEnd;
     const rect = this.mapping.rangeRect(offset);
-    const lineHeight = Number.parseFloat(getComputedStyle(this.element).lineHeight) || 24;
-    const position = document.caretPositionFromPoint(rect.x, rect.y + direction * lineHeight);
-    const target = position ? this.mapping.fromDOM(position.offsetNode, position.offset) : null;
+    // A collapsed range's own client rect is sized to the glyph, not the
+    // full CSS line box (leading above/below is uncounted), so a single
+    // fixed-offset probe undershoots on tall rows — most visibly headings,
+    // which render far larger than body text (see .block-heading in
+    // styles.css). Step in small increments instead, until the probe lands
+    // on a genuinely different, correctly-ordered offset: that's robust to
+    // any row's actual rendered height without having to compute it.
+    const step = 4;
+    const maxDistance = 400;
+    let target = null;
+    for (let distance = step; distance <= maxDistance && target === null; distance += step) {
+      const position = document.caretPositionFromPoint(rect.x, rect.y + direction * distance);
+      const candidate = position ? this.mapping.fromDOM(position.offsetNode, position.offset) : null;
+      if (candidate === null) continue;
+      if (direction < 0 ? candidate < offset : candidate > offset) target = candidate;
+    }
     if (target === null) return;
     if (extend) this.setSelection(Math.min(this.model.selectionStart, target), Math.max(this.model.selectionEnd, target));
     else this.setSelection(target, target);

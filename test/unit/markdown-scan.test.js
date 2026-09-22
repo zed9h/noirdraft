@@ -66,3 +66,24 @@ test('scanner handles empty source as a valid zero-width partition', () => {
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0].type, 'blank');
 });
+
+test('a multi-line blank block records one line-break boundary per interior line', () => {
+  // 'Alpha.\n' (0-6) + four blank lines (7-10) + 'Beta.\n' — the blank block
+  // spans offsets 7..11 across four one-character lines; each interior line
+  // boundary must be recorded so the renderer gives every blank row its own
+  // DOM node instead of packing them into one multi-newline text node.
+  const source = 'Alpha.\n\n\n\n\nBeta.\n';
+  const blocks = scanMarkdownBlocks(source);
+  const blank = blocks.find(({ type }) => type === 'blank');
+  assert.equal(blank.from, 7);
+  assert.equal(blank.to, 11);
+  assert.deepEqual(blank.lineBreaks, [8, 9, 10]);
+  assert.equal(validateBlockPartition(source, blocks), true);
+});
+
+test('a single blank line has no interior line-break boundaries', () => {
+  const source = 'Alpha.\n\nBeta.\n';
+  const blocks = scanMarkdownBlocks(source);
+  const blank = blocks.find(({ type }) => type === 'blank');
+  assert.deepEqual(blank.lineBreaks, []);
+});

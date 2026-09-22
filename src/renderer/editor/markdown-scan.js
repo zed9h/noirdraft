@@ -114,7 +114,14 @@ function makeBlock(type, lines, extra = {}) {
     ? []
     : scanInline(text, from, prefix);
   if (prefix > 0) spans.unshift(syntaxSpan(from, from + prefix));
-  return { type, from, to, spans, ...extra };
+  // A multi-line blank block (several empty lines in a row) still needs one
+  // DOM row per line: a single text node spanning multiple bare "\n"
+  // characters lets caretPositionFromPoint skip some of the interior rows
+  // when hit-testing, so record each line's own boundary and let renderBlock
+  // (render.js) split the block into one source-run per line, same as a
+  // lone blank line already gets.
+  const lineBreaks = type === 'blank' ? lines.slice(0, -1).map((line) => line.to) : [];
+  return { type, from, to, spans, lineBreaks, ...extra };
 }
 
 export function scanMarkdownBlocks(text, baseOffset = 0) {

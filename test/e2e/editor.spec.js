@@ -536,3 +536,96 @@ test('random Markdown mutations keep rendered source and mappings reversible', a
     await application.close();
   }
 });
+
+test('ArrowDown clears a heading row (and the blank row right after it) as reliably as ArrowUp', async () => {
+  const { application, window } = await launch();
+  try {
+    const editor = window.getByRole('textbox', { name: 'Story source' });
+    // "# Chapter One\n\nAlpha body.\n# Chapter Two\nBeta body.\n" — a blank
+    // row immediately after a heading, and a second heading with no blank
+    // row before it, so both shapes are exercised.
+    const source = '# Chapter One\n\nAlpha body.\n# Chapter Two\nBeta body.\n';
+    const blocks = {
+      headingOne: [0, 13], // '# Chapter One'
+      blank: [14, 15],
+      alphaBody: [15, 26],
+      headingTwo: [27, 40], // '# Chapter Two'
+      betaBody: [41, 51],
+    };
+    await editor.focus();
+    await window.evaluate((text) => {
+      const { editor: instance, model } = window.__noirDraftTest;
+      instance.replace(0, model.text.length, text);
+      instance.setSelection(5, 5); // inside "# Chapter One"
+    }, source);
+
+    const within = (offset, [from, to]) => offset >= from && offset <= to;
+
+    // Each ArrowDown must land strictly further into the document than the
+    // last, in the expected block, never stuck on the same (tall) row.
+    let previous = 5;
+    for (const [label, range] of [
+      ['blank row after the first heading', blocks.blank],
+      ['the paragraph below it', blocks.alphaBody],
+      ['the second heading', blocks.headingTwo],
+      ['the paragraph below that', blocks.betaBody],
+    ]) {
+      await window.keyboard.press('ArrowDown');
+      const offset = await window.evaluate(() => window.__noirDraftTest.model.selectionStart);
+      expect(offset, `ArrowDown into ${label}`).toBeGreaterThan(previous);
+      expect(within(offset, range), `expected ${offset} within ${label} ${range}`).toBe(true);
+      previous = offset;
+    }
+
+    // ArrowUp retraces the same rows in reverse, including back onto the
+    // heading rows and the blank row between them.
+    for (const [label, range] of [
+      ['the second heading', blocks.headingTwo],
+      ['the paragraph after the first heading', blocks.alphaBody],
+      ['the blank row', blocks.blank],
+      ['the first heading', blocks.headingOne],
+    ]) {
+      await window.keyboard.press('ArrowUp');
+      const offset = await window.evaluate(() => window.__noirDraftTest.model.selectionStart);
+      expect(offset, `ArrowUp into ${label}`).toBeLessThan(previous);
+      expect(within(offset, range), `expected ${offset} within ${label} ${range}`).toBe(true);
+      previous = offset;
+    }
+  } finally {
+    await application.close();
+  }
+});
+
+test('ArrowDown and ArrowUp cross a run of consecutive empty lines one row at a time', async () => {
+  const { application, window } = await launch();
+  try {
+    const editor = window.getByRole('textbox', { name: 'Story source' });
+    // 'Alpha.\n' (0-6) then four one-character blank lines (7,8,9,10) then
+    // 'Beta.\n' (11-16) — a run of empty lines with no content between them.
+    const source = 'Alpha.\n\n\n\n\nBeta.\n';
+    await editor.focus();
+    await window.evaluate((text) => {
+      const { editor: instance, model } = window.__noirDraftTest;
+      instance.replace(0, model.text.length, text);
+      instance.setSelection(0, 0);
+    }, source);
+
+    const readOffset = () => window.evaluate(() => window.__noirDraftTest.model.selectionStart);
+    const downSteps = [];
+    for (let index = 0; index < 5; index += 1) {
+      await window.keyboard.press('ArrowDown');
+      downSteps.push(await readOffset());
+    }
+    // Every empty row is its own stop — 7, 8, 9, 10 — landing on "Beta." last.
+    expect(downSteps).toEqual([7, 8, 9, 10, 11]);
+
+    const upSteps = [];
+    for (let index = 0; index < 5; index += 1) {
+      await window.keyboard.press('ArrowUp');
+      upSteps.push(await readOffset());
+    }
+    expect(upSteps).toEqual([10, 9, 8, 7, 0]);
+  } finally {
+    await application.close();
+  }
+});
