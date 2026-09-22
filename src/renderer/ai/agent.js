@@ -85,7 +85,8 @@ export async function requestRewrite({ client, history, baseRevisionId, range, r
   };
   const chatReview = () => [
     'NOIRDRAFT CHAT REVIEW',
-    'Editorial concern: Is this reply accurate, helpful, complete, concise, and free of promises or delegation that should instead be an edit?',
+    `The author's original request: ${request}`,
+    "Editorial concern: Does this reply directly answer that request — stating what was done, including any limits or trade-offs, and why it satisfies the request — without narrating internal drafting, proposal, or approval steps? Is it accurate, helpful, complete, concise, and free of promises or delegation that should instead be an edit?",
     phase === 'conclusion' ? 'Managerial concern: Approve this reply or draft a replacement. Changes are closed.' : `Managerial concern: Approve this reply, draft a replacement, or call propose_changes to edit. Chat revision ${chatRetries} of 3.`,
     '----- PROPOSED REPLY -----', chatDraft.message, '----- END OF REPLY -----',
   ].join('\n');
@@ -190,7 +191,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, r
       if (phase !== 'changes') return reject('There is no active change set to finish.');
       if (reviewVisible || pending.length) return accept(detailedReview());
       phase = 'conclusion';
-      return accept('NOIRDRAFT CHANGE SET COMPLETE\nDraft the concise author-facing conclusion with draft_chat. Do not repeat the revision text.');
+      return accept(['NOIRDRAFT CHANGE SET COMPLETE', `The author's original request: ${request}`, 'Draft the concise author-facing conclusion with draft_chat: answer that request directly, stating what the approved alternatives accomplish and why they satisfy it. Do not narrate the drafting, proposal, or approval steps, and do not repeat the revision text.'].join('\n'));
     }
     return reject(`Unknown NoirDraft tool "${name}".`);
   };
