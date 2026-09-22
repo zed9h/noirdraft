@@ -112,7 +112,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, r
       ? ' You may call finish_changes now.'
       : approved.length === 0
       ? ' You may call finish_changes early if further alternatives are not worthwhile; briefly explain in the final chat why none were produced.'
-      : ' You may call finish_changes early if the approved alternatives sufficiently serve the objective; briefly note in the final chat that fewer than planned were produced.';
+      : ' You may call finish_changes early if the approved alternatives sufficiently serve the objective; briefly note in the final chat that fewer than planned were approved.';
     return `NOIRDRAFT PROGRESS\nThe stated objective: ${objective.text}\n${summary}${recommendation}${exit}`;
   };
   const createBatch = async (proposals) => {

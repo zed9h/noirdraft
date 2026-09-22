@@ -74,11 +74,11 @@ button { font: inherit; }
    where the toolbar visibly reads as a staggered row — re-check if the font
    stack changes. */
 .icon-glyph { display: inline-block; }
-[data-undo] .icon-glyph, [data-redo] .icon-glyph { transform: translateY(2px); font-weight: 700; color: white; }
+/* [data-undo] .icon-glyph, [data-redo] .icon-glyph { transform: translateY(2px); font-weight: 700; color: white; }
 [data-nav-timeline-back] .icon-glyph { transform: translateY(2px); }
 [data-nav-timeline-forward] .icon-glyph { transform: translateY(-1px); }
 [data-toggle-left] .icon-glyph { transform: translateY(1.5px); }
-[data-save] .icon-glyph { transform: translateY(1px); }
+[data-save] .icon-glyph { transform: translateY(1px); } */
 
 /* Glyphs picked for recognizability over the plain monochrome set (open,
    save, and the overflow menu's more detailed icons) come from the color
