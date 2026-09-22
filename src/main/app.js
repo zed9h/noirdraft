@@ -1,7 +1,7 @@
 import { app, BrowserWindow, Menu, dialog, ipcMain } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { readDocument, safeSaveDocument } from './files.js';
+import { readDocument, safeSaveDocument, uniqueTimestampedSavePath } from './files.js';
 import { readPreferences, writePreferences } from './preferences.js';
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -53,6 +53,13 @@ function registerDocumentHandlers() {
       authorizedDocumentPaths.add(filePath);
     }
     try {
+      const preferences = await readPreferences(preferencesPath);
+      if (preferences.saveTimestampedCopies !== false) {
+        // Every save writes a fresh file so no save ever overwrites the last;
+        // the opened (or previously saved) name only supplies the base.
+        filePath = await uniqueTimestampedSavePath(filePath);
+        authorizedDocumentPaths.add(filePath);
+      }
       const document = await safeSaveDocument({
         filePath,
         contents: String(request?.contents ?? ''),

@@ -3,6 +3,7 @@ import { open, readFile, rename, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { normalizeProjectSource, parseProjectDocument, ProjectDocumentError } from '../renderer/project/parse.js';
 import { writeBackup } from './backups.js';
+import { timestampedSavePathFor } from './timestamped-save-path.js';
 
 export class FilePersistenceError extends Error {
   constructor(message, { code, filePath, cause, currentFingerprint } = {}) {
@@ -29,6 +30,26 @@ async function fingerprint(filePath, contents = null) {
 export async function readDocument(filePath) {
   const contents = normalizeProjectSource(await readFile(filePath, 'utf8'));
   return { filePath, contents, fingerprint: await fingerprint(filePath, contents) };
+}
+
+/**
+ * The path a timestamped save should target: the preferred `base_yyyymmdd_HHMMSS.ext`
+ * name, or a disambiguated sibling if two saves land on the same second.
+ */
+export async function uniqueTimestampedSavePath(filePath, now = new Date()) {
+  const preferred = timestampedSavePathFor(filePath, now);
+  const extension = path.extname(preferred);
+  const stem = extension ? preferred.slice(0, -extension.length) : preferred;
+  for (let attempt = 0; attempt < 1_000; attempt += 1) {
+    const candidate = attempt === 0 ? preferred : `${stem}_${attempt + 1}${extension}`;
+    try {
+      await stat(candidate);
+    } catch (error) {
+      if (error.code === 'ENOENT') return candidate;
+      throw error;
+    }
+  }
+  throw new Error(`Could not allocate a unique timestamped save name for ${filePath}.`);
 }
 
 export async function hasExternalChange(filePath, expectedFingerprint) {

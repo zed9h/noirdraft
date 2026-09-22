@@ -10,6 +10,7 @@ import {
   hasExternalChange,
   readDocument,
   safeSaveDocument,
+  uniqueTimestampedSavePath,
   validateProjectSource,
 } from '../../src/main/files.js';
 
@@ -115,6 +116,21 @@ test('invalid project structure fails before touching disk', async () => {
     () => validateProjectSource('METADATA\n========\nOnly.\n'),
     (error) => error.code === 'MISSING_STORY_ROOT',
   );
+});
+
+test('uniqueTimestampedSavePath prefers the plain base_timestamp name when free', async () => {
+  const directory = await temporaryDirectory();
+  const filePath = path.join(directory, 'novel.md');
+  const now = new Date(2026, 8, 22, 6, 7, 8);
+  assert.equal(await uniqueTimestampedSavePath(filePath, now), path.join(directory, 'novel_20260922_060708.md'));
+});
+
+test('uniqueTimestampedSavePath disambiguates two saves landing on the same second', async () => {
+  const directory = await temporaryDirectory();
+  const filePath = path.join(directory, 'novel.md');
+  const now = new Date(2026, 8, 22, 6, 7, 8);
+  await writeFile(path.join(directory, 'novel_20260922_060708.md'), 'first', 'utf8');
+  assert.equal(await uniqueTimestampedSavePath(filePath, now), path.join(directory, 'novel_20260922_060708_2.md'));
 });
 
 test('backup creation never overwrites a same-timestamp backup', async () => {

@@ -196,6 +196,15 @@ toggleAutoNotesButton.addEventListener('click', async () => {
   closeOverflowMenu();
 });
 
+const toggleTimestampedSavesButton = document.querySelector('[data-toggle-timestamped-saves]');
+let saveTimestampedCopiesEnabled = true;
+toggleTimestampedSavesButton.addEventListener('click', async () => {
+  saveTimestampedCopiesEnabled = !saveTimestampedCopiesEnabled;
+  toggleTimestampedSavesButton.setAttribute('aria-pressed', String(saveTimestampedCopiesEnabled));
+  await preferences?.set({ saveTimestampedCopies: saveTimestampedCopiesEnabled });
+  closeOverflowMenu();
+});
+
 const aiStatus = document.querySelector('[data-ai-status]');
 const aiConnectionButton = document.querySelector('[data-ai-connection]');
 const aiConnectionPopover = document.querySelector('[data-ai-connection-popover]');
@@ -313,6 +322,8 @@ if (preferences) {
       contextRowsInput.value = String(contextRows);
       autoNotesEnabled = Boolean(stored.autoNotes);
       toggleAutoNotesButton.setAttribute('aria-pressed', String(autoNotesEnabled));
+      saveTimestampedCopiesEnabled = stored.saveTimestampedCopies !== false;
+      toggleTimestampedSavesButton.setAttribute('aria-pressed', String(saveTimestampedCopiesEnabled));
       return connectToKobold(stored.koboldUrl);
     })
     .catch(() => setAIStatus('Disconnected', 'error'));
