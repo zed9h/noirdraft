@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "A transparent, agentic Markdown story editor.",
+  "author": "Carlo 'zED' Caputo <carlo.caputo@gmail.com>",
   "type": "module",
   "main": "src/main/app.js",
   "files": [
@@ -19,13 +20,38 @@
     "test:e2e": "playwright test",
     "test:e2e:virtual": "xvfb-run -a playwright test",
     "test:all": "npm test && npm run test:e2e",
-    "validate": "npm run test:all && npm pack --dry-run"
+    "validate": "npm run test:all && npm pack --dry-run",
+    "build:linux": "bash scripts/build-with-version.sh --linux",
+    "build:win": "bash scripts/build-with-version.sh --win",
+    "build": "bash scripts/build-with-version.sh --linux --win"
   },
   "engines": {
     "node": ">=22"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
-    "electron": "44.4.2"
+    "electron": "44.4.2",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.noirdraft.app",
+    "productName": "NoirDraft",
+    "artifactName": "${productName}-${version}-${env.BUILD_SUFFIX}.${ext}",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "linux": {
+      "target": ["AppImage"],
+      "icon": "src/main/assets/icon.png",
+      "category": "Office"
+    },
+    "win": {
+      "target": ["portable"],
+      "icon": "src/main/assets/icon.png"
+    }
   }
 }
