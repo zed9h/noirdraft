@@ -87,7 +87,7 @@ export class EditContextEditor {
     const { selectionStart, selectionEnd } = this.model;
     const rect = this.mapping.rangeRect(selectionStart, selectionEnd);
     this.context.updateSelectionBounds(asDOMRect(rect));
-    this.#updateVisualCaret(rect, selectionStart === selectionEnd);
+    this.#updateVisualCaret(rect, selectionStart === selectionEnd, selectionStart);
   }
 
   /** Scrolls an offset into view without moving the selection or focus. */
@@ -338,7 +338,7 @@ export class EditContextEditor {
     if (extend) this.extendTo(target); else this.collapseTo(target);
   }
 
-  #updateVisualCaret(rect, collapsed) {
+  #updateVisualCaret(rect, collapsed, offset) {
     const visible = collapsed && document.activeElement === this.element;
     if (visible) {
       // Restart the blink cycle on every move/edit (a forced reflow between
@@ -353,14 +353,21 @@ export class EditContextEditor {
     if (!visible || !rect) return;
     const control = this.element.getBoundingClientRect();
     const fontSize = Number.parseFloat(getComputedStyle(this.element).fontSize) || 16;
-    // Keep the cursor glyph independent from the line box. Empty terminal
-    // rows need a full-height hit/IME rectangle, but painting that rectangle
-    // as a caret makes it visibly taller than the cursor in ordinary text.
-    const height = fontSize;
-    const top = rect.top + Math.max(0, (rect.height - height) / 2);
-    this.element.style.setProperty('--caret-x', `${rect.left - control.left + this.element.scrollLeft}px`);
-    this.element.style.setProperty('--caret-y', `${top - control.top + this.element.scrollTop}px`);
-    this.element.style.setProperty('--caret-height', `${height}px`);
+    // Measure the actual glyph the caret sits in front of, not an
+    // approximation from font metrics: proportional fonts and wide
+    // characters (headings, CJK, etc.) vary enough that a font-size-based
+    // guess under- or overshoots the glyph's width. Take the glyph's own
+    // left/top from this same measurement too (rather than the separately
+    // measured collapsed-selection `rect`) so the caret's edge lines up
+    // exactly with the glyph instead of leaving stray antialiased pixels
+    // peeking out from a sub-pixel mismatch between the two rects.
+    const charRect = this.mapping.rangeRect(offset, offset + 1);
+    const glyph = charRect && charRect.width > 0 ? charRect : rect;
+    const width = Math.max(2, (charRect && charRect.width > 0 ? charRect.width : fontSize / 2) / 3);
+    this.element.style.setProperty('--caret-x', `${glyph.left - control.left + this.element.scrollLeft - 1}px`);
+    this.element.style.setProperty('--caret-y', `${glyph.top - control.top + this.element.scrollTop}px`);
+    this.element.style.setProperty('--caret-width', `${width}px`);
+    this.element.style.setProperty('--caret-height', `${glyph.height}px`);
   }
 
   #applyHighlights() {

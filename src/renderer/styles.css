@@ -464,6 +464,8 @@ button { font: inherit; }
   color: #e2dbd1;
   background: #17140f;
   position: relative;
+  z-index: 0;
+  isolation: isolate;
   caret-color: transparent;
   font: 17px/1.7 "Noto Serif", serif;
   white-space: pre-wrap;
@@ -630,15 +632,14 @@ button { font: inherit; }
   pointer-events: none;
   left: var(--caret-x);
   top: var(--caret-y);
-  width: 6px;
+  width: var(--caret-width);
   height: var(--caret-height);
-  background: #e8ad70;
-  animation: story-caret-blink 1.4s steps(1, jump-none) infinite;
+  animation: story-caret-blink 1s linear infinite;
 }
 
 @keyframes story-caret-blink {
-  0%, 49% { opacity: 1; }
-  50%, 100% { opacity: 0; }
+  0%, 29.9% { background: #ddd; mix-blend-mode: difference; }
+  30%, 100% { background: #442; mix-blend-mode: exclusion; }
 }
 
 .markdown-block { display: inline; }
