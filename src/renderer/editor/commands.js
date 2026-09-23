@@ -23,13 +23,13 @@ function lineEnd(text, offset) {
   return next === -1 ? text.length : next;
 }
 
-export function createCommandHandler({ model, replace, setSelection, moveVertically }) {
+export function createCommandHandler({ model, replace, setSelection, collapseTo, extendTo, getFocus, moveVertically }) {
   return function handleKeydown(event) {
     if (event.defaultPrevented || event.isComposing || event.altKey) return;
     const command = event.ctrlKey || event.metaKey;
     const { text, selectionStart: start, selectionEnd: end } = model.snapshot();
-    const collapse = (offset) => setSelection(offset, offset);
-    const extend = (offset) => setSelection(Math.min(start, offset), Math.max(end, offset));
+    const focus = getFocus();
+    const move = (offset) => (event.shiftKey ? extendTo(offset) : collapseTo(offset));
     let handled = true;
 
     if (command && event.key.toLowerCase() === 'a') setSelection(0, text.length);
@@ -45,14 +45,14 @@ export function createCommandHandler({ model, replace, setSelection, moveVertica
       let target;
       if (!event.shiftKey && start !== end) target = left ? start : end;
       else target = left
-        ? previousBoundary(text, start, command ? words : graphemes)
-        : nextBoundary(text, end, command ? words : graphemes);
-      if (event.shiftKey) extend(target); else collapse(target);
+        ? previousBoundary(text, event.shiftKey ? focus : start, command ? words : graphemes)
+        : nextBoundary(text, event.shiftKey ? focus : end, command ? words : graphemes);
+      move(target);
     } else if (event.key === 'Home' || event.key === 'End') {
       const target = command
         ? (event.key === 'Home' ? 0 : text.length)
-        : (event.key === 'Home' ? lineStart(text, start) : lineEnd(text, end));
-      if (event.shiftKey) extend(target); else collapse(target);
+        : (event.key === 'Home' ? lineStart(text, event.shiftKey ? focus : start) : lineEnd(text, event.shiftKey ? focus : end));
+      move(target);
     } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
       moveVertically(event.key === 'ArrowUp' ? -1 : 1, event.shiftKey);
     } else {

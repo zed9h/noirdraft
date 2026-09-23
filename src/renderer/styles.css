@@ -115,7 +115,7 @@ button { font: inherit; }
 .icon-button:disabled:hover { background: #1c1916; }
 
 .icon-glyph { display: inline-block; font-family: "Material Symbols Outlined"; font-feature-settings: "liga"; }
-[data-undo] .icon-glyph, [data-redo] .icon-glyph { color: #eee; }
+[data-undo] .icon-glyph, [data-redo] .icon-glyph { color: #ddd; }
 
 /* The overflow menu's decorative prefixes stay color emoji (they sit next to
    a text label, not centered in a square button, so baseline placement
@@ -209,6 +209,32 @@ button { font: inherit; }
   color: #ccc2b6;
   background: #26221d;
 }
+
+.confirm-dialog {
+  width: min(26rem, calc(100vw - 2rem));
+  padding: 1rem;
+  border: 1px solid #4a4037;
+  border-radius: .45rem;
+  color: #e2dbd1;
+  background: #1c1916;
+  box-shadow: 0 1rem 3rem rgba(0, 0, 0, .65);
+}
+.confirm-dialog::backdrop { background: rgba(0, 0, 0, .55); }
+.confirm-dialog h2 { margin: 0 0 .5rem; font: 600 1.1rem/1.2 "Noto Serif", serif; }
+.confirm-dialog p { margin: 0 0 .5rem; font-size: .88rem; }
+.confirm-dialog-detail { color: #a99e91; }
+.confirm-dialog-actions { display: flex; flex-direction: column; gap: .4rem; margin-top: .75rem; }
+.confirm-dialog-actions button {
+  padding: .5rem .7rem;
+  border: 1px solid #3a342e;
+  border-radius: .3rem;
+  text-align: left;
+  color: #ddd4ca;
+  background: #26221d;
+}
+.confirm-dialog-actions button:hover { background: #302b26; }
+.confirm-dialog-actions button:first-child { border-color: #bd8f61; color: #f0e6d8; }
+.confirm-dialog-actions button:last-child { color: #a99e91; }
 
 .app-info-dialog {
   width: min(26rem, calc(100vw - 2rem));
@@ -604,9 +630,15 @@ button { font: inherit; }
   pointer-events: none;
   left: var(--caret-x);
   top: var(--caret-y);
-  width: 1px;
+  width: 6px;
   height: var(--caret-height);
   background: #e8ad70;
+  animation: story-caret-blink 1.4s steps(1, jump-none) infinite;
+}
+
+@keyframes story-caret-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
 }
 
 .markdown-block { display: inline; }

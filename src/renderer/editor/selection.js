@@ -7,10 +7,10 @@ export function readDOMSelection(element, mapping) {
   return { start: Math.min(anchor, focus), end: Math.max(anchor, focus), anchor, focus };
 }
 
-export function writeDOMSelection(element, mapping, start, end) {
+export function writeDOMSelection(element, mapping, anchorOffset, focusOffset) {
   if (!element.isConnected) return;
   const selection = element.ownerDocument.getSelection();
-  const anchor = mapping.toDOM(start);
-  const focus = mapping.toDOM(end);
+  const anchor = mapping.toDOM(anchorOffset);
+  const focus = mapping.toDOM(focusOffset);
   selection.setBaseAndExtent(anchor.node, anchor.offset, focus.node, focus.offset);
 }

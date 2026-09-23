@@ -37,9 +37,15 @@ export class OffsetMapping {
     if (anchor) return Number(anchor.dataset.offset);
     const direct = this.runs.find((run) => run.node === node);
     if (direct) return direct.from + Math.min(direct.node.length, Math.max(0, offset));
-    if (node === this.container) {
-      return offset <= 0 ? 0 : (this.runs.at(-1)?.to ?? 0);
-    }
+    // node === this.container falls through to the generic range-measuring
+    // path below (container.contains(container) is true): a native mouse
+    // drag that hits a gap between block rows (margins, row-to-row space)
+    // rather than a text node reports the container itself as anchor/focus,
+    // with a *child-index* offset partway through the document. A prior
+    // version special-cased that as "offset 0 means the very start,
+    // anything else means the very end" — collapsing every such mid-drag
+    // sample to a full-document selection, which is exactly what made
+    // dragging through those gaps flash a whole-text selection.
     if (!this.container.contains(node)) return null;
     const runElement = node.nodeType === Node.ELEMENT_NODE
       ? node.closest?.('.source-run')

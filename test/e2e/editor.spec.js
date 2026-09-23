@@ -629,3 +629,211 @@ test('ArrowDown and ArrowUp cross a run of consecutive empty lines one row at a 
     await application.close();
   }
 });
+
+test('ArrowDown through a wrapped paragraph retraces the same rows ArrowUp does, one visual line at a time', async () => {
+  const { application, window } = await launch();
+  try {
+    const editor = window.getByRole('textbox', { name: 'Story source' });
+    await editor.focus();
+    // One long paragraph with no line breaks: it must soft-wrap into several
+    // visual rows at any reasonable window width.
+    const words = Array.from({ length: 220 }, (_, index) => `word${index}`);
+    const source = words.join(' ');
+    await window.evaluate((text) => {
+      const { editor: instance, model } = window.__noirDraftTest;
+      instance.replace(0, model.text.length, text);
+      instance.setSelection(0, 0);
+    }, source);
+
+    const readOffset = () => window.evaluate(() => window.__noirDraftTest.model.selectionStart);
+    const downSteps = [0];
+    for (let index = 0; index < 8; index += 1) {
+      await window.keyboard.press('ArrowDown');
+      downSteps.push(await readOffset());
+    }
+    // Every step must land strictly further into the text than the last —
+    // no wrapped row skipped, no row visited twice.
+    for (let index = 1; index < downSteps.length; index += 1) {
+      expect(downSteps[index], `step ${index}`).toBeGreaterThan(downSteps[index - 1]);
+    }
+
+    const upSteps = [downSteps.at(-1)];
+    for (let index = 0; index < 8; index += 1) {
+      await window.keyboard.press('ArrowUp');
+      upSteps.push(await readOffset());
+    }
+    // ArrowUp must retrace exactly the same rows in reverse: if ArrowDown
+    // were skipping an extra row on its way down, this would land short.
+    expect(upSteps).toEqual([...downSteps].reverse());
+  } finally {
+    await application.close();
+  }
+});
+
+test('Shift+Arrow keeps the selection anchor fixed even after reversing direction', async () => {
+  const { application, window } = await launch();
+  try {
+    const editor = window.getByRole('textbox', { name: 'Story source' });
+    await editor.focus();
+    await window.evaluate((text) => {
+      const { editor: instance, model } = window.__noirDraftTest;
+      instance.replace(0, model.text.length, text);
+      instance.setSelection(10, 10);
+    }, '0123456789abcdefghij');
+
+    // Shift+Left three times: anchor pins at 10, focus walks back to 7.
+    await window.keyboard.press('Shift+ArrowLeft');
+    await window.keyboard.press('Shift+ArrowLeft');
+    await window.keyboard.press('Shift+ArrowLeft');
+    expect(await window.evaluate(() => [window.__noirDraftTest.model.selectionStart, window.__noirDraftTest.model.selectionEnd])).toEqual([7, 10]);
+
+    // Reversing with Shift+Right must walk the focus (7) back toward the
+    // fixed anchor (10), shrinking the selection from the left — not grow
+    // it from the (already fixed) right edge.
+    await window.keyboard.press('Shift+ArrowRight');
+    expect(await window.evaluate(() => [window.__noirDraftTest.model.selectionStart, window.__noirDraftTest.model.selectionEnd])).toEqual([8, 10]);
+
+    // Continuing past the anchor must flip the selection the other way,
+    // still pinned at the same anchor offset (10).
+    for (let index = 0; index < 5; index += 1) await window.keyboard.press('Shift+ArrowRight');
+    expect(await window.evaluate(() => [window.__noirDraftTest.model.selectionStart, window.__noirDraftTest.model.selectionEnd])).toEqual([10, 13]);
+  } finally {
+    await application.close();
+  }
+});
+
+test('Shift+ArrowDown scrolls to keep the moving end of the selection in view, not the fixed start', async () => {
+  const { application, window } = await launch();
+  try {
+    const editor = window.getByRole('textbox', { name: 'Story source' });
+    await editor.focus();
+    const text = Array.from({ length: 250 }, (_, index) => `Paragraph ${index}`).join('\n');
+    await window.evaluate((source) => {
+      const { editor: instance, model } = window.__noirDraftTest;
+      instance.replace(0, model.text.length, source);
+      instance.setSelection(0, 0);
+    }, text);
+
+    // Extend far down past the initial viewport: the caret (the selection's
+    // moving end) must scroll into view, even though the anchor stayed at
+    // the top of the document.
+    for (let index = 0; index < 60; index += 1) await window.keyboard.press('Shift+ArrowDown');
+
+    const state = await window.evaluate(() => {
+      const { editor: instance, model } = window.__noirDraftTest;
+      const caret = instance.mapping.rangeRect(model.selectionEnd);
+      const viewport = instance.element.getBoundingClientRect();
+      return {
+        scrollTop: instance.element.scrollTop,
+        caretVisible: caret.bottom > viewport.top && caret.top < viewport.bottom,
+      };
+    });
+    expect(state.scrollTop).toBeGreaterThan(0);
+    expect(state.caretVisible).toBe(true);
+  } finally {
+    await application.close();
+  }
+});
+
+test('typing keeps the native DOM selection synchronized to the new caret on every keystroke', async () => {
+  const { application, window } = await launch();
+  try {
+    const editor = window.getByRole('textbox', { name: 'Story source' });
+    await editor.focus();
+    await window.evaluate(() => {
+      const { editor: instance, model } = window.__noirDraftTest;
+      instance.replace(0, model.text.length, '');
+    });
+    // model.replace() re-emits its change *synchronously from inside itself*
+    // (see StoryModel#replace -> #emit), before the caller can react to the
+    // result. A DOM-selection resync that runs after that call, rather than
+    // inside the change listener itself, would write the *previous*
+    // (pre-keystroke) caret position on every single character typed.
+    await window.keyboard.type('abcde', { delay: 20 });
+    const state = await window.evaluate(() => {
+      const { model, editor } = window.__noirDraftTest;
+      const selection = document.getSelection();
+      const domOffset = editor.mapping.fromDOM(selection.focusNode, selection.focusOffset);
+      return { text: model.text, model: [model.selectionStart, model.selectionEnd], domOffset };
+    });
+    expect(state.text).toBe('abcde');
+    expect(state.model).toEqual([5, 5]);
+    expect(state.domOffset).toBe(5);
+  } finally {
+    await application.close();
+  }
+});
+
+test('paste replaces the selection and leaves the caret at the end of the pasted text', async () => {
+  const { application, window } = await launch();
+  try {
+    const editor = window.getByRole('textbox', { name: 'Story source' });
+    await editor.focus();
+    await window.evaluate(() => {
+      const { editor: instance, model } = window.__noirDraftTest;
+      instance.replace(0, model.text.length, 'Hello brave new world');
+      instance.setSelection(6, 11); // "brave"
+    });
+    await window.evaluate(() => {
+      const data = new DataTransfer();
+      data.setData('text/plain', 'BOLD');
+      window.__noirDraftTest.editor.element.dispatchEvent(
+        new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }),
+      );
+    });
+    const state = await window.evaluate(() => {
+      const { model } = window.__noirDraftTest;
+      return { text: model.text, selection: [model.selectionStart, model.selectionEnd] };
+    });
+    expect(state.text).toBe('Hello BOLD new world');
+    expect(state.selection).toEqual([10, 10]);
+  } finally {
+    await application.close();
+  }
+});
+
+test('a mouse drag through the gap between rows (including a blank line) never widens into a whole-document selection', async () => {
+  const { application, window } = await launch();
+  try {
+    const editor = window.getByRole('textbox', { name: 'Story source' });
+    await editor.focus();
+    // A blank line (7-8) between two paragraphs: its row is covered only by
+    // a zero-width layout-caret-anchor span, so a drag sampling a point on
+    // that row away from the left edge lands off any real element.
+    const source = 'Alpha short line.\n\nBeta second paragraph, somewhat longer than the first.\n';
+    const points = await window.evaluate(async (text) => {
+      const { editor: instance, model } = window.__noirDraftTest;
+      instance.replace(0, model.text.length, text);
+      instance.setSelection(0, 0);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const startRect = instance.mapping.rangeRect(3, 4);
+      const endRect = instance.mapping.rangeRect(text.length - 10, text.length - 9);
+      const control = instance.element.getBoundingClientRect();
+      return {
+        start: { x: startRect.left + 1, y: startRect.top + startRect.height / 2 },
+        end: { x: endRect.left + 1, y: endRect.top + endRect.height / 2 },
+        // A point on the blank row's right side: no element covers it there.
+        gap: { x: control.left + control.width - 20, y: startRect.top + startRect.height * 1.5 },
+      };
+    }, source);
+
+    await window.mouse.move(points.start.x, points.start.y);
+    await window.mouse.down();
+    const samples = [];
+    for (const point of [points.gap, points.end]) {
+      await window.mouse.move(point.x, point.y, { steps: 6 });
+      samples.push(await window.evaluate(() => {
+        const { model } = window.__noirDraftTest;
+        return model.selectionEnd - model.selectionStart;
+      }));
+    }
+    await window.mouse.up();
+
+    const finalLength = await window.evaluate(() => window.__noirDraftTest.model.text.length);
+    // Every sample along the drag must stay a small, growing selection —
+    // never jump to (or near) the full document length.
+    for (const length of samples) expect(length).toBeLessThan(finalLength - 5);
+  } finally {
+    await application.close();
+  }
+});

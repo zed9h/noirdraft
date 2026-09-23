@@ -20,6 +20,10 @@ function startElectron() {
   child = spawn('electron', ['.'], {
     stdio: 'inherit',
     shell: process.platform === 'win32',
+    // Tells the app to skip its unsaved-changes close prompt: SIGTERM below
+    // must always result in a clean exit, never a dialog blocking forever
+    // on a renderer response this watcher never sends.
+    env: { ...process.env, NOIRDRAFT_DEV_AUTORESTART: '1' },
   });
 
   child.once('error', (error) => {
@@ -57,9 +61,14 @@ function restartElectron() {
   }
 
   console.log('Source changed; restarting Electron...');
-  forceQuit = setTimeout(() => child.kill('SIGKILL'), 5_000);
+  // Capture this specific process, not the module-level `child` binding:
+  // by the time this timeout fires, a later restart cycle may already have
+  // reassigned `child` to a new (legitimate) process, which would then take
+  // the SIGKILL meant for this one — leaving *this* one to run forever.
+  const dying = child;
+  forceQuit = setTimeout(() => dying.kill('SIGKILL'), 5_000);
   forceQuit.unref();
-  child.kill('SIGTERM');
+  dying.kill('SIGTERM');
 }
 
 function terminate(signal) {
@@ -72,12 +81,13 @@ function terminate(signal) {
     return;
   }
 
+  const dying = child;
   forceQuit = setTimeout(() => {
-    child.kill('SIGKILL');
+    dying.kill('SIGKILL');
     process.exit(1);
   }, 5_000);
   forceQuit.unref();
-  child.kill(signal);
+  dying.kill(signal);
 }
 
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {

@@ -56,6 +56,60 @@ const contextDialogSummary = document.querySelector('[data-context-dialog-summar
 const contextDialogPrompt = document.querySelector('[data-context-dialog-prompt]');
 const appInfoButton = document.querySelector('[data-app-info]');
 const appInfoDialog = document.querySelector('[data-app-info-dialog]');
+const confirmDialog = document.querySelector('[data-confirm-dialog]');
+const confirmDialogTitle = document.querySelector('[data-confirm-dialog-title]');
+const confirmDialogMessage = document.querySelector('[data-confirm-dialog-message]');
+const confirmDialogDetail = document.querySelector('[data-confirm-dialog-detail]');
+const confirmDialogActions = document.querySelector('[data-confirm-dialog-actions]');
+
+// A modal that lives inside the window, not a native OS dialog: a native
+// dialog.showMessageBox can end up unfocused, behind the main window, or
+// simply not rendered depending on the desktop environment (observed under
+// WSLg), which makes a "critical decision" prompt indistinguishable from the
+// app silently doing nothing. Resolves with the index of the clicked
+// button, or the last button's index (treated as "cancel") on Escape/backdrop.
+//
+// Calls are serialized on confirmDialogQueue: `<dialog>.showModal()` throws
+// if the element is already open, which would otherwise happen whenever a
+// second prompt is requested while the first is still up (e.g. the window's
+// own close button clicked while an "unsaved changes" prompt from Open is
+// still showing) — that throw would go unhandled and whoever is awaiting the
+// second call's answer (main process included) would hang forever.
+let confirmDialogQueue = Promise.resolve();
+const showConfirmDialog = (options) => {
+  const run = () => new Promise((resolve) => {
+    const { title = 'Unsaved changes', message, detail = '', buttons } = options;
+    confirmDialogTitle.textContent = title;
+    confirmDialogMessage.textContent = message;
+    confirmDialogDetail.textContent = detail;
+    confirmDialogDetail.hidden = !detail;
+    let settled = false;
+    const settle = (index) => {
+      if (settled) return;
+      settled = true;
+      confirmDialog.removeEventListener('cancel', onCancel);
+      if (confirmDialog.open) confirmDialog.close();
+      resolve(index);
+    };
+    const onCancel = (event) => {
+      event.preventDefault();
+      settle(buttons.length - 1);
+    };
+    confirmDialogActions.replaceChildren(...buttons.map((label, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.addEventListener('click', () => settle(index));
+      return button;
+    }));
+    confirmDialog.addEventListener('cancel', onCancel);
+    confirmDialog.showModal();
+    confirmDialogActions.querySelector('button')?.focus();
+  });
+  const result = confirmDialogQueue.then(run);
+  confirmDialogQueue = result.then(() => {}, () => {});
+  return result;
+};
 const appVersion = document.querySelector('[data-app-version]');
 const appAIConnection = document.querySelector('[data-app-ai-connection]');
 const appAIModel = document.querySelector('[data-app-ai-model]');
@@ -83,7 +137,7 @@ overflowToggle.addEventListener('click', () => {
   overflowToggle.setAttribute('aria-expanded', String(next));
 });
 document.addEventListener('click', (event) => {
-  if (!overflowMenu.hidden && !overflowMenu.contains(event.target) && event.target !== overflowToggle) closeOverflowMenu();
+  if (!overflowMenu.hidden && !overflowMenu.contains(event.target) && !overflowToggle.contains(event.target)) closeOverflowMenu();
 });
 
 const setSidebarVisible = (sidebar, toggleButton, visible) => {
@@ -1457,10 +1511,13 @@ try {
         recordVisitIfChanged('STORY');
         refreshHistoryControls();
         renderVersions();
+        reportDirtyState();
       },
       onCommit: (revision) => {
         enqueueNoteGeneration(revision);
-        return suppressAutoPersist ? undefined : persistAfterCommit();
+        const persisted = suppressAutoPersist ? undefined : persistAfterCommit();
+        reportDirtyState();
+        return persisted;
       },
     });
     refreshHistoryControls();
@@ -1481,8 +1538,13 @@ try {
           refreshHistoryControls();
           renderVersions();
         }
+        reportDirtyState();
       },
-      onCommit: () => (suppressAutoPersist ? undefined : persistAfterCommit()),
+      onCommit: () => {
+        const persisted = suppressAutoPersist ? undefined : persistAfterCommit();
+        reportDirtyState();
+        return persisted;
+      },
     });
     if (activeRoot === 'METADATA') refreshHistoryControls();
   };
@@ -1791,6 +1853,11 @@ try {
     .filter((heading) => offset >= heading.from && offset <= heading.to)
     .reduce((deepest, heading) => (!deepest || heading.from > deepest.from ? heading : deepest), null)
     ?.path ?? null;
+  // The moving end of the selection: while shift is held and the caret
+  // travels through the document, the outline highlight should track it,
+  // not the fixed anchor end (which is what selectionStart/End alone give
+  // for a forward selection).
+  const caretOffset = (rootName) => editors[rootName]?.focus ?? models[rootName].selectionStart;
   const ancestorPathsOf = (path) => {
     const ancestors = new Set();
     if (!path) return ancestors;
@@ -1807,7 +1874,7 @@ try {
       outline.replaceChildren();
       document.querySelector(`[data-fold="${rootName}"]`).classList.toggle('is-active-root', rootName === activeRoot);
       const headings = extractHeadings(models[rootName].text, rootName);
-      const currentPath = currentHeadingPath(headings, models[rootName].selectionStart);
+      const currentPath = currentHeadingPath(headings, caretOffset(rootName));
       if (rootName === activeRoot) noteHighlightedSection(rootName, currentPath);
       const currentAncestorPaths = ancestorPathsOf(currentPath);
       const hasChildren = (heading) => headings.some((candidate) => candidate.path.startsWith(`${heading.path}/`));
@@ -1855,7 +1922,20 @@ try {
         target.title = heading.path;
         target.dataset.root = rootName;
         target.dataset.from = String(heading.from);
-        target.addEventListener('click', () => navigateToSection(heading.path));
+        target.addEventListener('click', (event) => {
+          // Shift-click extends the in-progress selection to the clicked
+          // heading instead of jumping there, as long as it stays within the
+          // same root: a selection cannot cross STORY/METADATA. Crossing
+          // roots (or a plain click) falls back to ordinary navigation,
+          // which collapses the selection.
+          if (event.shiftKey && rootName === activeRoot && editors[rootName]) {
+            editors[rootName].extendTo(heading.from);
+            elements[rootName].focus();
+            editors[rootName].revealOffset(heading.from);
+            return;
+          }
+          navigateToSection(heading.path);
+        });
         row.append(target);
         const toggle = document.createElement('button');
         toggle.type = 'button';
@@ -1888,7 +1968,16 @@ try {
       item.className = 'pinned-entry';
       item.textContent = result.path;
       item.title = `Open pinned ${result.path}`;
-      item.addEventListener('click', () => navigateToSection(result.path));
+      const [pinnedRoot] = result.path.split('/');
+      item.addEventListener('click', (event) => {
+        if (event.shiftKey && pinnedRoot === activeRoot && editors[pinnedRoot]) {
+          editors[pinnedRoot].extendTo(result.heading.from);
+          elements[pinnedRoot].focus();
+          editors[pinnedRoot].revealOffset(result.heading.from);
+          return;
+        }
+        navigateToSection(result.path);
+      });
       pinStatus.append(item);
     }
     for (const result of unresolved) {
@@ -2196,7 +2285,7 @@ try {
 
   const currentSectionPath = (rootName) => {
     const headings = extractHeadings(models[rootName].text, rootName);
-    return currentHeadingPath(headings, models[rootName].selectionStart);
+    return currentHeadingPath(headings, caretOffset(rootName));
   };
 
   const saveCurrentSectionPosition = () => {
@@ -2287,6 +2376,7 @@ try {
         if (name === 'STORY') updatePassageHistoryVisibility();
         updateDraftContextSummary();
       }
+      if (name === 'STORY' || name === 'METADATA' || name === 'CHAT') reportDirtyState();
     });
   }
   models.METADATA.subscribe((_snapshot, change) => {
@@ -2296,21 +2386,11 @@ try {
     if (change.origin !== 'open' && change.origin !== 'initial') chatDirty = true;
   });
 
-  const loadDocument = async (openedDocument) => {
+  const loadDocument = async (openedDocument, { statusLabel = 'Saved' } = {}) => {
     const parsed = parseProjectDocument(openedDocument.contents);
     if (!parsed.roots.STORY) throw new Error('This document has no STORY root.');
     project = parsed;
-    // A newly opened project must expose both roots immediately. Collapse
-    // state belongs to the current outline projection, not the document.
-    openFolds.add('STORY');
-    openFolds.add('METADATA');
-    collapsedSectionPaths.clear();
-    for (const button of globalThis.document.querySelectorAll('[data-fold-toggle]')) {
-      const rootName = button.dataset.foldToggle;
-      button.textContent = '⌄';
-      button.setAttribute('aria-expanded', 'true');
-      button.setAttribute('aria-label', `Collapse ${rootName[0]}${rootName.slice(1).toLowerCase()}`);
-    }
+    resetOutlineFolds();
     const story = projectRoot(parsed, 'STORY');
     const metadata = projectRoot(parsed, 'METADATA');
     const chat = projectRoot(parsed, 'CHAT');
@@ -2345,9 +2425,76 @@ try {
     if (recoveredRoots.length) await persistAfterCommit();
     showStatus(recoveredRoots.length
       ? `Recorded external ${recoveredRoots.join(' and ')} edit as a recovery revision.`
-      : 'Saved');
+      : statusLabel);
     refreshSidebar();
     refreshChatOutline();
+    reportDirtyState();
+  };
+
+  const resetOutlineFolds = () => {
+    // A newly opened (or newly created) project must expose both roots
+    // immediately. Collapse state belongs to the current outline
+    // projection, not the document.
+    openFolds.add('STORY');
+    openFolds.add('METADATA');
+    collapsedSectionPaths.clear();
+    for (const button of globalThis.document.querySelectorAll('[data-fold-toggle]')) {
+      const rootName = button.dataset.foldToggle;
+      button.textContent = '⌄';
+      button.setAttribute('aria-expanded', 'true');
+      button.setAttribute('aria-label', `Collapse ${rootName[0]}${rootName.slice(1).toLowerCase()}`);
+    }
+  };
+
+  // A document with a file behind it auto-persists on every commit (see
+  // onCommit below), so the only things worth protecting before an open,
+  // new-document, or app-close are: edits not yet flushed into a commit
+  // (still `pending` on a controller), CHAT text not yet folded into the
+  // last persisted save, or — for a window with no file at all — any
+  // content beyond the pristine starting placeholder.
+  const hasUnsavedWork = () => Boolean(commitController?.pending)
+    || Boolean(metadataCommitController?.pending)
+    || chatDirty
+    || (!currentDocument && (models.STORY.text !== initialStory || models.METADATA.text !== '' || models.CHAT.text !== ''));
+
+  const reportDirtyState = () => window.noirDraft?.app?.reportDirty?.(hasUnsavedWork());
+
+  // Flushes pending edits (which, once a file is associated, auto-persists
+  // them to disk) and then — only if that still leaves unsaved work with no
+  // file to have saved it to — asks the author how to proceed. Returns
+  // whether the caller may go ahead with `actionLabel`.
+  const confirmProceedPastUnsavedWork = async (actionLabel) => {
+    await Promise.all([commitController?.closeOrSwitch(), metadataCommitController?.closeOrSwitch()]);
+    if (!hasUnsavedWork()) return true;
+    const decision = await showConfirmDialog({
+      message: 'This document has not been saved yet.',
+      detail: `Choose what to do before you ${actionLabel}.`,
+      buttons: [`Save and ${actionLabel}`, `Discard and ${actionLabel}`, `Cancel — don't ${actionLabel}`],
+    });
+    if (decision === 1) return true;
+    if (decision === 0) {
+      await saveDocument(true);
+      return Boolean(currentDocument);
+    }
+    return false;
+  };
+
+  const newDocument = async () => {
+    project = parseProjectDocument('STORY\n=====\n\n');
+    resetOutlineFolds();
+    editors.STORY.replace(0, models.STORY.text.length, initialStory, 'open');
+    editors.METADATA.replace(0, models.METADATA.text.length, '', 'open');
+    editors.CHAT.replace(0, models.CHAT.text.length, '', 'open');
+    attachHistory(await createHistory(initialStory));
+    attachMetadataHistory(await createHistory(''));
+    metadataDirty = false;
+    chatDirty = false;
+    currentDocument = null;
+    editorTitle.textContent = 'Untitled story';
+    showStatus('New document');
+    refreshSidebar();
+    refreshChatOutline();
+    reportDirtyState();
   };
 
   const buildProjectContents = () => {
@@ -2443,18 +2590,73 @@ try {
     }
     if (result.canceled) return showStatus('Save canceled');
     if (result.error) return showStatus(result.error.message, true);
+    // Saving re-parses and re-projects the document (loadDocument), which
+    // would otherwise reset the caret to the end and the scroll to the top
+    // even though the save itself changed nothing about the text — capture
+    // each editor's position first and restore it once the reload settles.
+    const positions = {
+      STORY: { ...models.STORY, scrollTop: editors.STORY?.element.scrollTop ?? 0 },
+      METADATA: { ...models.METADATA, scrollTop: editors.METADATA?.element.scrollTop ?? 0 },
+    };
     await loadDocument(result.document);
+    for (const rootName of ['STORY', 'METADATA']) {
+      const position = positions[rootName];
+      editors[rootName]?.setSelection(position.selectionStart, position.selectionEnd, 'restore-position');
+      if (editors[rootName]) editors[rootName].element.scrollTop = position.scrollTop;
+    }
   };
 
-  document.querySelector('[data-open]').addEventListener('click', async () => {
-    await Promise.all([commitController?.closeOrSwitch(), metadataCommitController?.closeOrSwitch()]);
-    const result = await window.noirDraft.documents.open();
-    if (result.canceled) return;
-    if (result.error) return showStatus(result.error.message, true);
-    try { await loadDocument(result.document); } catch (loadError) { showStatus(loadError.message, true); }
-  });
+  const openButton = document.querySelector('[data-open]');
+  // Without this guard, a second click before the first native file picker
+  // even appears on screen fires a second, independent `documents.open()`
+  // call — Electron does not attach these to the window or make them
+  // mutually exclusive, so double- or triple-clicking stacks that many file
+  // pickers, and dismissing one leaves the other(s) silently absorbing focus
+  // (looking exactly like "picking a file does nothing").
+  let openInFlight = false;
+  const runOpen = async (requestOpen) => {
+    if (openInFlight) return;
+    openInFlight = true;
+    openButton.disabled = true;
+    try {
+      if (!(await confirmProceedPastUnsavedWork('open a document'))) return;
+      showStatus('Opening…');
+      const result = await requestOpen();
+      // On some Linux/GTK setups, confirming a file via double-click or
+      // Enter in the native picker gets misreported as canceled (a confirmed
+      // Electron/GTK bug, not something this app can fix) — the dialog's own
+      // "Open" button always works, so the status hints at it rather than
+      // just looking like the click did nothing.
+      if (result.canceled) return showStatus("Open canceled — if you double-clicked or pressed Enter, try the dialog's Open button instead");
+      if (result.error) return showStatus(result.error.message, true);
+      try { await loadDocument(result.document, { statusLabel: 'Opened' }); } catch (loadError) { showStatus(loadError.message, true); }
+    } finally {
+      openInFlight = false;
+      openButton.disabled = false;
+    }
+  };
+
+  const openDocumentAtPath = (filePath) => runOpen(() => window.noirDraft.documents.openPath(filePath));
+
+  openButton.addEventListener('click', () => void runOpen(() => window.noirDraft.documents.open()));
   document.querySelector('[data-save]').addEventListener('click', () => void saveDocument(false));
   document.querySelector('[data-save-as]').addEventListener('click', () => { closeOverflowMenu(); void saveDocument(true); });
+  document.querySelector('[data-new-document]').addEventListener('click', async () => {
+    closeOverflowMenu();
+    if (await confirmProceedPastUnsavedWork('start a new document')) await newDocument();
+  });
+
+  document.addEventListener('dragover', (event) => {
+    if ([...event.dataTransfer.types].includes('Files')) event.preventDefault();
+  });
+  document.addEventListener('drop', (event) => {
+    if (![...event.dataTransfer.types].includes('Files')) return;
+    event.preventDefault();
+    const file = event.dataTransfer.files[0];
+    if (!file) return;
+    const filePath = window.noirDraft.documents.getPathForFile(file);
+    if (filePath) void openDocumentAtPath(filePath);
+  });
   for (const button of document.querySelectorAll('[data-view]')) {
     button.addEventListener('click', () => switchView(button.dataset.view));
   }
@@ -2635,6 +2837,12 @@ try {
     } else if (key === 'y' || (key === 'z' && event.shiftKey)) {
       event.preventDefault();
       void runRedo();
+    } else if (key === 's') {
+      event.preventDefault();
+      void saveDocument(event.shiftKey);
+    } else if (key === 'o') {
+      event.preventDefault();
+      document.querySelector('[data-open]').click();
     }
   });
 
@@ -2646,6 +2854,20 @@ try {
   updatePassageHistoryVisibility();
   updateDraftContextSummary();
   renderVersions();
+  reportDirtyState();
+  window.noirDraft?.app?.onSaveRequest?.(() => {
+    saveDocument(false)
+      .then(() => window.noirDraft.app.notifySaveComplete(true))
+      .catch(() => window.noirDraft.app.notifySaveComplete(false));
+  });
+  window.noirDraft?.app?.onConfirmCloseRequest?.(async () => {
+    const decision = await showConfirmDialog({
+      message: 'This document has unsaved changes.',
+      detail: 'Choose what to do before closing NoirDraft.',
+      buttons: ['Save and close', 'Discard and close', "Cancel — don't close"],
+    });
+    window.noirDraft.app.sendCloseDecision(decision);
+  });
   window.__noirDraftTest = Object.freeze({
     model,
     editor,

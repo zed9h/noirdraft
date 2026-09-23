@@ -36,6 +36,7 @@
           <div class="overflow" data-overflow>
             <button type="button" class="icon-button" data-overflow-toggle aria-haspopup="true" aria-expanded="false" aria-label="More actions" title="More actions"><span class="icon-glyph">more_vert</span></button>
             <div class="overflow-menu" data-overflow-menu hidden>
+              <button type="button" data-new-document title="Start a new document"><span class="menu-icon emoji-icon" aria-hidden="true">🆕</span>New document</button>
               <button type="button" data-save-as title="Save this document to a new file"><span class="menu-icon emoji-icon" aria-hidden="true">📄</span>Save as…</button>
               <button type="button" data-save-note title="Save with a short note describing this revision"><span class="menu-icon emoji-icon" aria-hidden="true">📝</span>Save with note…</button>
               <button type="button" data-ai-connection title="Connect to a KoboldCpp server"><span class="menu-icon emoji-icon" aria-hidden="true">🔌</span>AI connection…</button>
@@ -51,14 +52,20 @@
         <label for="save-note-input">Revision note</label>
         <input type="text" id="save-note-input" data-save-note-input placeholder="Optional note">
         <button type="button" data-save-note-confirm>Save</button>
-        <button type="button" data-save-note-cancel>Cancel</button>
+        <button type="button" data-save-note-cancel>Cancel — don't save</button>
       </div>
       <div class="save-note-popover" data-ai-connection-popover hidden>
         <label for="ai-connection-input">KoboldCpp server URL</label>
         <input type="text" id="ai-connection-input" data-ai-connection-input placeholder="http://localhost:5001">
         <button type="button" data-ai-connection-confirm>Connect</button>
-        <button type="button" data-ai-connection-cancel>Cancel</button>
+        <button type="button" data-ai-connection-cancel>Cancel — don't connect</button>
       </div>
+      <dialog class="confirm-dialog" data-confirm-dialog aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-detail">
+        <h2 id="confirm-dialog-title" data-confirm-dialog-title>Unsaved changes</h2>
+        <p data-confirm-dialog-message></p>
+        <p id="confirm-dialog-detail" class="confirm-dialog-detail" data-confirm-dialog-detail hidden></p>
+        <div class="confirm-dialog-actions" data-confirm-dialog-actions></div>
+      </dialog>
       <dialog class="app-info-dialog" data-app-info-dialog aria-labelledby="app-info-title">
         <form method="dialog">
           <div class="app-info-heading">
@@ -185,7 +192,7 @@
             <textarea rows="3" data-chat-prompt aria-label="Chat prompt" placeholder="Message the agent…"></textarea>
             <div class="chat-composer-actions">
               <label class="chat-context-controls">Context <input type="number" min="0" step="1" value="6" data-chat-history-count aria-label="Context"></label>
-              <button type="button" data-chat-cancel hidden>Cancel</button>
+              <button type="button" data-chat-cancel hidden title="Stop the AI's current response">Cancel generation</button>
               <button type="button" data-chat-send title="Enter sends. Shift+Enter or Ctrl+Enter adds a line break.">Send</button>
             </div>
             <div
