@@ -2764,9 +2764,13 @@ try {
       (isReachable(remembered) ? remembered : chatPrompt).focus();
       return;
     }
+    // Ctrl+Tab into Navigation always starts from the section currently
+    // highlighted by the caret, not wherever focus was last left in the
+    // panel, so the cycle lands where the writer's attention already is.
+    const highlighted = sidebarLeft.querySelector('.outline-row.is-current-leaf .outline-target');
     const remembered = panelLastFocus.NAVIGATION;
     const fallback = sidebarLeft.querySelector(`[data-root-target="${activeRoot}"]`) ?? sidebarLeft.querySelector('button, [tabindex]');
-    (isReachable(remembered) ? remembered : fallback)?.focus();
+    (isReachable(highlighted) ? highlighted : (isReachable(remembered) ? remembered : fallback))?.focus();
   };
 
   // Plain Tab / Shift+Tab is trapped inside whichever panel it's pressed in:
