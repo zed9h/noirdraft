@@ -5,6 +5,7 @@ export const DEFAULT_PREFERENCES = Object.freeze({
   koboldUrl: 'http://localhost:5001',
   autoNotes: false,
   saveTimestampedCopies: true,
+  saveOnEveryRevision: false,
   chatHistoryMessages: 6,
   contextRows: 12,
   generationDefaults: Object.freeze({

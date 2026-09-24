@@ -31,7 +31,7 @@ test('launches the secure, menu-free compact shell', async () => {
 
     // Runtime diagnostics live in an on-demand info dialog, never in the editor chrome.
     await window.getByLabel('More actions').click();
-    await window.getByRole('button', { name: 'App info…' }).click();
+    await window.getByRole('button', { name: 'Info…' }).click();
     const info = window.getByRole('dialog', { name: 'NoirDraft' });
     await expect(info).toBeVisible();
     await expect(info.getByText(/words · .* characters ·/)).toHaveCount(3);

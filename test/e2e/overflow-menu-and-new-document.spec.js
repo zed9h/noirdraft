@@ -53,7 +53,7 @@ test('New document resets the STORY/METADATA/CHAT editors and clears the current
     await expect(window.locator('#editor-title')).toHaveText('story');
 
     await window.getByLabel('More actions').click();
-    await window.getByRole('button', { name: 'New document' }).click();
+    await window.getByRole('button', { name: 'New' }).click();
 
     await expect(window.getByRole('heading', { name: 'Untitled story' })).toBeVisible();
     const state = await window.evaluate(() => {

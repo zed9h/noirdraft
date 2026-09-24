@@ -28,7 +28,7 @@ test('the app info dialog reports a disconnected server, then the connected fake
     // The isolated preferences point at an unreachable port, so the editor
     // must show a clean disconnected state rather than hanging or throwing.
     await window.getByLabel('More actions').click();
-    await window.getByRole('button', { name: 'App info…' }).click();
+    await window.getByRole('button', { name: 'Info…' }).click();
     const info = window.getByRole('dialog', { name: 'NoirDraft' });
     await expect(info.getByText('Disconnected', { exact: true })).toBeVisible();
     await info.getByLabel('Close app info').click();
@@ -36,12 +36,12 @@ test('the app info dialog reports a disconnected server, then the connected fake
     const server = await startFakeKoboldServer({ model: 'gemma-fake', contextLength: 8192 });
     try {
       await window.getByLabel('More actions').click();
-      await window.getByRole('button', { name: 'AI connection…' }).click();
+      await window.getByRole('button', { name: 'AI server…' }).click();
       await window.getByLabel('KoboldCpp server URL').fill(server.url);
-      await window.getByRole('button', { name: 'Connect' }).click();
+      await window.getByRole('button', { name: 'Connect', exact: true }).click();
 
       await window.getByLabel('More actions').click();
-      await window.getByRole('button', { name: 'App info…' }).click();
+      await window.getByRole('button', { name: 'Info…' }).click();
       await expect(info.getByText('Connected', { exact: true })).toBeVisible();
       await expect(info.getByText('gemma-fake', { exact: true })).toBeVisible();
       await expect(info.getByText('8192 tokens', { exact: true })).toBeVisible();

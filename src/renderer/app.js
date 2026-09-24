@@ -20,6 +20,7 @@ import { endScrub, startScrub, stepScrub } from './history/scrub-session.js';
 import { createSectionNav, recallPosition, savePosition, stepSectionNav, visitSection } from './editor/section-position.js';
 import { parseProjectDocument } from './project/parse.js';
 import { readPins, writePins } from './project/pins.js';
+import { readOptions, writeOptions } from './project/options.js';
 import { projectRoot } from './project/projection.js';
 import { serializeProjectDocument } from './project/serialize.js';
 import { appendChatTurn, displayChatInput, displayChatOutput, findChatTurnRanges, parseChatTurns } from './project/chat.js';
@@ -261,14 +262,51 @@ const chatStats = (text, storageBytes) => {
   return `${turns} chat turn${turns === 1 ? '' : 's'} · ${contentStats(text, storageBytes)}`;
 };
 
+// Applies options a project stores in its METADATA over the machine defaults.
+const applyProjectOptions = (stored) => {
+  if ('autoNotes' in stored) {
+    autoNotesEnabled = stored.autoNotes;
+    toggleAutoNotesButton.setAttribute('aria-pressed', String(autoNotesEnabled));
+  }
+  if ('saveTimestampedCopies' in stored) {
+    saveTimestampedCopiesEnabled = stored.saveTimestampedCopies;
+    toggleTimestampedSavesButton.setAttribute('aria-pressed', String(saveTimestampedCopiesEnabled));
+  }
+  if ('saveOnEveryRevision' in stored) {
+    saveOnEveryRevisionEnabled = stored.saveOnEveryRevision;
+    toggleSaveOnRevisionButton.setAttribute('aria-pressed', String(saveOnEveryRevisionEnabled));
+  }
+  if ('chatHistoryMessages' in stored) {
+    chatHistoryMessageCount = stored.chatHistoryMessages;
+    chatHistoryCount.value = String(chatHistoryMessageCount);
+  }
+  if ('contextRows' in stored) {
+    contextRows = stored.contextRows;
+    contextRowsInput.value = String(contextRows);
+  }
+};
+
+// Options live in the project's METADATA (# Application → ## Options); the
+// editor wiring below replaces this hook once the editors exist.
+let storeProjectOption = () => {};
+const toggleSaveOnRevisionButton = document.querySelector('[data-toggle-save-on-revision]');
+let saveOnEveryRevisionEnabled = false;
+toggleSaveOnRevisionButton.addEventListener('click', async () => {
+  saveOnEveryRevisionEnabled = !saveOnEveryRevisionEnabled;
+  toggleSaveOnRevisionButton.setAttribute('aria-pressed', String(saveOnEveryRevisionEnabled));
+  await preferences?.set({ saveOnEveryRevision: saveOnEveryRevisionEnabled });
+  storeProjectOption({ saveOnEveryRevision: saveOnEveryRevisionEnabled });
+  showStatus(`Saving on every revision ${saveOnEveryRevisionEnabled ? 'enabled' : 'disabled'}`);
+});
+
 const toggleAutoNotesButton = document.querySelector('[data-toggle-auto-notes]');
 let autoNotesEnabled = false;
 toggleAutoNotesButton.addEventListener('click', async () => {
   autoNotesEnabled = !autoNotesEnabled;
   toggleAutoNotesButton.setAttribute('aria-pressed', String(autoNotesEnabled));
   await preferences?.set({ autoNotes: autoNotesEnabled });
+  storeProjectOption({ autoNotes: autoNotesEnabled });
   showStatus(`Automatic revision notes ${autoNotesEnabled ? 'enabled' : 'disabled'}`);
-  closeOverflowMenu();
 });
 
 const toggleTimestampedSavesButton = document.querySelector('[data-toggle-timestamped-saves]');
@@ -277,8 +315,8 @@ toggleTimestampedSavesButton.addEventListener('click', async () => {
   saveTimestampedCopiesEnabled = !saveTimestampedCopiesEnabled;
   toggleTimestampedSavesButton.setAttribute('aria-pressed', String(saveTimestampedCopiesEnabled));
   await preferences?.set({ saveTimestampedCopies: saveTimestampedCopiesEnabled });
+  storeProjectOption({ saveTimestampedCopies: saveTimestampedCopiesEnabled });
   showStatus(`Timestamped save copies ${saveTimestampedCopiesEnabled ? 'enabled' : 'disabled'}`);
-  closeOverflowMenu();
 });
 
 const aiStatus = document.querySelector('[data-ai-status]');
@@ -406,6 +444,8 @@ if (preferences) {
       toggleAutoNotesButton.setAttribute('aria-pressed', String(autoNotesEnabled));
       saveTimestampedCopiesEnabled = stored.saveTimestampedCopies !== false;
       toggleTimestampedSavesButton.setAttribute('aria-pressed', String(saveTimestampedCopiesEnabled));
+      saveOnEveryRevisionEnabled = stored.saveOnEveryRevision === true;
+      toggleSaveOnRevisionButton.setAttribute('aria-pressed', String(saveOnEveryRevisionEnabled));
       return connectToKobold(stored.koboldUrl);
     })
     .catch(() => setAIStatus('Disconnected', 'error'));
@@ -478,6 +518,9 @@ let commitController = null; // STORY controller; retained for story workbench A
 let metadataCommitController = null;
 let suppressAutoPersist = false;
 let persistAfterCommit = async () => {};
+// Revisions committed since the last write to disk (only accumulates while
+// "save on every revision" is off).
+let revisionsUnsaved = false;
 
 try {
   const editors = {
@@ -883,12 +926,14 @@ try {
     chatHistoryMessageCount = Math.max(0, Number(chatHistoryCount.value) || 0);
     chatHistoryCount.value = String(chatHistoryMessageCount);
     await preferences?.set({ chatHistoryMessages: chatHistoryMessageCount });
+    storeProjectOption({ chatHistoryMessages: chatHistoryMessageCount });
     renderChatHistory();
   });
   contextRowsInput.addEventListener('change', async () => {
     contextRows = Math.min(200, Math.max(1, Math.floor(Number(contextRowsInput.value) || 1)));
     contextRowsInput.value = String(contextRows);
     await preferences?.set({ contextRows });
+    storeProjectOption({ contextRows });
     updateDraftContextSummary();
   });
   const setChatSending = () => {
@@ -1531,7 +1576,8 @@ try {
       },
       onCommit: (revision) => {
         enqueueNoteGeneration(revision);
-        const persisted = suppressAutoPersist ? undefined : persistAfterCommit();
+        if (!suppressAutoPersist && !saveOnEveryRevisionEnabled) revisionsUnsaved = true;
+        const persisted = suppressAutoPersist || !saveOnEveryRevisionEnabled ? undefined : persistAfterCommit();
         reportDirtyState();
         return persisted;
       },
@@ -1557,7 +1603,8 @@ try {
         reportDirtyState();
       },
       onCommit: () => {
-        const persisted = suppressAutoPersist ? undefined : persistAfterCommit();
+        if (!suppressAutoPersist && !saveOnEveryRevisionEnabled) revisionsUnsaved = true;
+        const persisted = suppressAutoPersist || !saveOnEveryRevisionEnabled ? undefined : persistAfterCommit();
         reportDirtyState();
         return persisted;
       },
@@ -2434,6 +2481,8 @@ try {
     attachMetadataHistory(nextMetadataHistory);
     metadataDirty = false;
     chatDirty = false;
+    revisionsUnsaved = false;
+    applyProjectOptions(readOptions(models.METADATA.text));
     currentDocument = openedDocument;
     editorTitle.textContent = displayBaseName(openedDocument.filePath, saveTimestampedCopiesEnabled);
     if (recoveredRoots.length) await persistAfterCommit();
@@ -2467,6 +2516,7 @@ try {
   // last persisted save, or — for a window with no file at all — any
   // content beyond the pristine starting placeholder.
   const hasUnsavedWork = () => Boolean(commitController?.pending)
+    || revisionsUnsaved
     || Boolean(metadataCommitController?.pending)
     || chatDirty
     || (!currentDocument && (models.STORY.text !== initialStory || models.METADATA.text !== '' || models.CHAT.text !== ''));
@@ -2546,6 +2596,11 @@ try {
     return true;
   };
 
+  storeProjectOption = (patch) => {
+    const updated = writeOptions(models.METADATA.text, patch);
+    if (updated !== models.METADATA.text) editors.METADATA.replace(0, models.METADATA.text.length, updated, 'option');
+  };
+
   persistAfterCommit = async () => {
     if (!currentDocument) return;
     let contents = buildProjectContents();
@@ -2570,6 +2625,7 @@ try {
       project = parseProjectDocument(contents);
       metadataDirty = false;
       chatDirty = false;
+      revisionsUnsaved = false;
       showStatus('Saved');
     }
   };
@@ -2618,6 +2674,24 @@ try {
       editors[rootName]?.setSelection(position.selectionStart, position.selectionEnd, 'restore-position');
       if (editors[rootName]) editors[rootName].element.scrollTop = position.scrollTop;
     }
+  };
+
+  // Records a revision (with an optional note) without a manual save; the
+  // file is written only when "save on every revision" is on.
+  const recordRevision = async (note = null) => {
+    if (!commitController || !metadataCommitController) return showStatus('The document is not ready yet.', true);
+    suppressAutoPersist = true;
+    try {
+      await Promise.all([
+        commitController.explicitSave(note),
+        metadataCommitController.explicitSave(note),
+      ]);
+    } finally {
+      suppressAutoPersist = false;
+    }
+    if (saveOnEveryRevisionEnabled && currentDocument) await persistAfterCommit();
+    else revisionsUnsaved = true;
+    showStatus(saveOnEveryRevisionEnabled && currentDocument ? 'Revision recorded and saved' : 'Revision recorded');
   };
 
   const openButton = document.querySelector('[data-open]');
@@ -2687,7 +2761,7 @@ try {
   saveNoteConfirm.addEventListener('click', () => {
     const note = saveNoteInput.value.trim() || null;
     closeSaveNotePopover();
-    void saveDocument(false, note);
+    void recordRevision(note);
   });
   saveNoteInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') { event.preventDefault(); saveNoteConfirm.click(); }
@@ -2845,6 +2919,11 @@ try {
         if (isPanelOpen(KEYBOARD_PANELS[index])) { next = KEYBOARD_PANELS[index]; break; }
       }
       if (next) focusPanel(next);
+      return;
+    }
+    if (event.shiftKey && event.altKey && !event.ctrlKey && !event.metaKey && event.code === 'KeyS') {
+      event.preventDefault();
+      openSaveNotePopover();
       return;
     }
     if (!(event.ctrlKey || event.metaKey) || event.altKey) return;

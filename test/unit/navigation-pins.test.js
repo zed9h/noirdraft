@@ -73,3 +73,16 @@ test('pin storage preserves CRLF convention', () => {
   assert.equal(/(^|[^\r])\n/.test(pinned), false);
   assert.deepEqual(readPins(pinned), ['METADATA/Argument']);
 });
+
+test('pin then unpin then pin never glues an entry onto the Context heading', () => {
+  let source = '# Notes\nText.\n';
+  for (let round = 0; round < 3; round += 1) {
+    source = writePins(source, ['METADATA/Notes']);
+    assert.deepEqual(readPins(source), ['METADATA/Notes']);
+    source = writePins(source, []);
+    assert.deepEqual(readPins(source), []);
+  }
+  // A heading whose blank line was trimmed away by an earlier edit is repaired.
+  assert.equal(writePins('# Application\n\n## Context', ['A']), '# Application\n\n## Context\n\n- A\n');
+  assert.equal(writePins('# Application\n\n## Context\n', ['A']), '# Application\n\n## Context\n\n- A\n');
+});

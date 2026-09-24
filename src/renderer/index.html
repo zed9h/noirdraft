@@ -36,13 +36,14 @@
           <div class="overflow" data-overflow>
             <button type="button" class="icon-button" data-overflow-toggle aria-haspopup="true" aria-expanded="false" aria-label="More actions" title="More actions"><span class="icon-glyph">more_vert</span></button>
             <div class="overflow-menu" data-overflow-menu hidden>
-              <button type="button" data-new-document title="Start a new document"><span class="menu-icon emoji-icon" aria-hidden="true">🆕</span>New document</button>
-              <button type="button" data-save-as title="Save this document to a new file (Ctrl+Shift+S)"><span class="menu-icon emoji-icon" aria-hidden="true">📄</span>Save as…</button>
-              <button type="button" data-save-note title="Save with a short note describing this revision"><span class="menu-icon emoji-icon" aria-hidden="true">📝</span>Save with note…</button>
-              <button type="button" data-ai-connection title="Connect to a KoboldCpp server"><span class="menu-icon emoji-icon" aria-hidden="true">🔌</span>AI connection…</button>
-              <button type="button" data-toggle-auto-notes aria-pressed="false" title="Ask the AI to write a short note for each saved revision"><span class="menu-icon emoji-icon" aria-hidden="true">🗒️</span>Automatic revision notes</button>
-              <button type="button" data-toggle-timestamped-saves aria-pressed="true" title="Keep each save as its own timestamped file"><span class="menu-icon emoji-icon" aria-hidden="true">🕒</span>Save each save as a timestamped file</button>
-              <button type="button" data-app-info title="Show document and application details"><span class="menu-icon emoji-icon" aria-hidden="true">ℹ️</span>App info…</button>
+              <button type="button" data-new-document title="Start a new, empty document. Unsaved work is checked before it is replaced.">New</button>
+              <button type="button" data-save-as title="Save the project to a new file (Ctrl+Shift+S). Later saves continue with that file.">Save as…</button>
+              <button type="button" data-save-note title="Record a revision with an optional note (Shift+Alt+S). The file is written only if Save each revision is on.">Record revision…</button>
+              <button type="button" data-ai-connection title="Set the KoboldCpp server address used for chat and proposals. Editing and saving work without it.">AI server…</button>
+              <button type="button" data-toggle-auto-notes aria-pressed="false" title="Ask the AI to write a short note for each new revision. Needs a connected AI server.">Auto notes</button>
+              <button type="button" data-toggle-save-on-revision aria-pressed="false" title="Write the file to disk every time a revision is recorded. When off, the file is written only by Save.">Save each revision</button>
+              <button type="button" data-toggle-timestamped-saves aria-pressed="true" title="Every save creates a new file named with the date and time, so no earlier save is overwritten.">Timestamped saves</button>
+              <button type="button" data-app-info title="Show document statistics, AI connection details, and app version.">Info…</button>
             </div>
           </div>
           <button type="button" class="icon-button" data-toggle-right aria-label="Toggle chat sidebar" title="Toggle chat sidebar" aria-expanded="true"><span class="icon-glyph">chat</span></button>
@@ -50,9 +51,9 @@
       </header>
       <div class="save-note-popover" data-save-note-popover hidden>
         <label for="save-note-input">Revision note</label>
-        <input type="text" id="save-note-input" data-save-note-input placeholder="Optional note" title="A short note describing this revision (Enter to save)">
-        <button type="button" data-save-note-confirm title="Save with this note (Enter)">Save</button>
-        <button type="button" data-save-note-cancel title="Close without saving (Escape)">Cancel — don't save</button>
+        <input type="text" id="save-note-input" data-save-note-input placeholder="Optional note" title="A short note describing this revision (Enter to record)">
+        <button type="button" data-save-note-confirm title="Record this revision (Enter)">Record</button>
+        <button type="button" data-save-note-cancel title="Close without recording (Escape)">Cancel</button>
       </div>
       <div class="save-note-popover" data-ai-connection-popover hidden>
         <label for="ai-connection-input">KoboldCpp server URL</label>

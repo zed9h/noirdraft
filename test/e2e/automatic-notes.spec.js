@@ -18,12 +18,24 @@ async function launchIsolated() {
   });
   const window = await application.firstWindow();
   await window.waitForFunction(() => Boolean(window.__noirDraftTest?.getCommitController()));
+  // Toggling an option edits METADATA, which makes the scratch document
+  // dirty; report it clean on close so the unsaved-work prompt cannot block.
+  const closeApplication = application.close.bind(application);
+  application.close = async () => {
+    await window.evaluate(() => window.noirDraft.app.reportDirty(false)).catch(() => {});
+    await closeApplication();
+  };
   return { application, window, cleanup: () => rm(directory, { recursive: true, force: true }) };
 }
 
+// Graph nodes only show their number; the note is in the tooltip and history.
+const node = (window, id) => window.locator(`.graph-node[data-revision-id="${id}"]`);
+const noteOf = (window, id) => window.evaluate((revisionId) => window.__noirDraftTest.getHistory().revisions.get(revisionId).note, id);
+
 async function enableAutoNotes(window) {
   await window.getByLabel('More actions').click();
-  await window.getByRole('button', { name: 'Automatic revision notes' }).click();
+  await window.getByRole('button', { name: 'Auto notes' }).click();
+  await window.getByLabel('More actions').click();
 }
 
 test('a delayed successful note attaches to the existing node without creating another revision', async () => {
@@ -41,9 +53,8 @@ test('a delayed successful note attaches to the existing node without creating a
 
     const revisionCountBeforeNote = await window.evaluate(() => window.__noirDraftTest.getHistory().revisions.size);
     await window.getByRole('button', { name: 'Versions', exact: true }).click();
-    await expect(window.locator('.graph-node[data-revision-id="1"]')).toContainText('Generating note…');
-
-    await expect(window.locator('.graph-node[data-revision-id="1"]')).toContainText('Shortened the opening.', { timeout: 5000 });
+    await expect(node(window, 1)).toHaveAttribute('title', 'Revision 1: Shortened the opening.', { timeout: 5000 });
+    expect(await noteOf(window, 1)).toBe('Shortened the opening.');
     const revisionCountAfterNote = await window.evaluate(() => window.__noirDraftTest.getHistory().revisions.size);
     expect(revisionCountAfterNote).toBe(revisionCountBeforeNote);
   } finally {
@@ -67,13 +78,12 @@ test('a failed note generation leaves the revision usable with no note and no ex
     });
 
     await window.getByRole('button', { name: 'Versions', exact: true }).click();
-    // An empty response resolves immediately, so the transient "Generating
-    // note…" state may not be observable here; only the settled state matters.
-    await expect(window.locator('.graph-node[data-revision-id="1"]')).toContainText('[no note]', { timeout: 5000 });
+    // An empty response leaves the revision without a note.
+    await window.waitForTimeout(500);
+    await expect(node(window, 1)).toHaveAttribute('title', 'Revision 1: user');
+    expect(await noteOf(window, 1)).toBeNull();
     const revisionCount = await window.evaluate(() => window.__noirDraftTest.getHistory().revisions.size);
     expect(revisionCount).toBe(2);
-    // The manual "Generate note" control must remain available to retry later.
-    await expect(window.locator('.graph-node[data-revision-id="1"]').getByRole('button', { name: 'Generate note' })).toBeVisible();
   } finally {
     await server.close();
     await application.close();
@@ -94,8 +104,8 @@ test('a disconnected server never blocks editor work and never creates a revisio
     });
 
     await window.getByRole('button', { name: 'Versions', exact: true }).click();
-    await expect(window.locator('.graph-node[data-revision-id="1"]')).toContainText('[no note]');
-    await expect(window.locator('.graph-node[data-revision-id="1"]')).not.toContainText('Generating note…');
+    await expect(node(window, 1)).toHaveAttribute('title', 'Revision 1: user');
+    expect(await noteOf(window, 1)).toBeNull();
     const revisionCount = await window.evaluate(() => window.__noirDraftTest.getHistory().revisions.size);
     expect(revisionCount).toBe(2);
   } finally {
@@ -118,7 +128,8 @@ test('automatic notes stay off by default and can be disabled again, leaving rev
 
     await window.getByRole('button', { name: 'Versions', exact: true }).click();
     await window.waitForTimeout(200);
-    await expect(window.locator('.graph-node[data-revision-id="1"]')).toContainText('[no note]');
+    await expect(node(window, 1)).toHaveAttribute('title', 'Revision 1: user');
+    expect(await noteOf(window, 1)).toBeNull();
 
     // Explicitly toggle on, then off again; the off state must also stay quiet.
     await enableAutoNotes(window);
@@ -129,7 +140,8 @@ test('automatic notes stay off by default and can be disabled again, leaving rev
       await getCommitController().explicitSave(null);
     });
     await window.waitForTimeout(300);
-    await expect(window.locator('.graph-node[data-revision-id="2"]')).toContainText('[no note]');
+    await expect(node(window, 2)).toHaveAttribute('title', 'Revision 2: user');
+    expect(await noteOf(window, 2)).toBeNull();
     const revisionCount = await window.evaluate(() => window.__noirDraftTest.getHistory().revisions.size);
     expect(revisionCount).toBe(3);
   } finally {

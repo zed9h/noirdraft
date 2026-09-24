@@ -163,7 +163,6 @@ button { font: inherit; }
 }
 .dropdown-menu button:hover { background: #26221d; }
 
-.menu-icon { display: inline-flex; align-items: center; justify-content: center; width: 1.3rem; margin-right: .2rem; }
 
 .overflow { position: relative; }
 .overflow-menu {
@@ -172,7 +171,9 @@ button { font: inherit; }
   top: calc(100% + .3rem);
   display: flex;
   flex-direction: column;
+  width: max-content;
   min-width: 12rem;
+  max-width: calc(100vw - 1rem);
   padding: .3rem;
   gap: .2rem;
   border: 1px solid #3a342e;
@@ -182,8 +183,12 @@ button { font: inherit; }
   z-index: 10;
 }
 .overflow-menu[hidden] { display: none; }
-.overflow-menu button { display: flex; align-items: center; text-align: left; border: 0; background: transparent; }
+.overflow-menu button { display: flex; white-space: nowrap; align-items: center; text-align: left; border: 0; background: transparent; }
 .overflow-menu button[aria-pressed="true"] { color: #e8ad70; }
+/* Every item reserves a check column; toggles fill it with a box. */
+.overflow-menu button::before { content: ""; flex: none; width: 1.6rem; margin-right: .3rem; text-align: center; font-size: 1.25rem; line-height: 1; }
+.overflow-menu button[aria-pressed="false"]::before { content: "\2610"; }
+.overflow-menu button[aria-pressed="true"]::before { content: "\2611"; }
 
 .save-note-popover {
   position: absolute;
