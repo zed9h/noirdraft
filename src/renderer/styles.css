@@ -92,6 +92,7 @@ button { font: inherit; }
 .doc-name { margin: 0; font: 500 .85rem/1 "Noto Sans", sans-serif; color: #ddd4ca; }
 .status { color: #8a8074; font-size: .78rem; }
 .status-error { color: #ffb4a9; }
+.status-warning { color: #f0c674; }
 
 .icon-button, .header-actions button, .overflow-menu button {
   padding: .3rem .55rem;
@@ -113,6 +114,12 @@ button { font: inherit; }
 }
 .icon-button:disabled { opacity: .4; cursor: default; }
 .icon-button:disabled:hover { background: #1c1916; }
+
+/* Chat toggle doubles as the at-a-glance KoboldCpp connection indicator:
+   a colored shadow ring rather than repainting the button itself, so its
+   icon and hover state stay unchanged. */
+[data-toggle-right][data-ai-connected="true"] { box-shadow: 0 0 0 2px #3a5a2e, 0 0 6px 1px #4caf3a80; }
+[data-toggle-right][data-ai-connected="false"] { box-shadow: 0 0 0 2px #5a2e2e, 0 0 6px 1px #e0523680; }
 
 .icon-glyph { display: inline-block; font-family: "Material Symbols Outlined"; font-feature-settings: "liga"; }
 [data-undo] .icon-glyph, [data-redo] .icon-glyph { color: #ddd; }

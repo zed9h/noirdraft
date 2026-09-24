@@ -10,7 +10,7 @@
     <div class="shell">
       <header class="app-header">
         <div class="header-left">
-          <button type="button" class="icon-button" data-toggle-left aria-label="Toggle navigation sidebar" aria-expanded="true"><span class="icon-glyph">menu</span></button>
+          <button type="button" class="icon-button" data-toggle-left title="Toggle navigation sidebar" aria-label="Toggle navigation sidebar" aria-expanded="true"><span class="icon-glyph">menu</span></button>
           <span class="app-title">NoirDraft</span>
           <h2 id="editor-title" class="doc-name">Untitled story</h2>
           <span class="status" data-document-status>No document open</span>
@@ -31,13 +31,13 @@
             <div class="dropdown-menu" data-redo-menu hidden aria-label="Redo branches"></div>
           </div>
           <span class="toolbar-divider" aria-hidden="true"></span>
-          <button type="button" class="icon-button" data-open title="Open a document…" aria-label="Open…"><span class="icon-glyph">folder_open</span></button>
-          <button type="button" class="icon-button" data-save title="Save" aria-label="Save"><span class="icon-glyph">save</span></button>
+          <button type="button" class="icon-button" data-open title="Open a document… (Ctrl+O)" aria-label="Open…"><span class="icon-glyph">folder_open</span></button>
+          <button type="button" class="icon-button" data-save title="Save (Ctrl+S)" aria-label="Save"><span class="icon-glyph">save</span></button>
           <div class="overflow" data-overflow>
             <button type="button" class="icon-button" data-overflow-toggle aria-haspopup="true" aria-expanded="false" aria-label="More actions" title="More actions"><span class="icon-glyph">more_vert</span></button>
             <div class="overflow-menu" data-overflow-menu hidden>
               <button type="button" data-new-document title="Start a new document"><span class="menu-icon emoji-icon" aria-hidden="true">🆕</span>New document</button>
-              <button type="button" data-save-as title="Save this document to a new file"><span class="menu-icon emoji-icon" aria-hidden="true">📄</span>Save as…</button>
+              <button type="button" data-save-as title="Save this document to a new file (Ctrl+Shift+S)"><span class="menu-icon emoji-icon" aria-hidden="true">📄</span>Save as…</button>
               <button type="button" data-save-note title="Save with a short note describing this revision"><span class="menu-icon emoji-icon" aria-hidden="true">📝</span>Save with note…</button>
               <button type="button" data-ai-connection title="Connect to a KoboldCpp server"><span class="menu-icon emoji-icon" aria-hidden="true">🔌</span>AI connection…</button>
               <button type="button" data-toggle-auto-notes aria-pressed="false" title="Ask the AI to write a short note for each saved revision"><span class="menu-icon emoji-icon" aria-hidden="true">🗒️</span>Automatic revision notes</button>
@@ -50,15 +50,15 @@
       </header>
       <div class="save-note-popover" data-save-note-popover hidden>
         <label for="save-note-input">Revision note</label>
-        <input type="text" id="save-note-input" data-save-note-input placeholder="Optional note">
-        <button type="button" data-save-note-confirm>Save</button>
-        <button type="button" data-save-note-cancel>Cancel — don't save</button>
+        <input type="text" id="save-note-input" data-save-note-input placeholder="Optional note" title="A short note describing this revision (Enter to save)">
+        <button type="button" data-save-note-confirm title="Save with this note (Enter)">Save</button>
+        <button type="button" data-save-note-cancel title="Close without saving (Escape)">Cancel — don't save</button>
       </div>
       <div class="save-note-popover" data-ai-connection-popover hidden>
         <label for="ai-connection-input">KoboldCpp server URL</label>
-        <input type="text" id="ai-connection-input" data-ai-connection-input placeholder="http://localhost:5001">
-        <button type="button" data-ai-connection-confirm>Connect</button>
-        <button type="button" data-ai-connection-cancel>Cancel — don't connect</button>
+        <input type="text" id="ai-connection-input" data-ai-connection-input placeholder="http://localhost:5001" title="Base URL of a running KoboldCpp server (Enter to connect)">
+        <button type="button" data-ai-connection-confirm title="Connect to this server (Enter)">Connect</button>
+        <button type="button" data-ai-connection-cancel title="Close without connecting (Escape)">Cancel — don't connect</button>
       </div>
       <dialog class="confirm-dialog" data-confirm-dialog aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-detail">
         <h2 id="confirm-dialog-title" data-confirm-dialog-title>Unsaved changes</h2>
@@ -73,7 +73,7 @@
               <h2 id="app-info-title">NoirDraft</h2>
               <p>A local-first Markdown editor for fiction.</p>
             </div>
-            <button type="submit" class="icon-button" aria-label="Close app info"><span class="icon-glyph">close</span></button>
+            <button type="submit" class="icon-button" title="Close (Escape)" aria-label="Close app info"><span class="icon-glyph">close</span></button>
           </div>
           <dl class="app-info-details">
             <div><dt>Document</dt><dd data-app-document>Untitled story</dd></div>
@@ -103,7 +103,7 @@
         <form method="dialog">
           <div class="app-info-heading">
             <h2 id="context-dialog-title">Raw model context</h2>
-            <button type="submit" class="icon-button" aria-label="Close context"><span class="icon-glyph">close</span></button>
+            <button type="submit" class="icon-button" title="Close (Escape)" aria-label="Close context"><span class="icon-glyph">close</span></button>
           </div>
           <div class="context-budget" data-context-dialog-summary></div>
           <pre class="context-prompt" data-context-dialog-prompt></pre>
@@ -114,21 +114,21 @@
           <div class="project-folds" aria-label="Project outline">
             <section class="project-fold" data-fold="STORY">
               <div class="root-row">
-                <button type="button" class="fold-toggle" data-fold-toggle="STORY" aria-label="Collapse Story" aria-expanded="true" aria-controls="story-outline">⌄</button>
-                <button type="button" class="root-target" data-root-target="STORY">Story</button>
+                <button type="button" class="fold-toggle" data-fold-toggle="STORY" title="Collapse Story outline" aria-label="Collapse Story" aria-expanded="true" aria-controls="story-outline">⌄</button>
+                <button type="button" class="root-target" data-root-target="STORY" title="Switch to the Story editor">Story</button>
               </div>
               <div id="story-outline" class="outline fold-outline" data-outline-story aria-label="Story outline"></div>
             </section>
             <section class="project-fold" data-fold="METADATA">
               <div class="root-row">
-                <button type="button" class="fold-toggle" data-fold-toggle="METADATA" aria-label="Collapse Metadata" aria-expanded="true" aria-controls="metadata-outline">⌄</button>
-                <button type="button" class="root-target" data-root-target="METADATA">Metadata</button>
+                <button type="button" class="fold-toggle" data-fold-toggle="METADATA" title="Collapse Metadata outline" aria-label="Collapse Metadata" aria-expanded="true" aria-controls="metadata-outline">⌄</button>
+                <button type="button" class="root-target" data-root-target="METADATA" title="Switch to the Metadata editor">Metadata</button>
               </div>
               <div id="metadata-outline" class="outline fold-outline" data-outline-metadata aria-label="Metadata outline"></div>
             </section>
           </div>
           <div class="passage-history" data-passage-history aria-label="Passage history" hidden>
-            <button type="button" data-passage-history-toggle>Passage history…</button>
+            <button type="button" data-passage-history-toggle title="Show how the selected passage has changed across revisions">Passage history…</button>
             <div class="passage-history-list" data-passage-history-list hidden></div>
             <div class="passage-multi-compare" data-passage-multi-compare aria-label="Compare two revisions" hidden></div>
           </div>
@@ -164,8 +164,8 @@
           <section id="composite-view" class="composite-view editor-pane" aria-label="Composite" hidden>
             <div class="composite-toolbar">
               <span class="composite-hint">Editable composite — adopt hunks from compared revisions, edit directly, then commit.</span>
-              <button type="button" data-composite-commit>Commit composite</button>
-              <button type="button" data-composite-discard>Discard</button>
+              <button type="button" data-composite-commit title="Save the composite as a new revision">Commit composite</button>
+              <button type="button" data-composite-discard title="Discard the composite and return to Story">Discard</button>
             </div>
             <div
               id="composite-editor"
@@ -186,12 +186,12 @@
           <div class="chat-composer" data-chat-composer>
             <div data-pin-status hidden></div>
           <div class="chat-context-preview chat-message-label">
-              <button type="button" class="chat-role-action" data-context-toggle aria-label="Preview context for draft message">USER</button>
+              <button type="button" class="chat-role-action" data-context-toggle title="Preview the raw context that would be sent with this message" aria-label="Preview context for draft message">USER</button>
               <span class="chat-token-count" data-chat-context-summary aria-live="polite"></span>
             </div>
             <textarea rows="3" data-chat-prompt aria-label="Chat prompt" placeholder="Message the agent…"></textarea>
             <div class="chat-composer-actions">
-              <label class="chat-context-controls">Context <input type="number" min="0" step="1" value="6" data-chat-history-count aria-label="Context"></label>
+              <label class="chat-context-controls" title="Number of prior chat turns to include as context">Context <input type="number" min="0" step="1" value="6" data-chat-history-count aria-label="Context"></label>
               <button type="button" data-chat-cancel hidden title="Stop the AI's current response">Cancel generation</button>
               <button type="button" data-chat-send title="Enter sends. Shift+Enter or Ctrl+Enter adds a line break.">Send</button>
             </div>
@@ -212,7 +212,7 @@
       <section id="versions-view" class="versions-view" aria-label="Versions graph" hidden>
         <div class="version-graph-panel" data-version-graph-panel>
           <div class="versions-heading"><p class="eyebrow">Versions</p></div>
-          <input type="text" data-version-search aria-label="Search revisions" placeholder="Search revisions (id, note, origin)…">
+          <input type="text" data-version-search aria-label="Search revisions" title="Search revisions by id, note, or origin" placeholder="Search revisions (id, note, origin)…">
           <div class="version-search-results" data-version-search-results hidden></div>
           <div class="version-graph" data-version-graph aria-label="Version graph" tabindex="0"></div>
         </div>

@@ -39,6 +39,12 @@ const paneResizers = {
 let editorsForBounds = null;
 const toggleLeftButton = document.querySelector('[data-toggle-left]');
 const toggleRightButton = document.querySelector('[data-toggle-right]');
+const documentStatus = document.querySelector('[data-document-status]');
+const showStatus = (message, level = false) => {
+  documentStatus.textContent = message;
+  documentStatus.classList.toggle('status-error', level === true || level === 'error');
+  documentStatus.classList.toggle('status-warning', level === 'warning');
+};
 const overflowToggle = document.querySelector('[data-overflow-toggle]');
 const overflowMenu = document.querySelector('[data-overflow-menu]');
 const saveNotePopover = document.querySelector('[data-save-note-popover]');
@@ -261,6 +267,7 @@ toggleAutoNotesButton.addEventListener('click', async () => {
   autoNotesEnabled = !autoNotesEnabled;
   toggleAutoNotesButton.setAttribute('aria-pressed', String(autoNotesEnabled));
   await preferences?.set({ autoNotes: autoNotesEnabled });
+  showStatus(`Automatic revision notes ${autoNotesEnabled ? 'enabled' : 'disabled'}`);
   closeOverflowMenu();
 });
 
@@ -270,6 +277,7 @@ toggleTimestampedSavesButton.addEventListener('click', async () => {
   saveTimestampedCopiesEnabled = !saveTimestampedCopiesEnabled;
   toggleTimestampedSavesButton.setAttribute('aria-pressed', String(saveTimestampedCopiesEnabled));
   await preferences?.set({ saveTimestampedCopies: saveTimestampedCopiesEnabled });
+  showStatus(`Timestamped save copies ${saveTimestampedCopiesEnabled ? 'enabled' : 'disabled'}`);
   closeOverflowMenu();
 });
 
@@ -288,7 +296,11 @@ let onConnectionChange = () => {};
 const setAIStatus = (text, state = 'disconnected') => {
   aiStatus.textContent = text;
   aiStatus.dataset.connected = state;
+  const connected = state === 'true';
+  toggleRightButton.dataset.aiConnected = String(connected);
+  toggleRightButton.title = `Toggle chat sidebar — AI ${connected ? 'connected' : 'disconnected'}: ${text}`;
 };
+setAIStatus('Disconnected', 'error');
 
 const updateAppInfo = () => {
   let storage = null;
@@ -340,6 +352,7 @@ const connectToKobold = async (baseUrl) => {
   const availability = await koboldClient.checkAvailability();
   if (!availability.available) {
     setAIStatus(`Disconnected (${baseUrl})`, 'error');
+    showStatus(`Could not connect to KoboldCpp at ${baseUrl}`, true);
     onConnectionChange();
     return;
   }
@@ -351,6 +364,7 @@ const connectToKobold = async (baseUrl) => {
   const contextLabel = koboldContextLength ? ` · context ${koboldContextLength}` : '';
   koboldModel = availability.model ?? null;
   setAIStatus(`Connected: ${availability.model ?? 'unknown model'}${contextLabel}`, 'true');
+  showStatus(`Connected to ${availability.model ?? 'unknown model'} at ${baseUrl}`);
   onConnectionChange();
 };
 
@@ -415,7 +429,6 @@ const compositeViewButton = document.querySelector('[data-view="COMPOSITE"]');
 const compositeCommitButton = document.querySelector('[data-composite-commit]');
 const compositeDiscardButton = document.querySelector('[data-composite-discard]');
 const compositeProvenanceList = document.querySelector('[data-composite-provenance]');
-const documentStatus = document.querySelector('[data-document-status]');
 const editorTitle = document.querySelector('#editor-title');
 const outlines = {
   STORY: document.querySelector('[data-outline-story]'),
@@ -1457,6 +1470,7 @@ try {
     if (compositeText === baseText) {
       compositeState = null;
       if (compositeViewButton) compositeViewButton.hidden = true;
+      showStatus('Composite matched the base revision — nothing to commit', 'warning');
       switchView('STORY');
       return;
     }
@@ -1471,12 +1485,14 @@ try {
     renderVersions();
     refreshHistoryControls();
     await persistAfterCommit();
+    showStatus('Composite committed as a new revision');
     switchView('STORY');
   });
 
   compositeDiscardButton.addEventListener('click', () => {
     compositeState = null;
     if (compositeViewButton) compositeViewButton.hidden = true;
+    showStatus('Composite discarded');
     switchView('STORY');
   });
 
@@ -1552,10 +1568,6 @@ try {
   const activeHistory = () => activeRoot === 'METADATA' ? metadataHistory : history;
   const activeCommitController = () => activeRoot === 'METADATA' ? metadataCommitController : commitController;
 
-  const showStatus = (message, isError = false) => {
-    documentStatus.textContent = message;
-    documentStatus.classList.toggle('status-error', isError);
-  };
   const updateSelectionStatus = (detail) => {
     const selected = detail.selectionEnd - detail.selectionStart;
     appSelection.textContent = selected
@@ -2056,7 +2068,9 @@ try {
       document.querySelector(`[data-fold="${rootName}"]`).classList.toggle('is-closed', isOpen);
       button.textContent = isOpen ? '›' : '⌄';
       button.setAttribute('aria-expanded', String(!isOpen));
-      button.setAttribute('aria-label', `${isOpen ? 'Expand' : 'Collapse'} ${rootName[0]}${rootName.slice(1).toLowerCase()}`);
+      const label = `${isOpen ? 'Expand' : 'Collapse'} ${rootName[0]}${rootName.slice(1).toLowerCase()} outline`;
+      button.setAttribute('aria-label', label);
+      button.title = label;
       refreshSidebar();
     });
   }
@@ -2425,7 +2439,7 @@ try {
     if (recoveredRoots.length) await persistAfterCommit();
     showStatus(recoveredRoots.length
       ? `Recorded external ${recoveredRoots.join(' and ')} edit as a recovery revision.`
-      : statusLabel);
+      : statusLabel, recoveredRoots.length ? 'warning' : false);
     refreshSidebar();
     refreshChatOutline();
     reportDirtyState();
@@ -2627,7 +2641,7 @@ try {
       // Electron/GTK bug, not something this app can fix) — the dialog's own
       // "Open" button always works, so the status hints at it rather than
       // just looking like the click did nothing.
-      if (result.canceled) return showStatus("Open canceled — if you double-clicked or pressed Enter, try the dialog's Open button instead");
+      if (result.canceled) return showStatus("Open canceled — if you double-clicked or pressed Enter, try the dialog's Open button instead", 'warning');
       if (result.error) return showStatus(result.error.message, true);
       try { await loadDocument(result.document, { statusLabel: 'Opened' }); } catch (loadError) { showStatus(loadError.message, true); }
     } finally {
