@@ -55,7 +55,7 @@ Rules:
 - `Parents` is `none` for the initial checkpoint or a comma-separated list. Phase 6 writes one parent but the grammar permits more for future compatibility.
 - `Origin` initially accepts `user`, `agent`, `import`, `recovery`, or `system`.
 - `Time` is an ISO-8601 timestamp.
-- Hashes are lowercase SHA-256 of canonical UTF-8 visible-root text: LF line endings, no file BOM, normalized Setext editor headings, and outer whitespace trimmed.
+- Hashes are lowercase SHA-256 of canonical UTF-8 visible-root text: LF line endings, no file BOM, normalized Setext editor headings, and outer whitespace trimmed. STORY and METADATA text (non-empty) ends with exactly one line break, the empty last row: added when missing, collapsed when repeated.
 - `Note` is a JSON string or `null`, keeping escaping deterministic and readable.
 - `Payload-Length` stores the exact JavaScript UTF-16 length so a checkpoint without a trailing newline remains lossless despite fenced-block layout.
 - A revision contains exactly one fenced payload: `markdown` for a full checkpoint or `diff` for a strict unified patch.

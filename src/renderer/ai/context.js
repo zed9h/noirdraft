@@ -43,6 +43,7 @@ export function composeContext({
   request = '',
   agentProtocol = '',
   chatHistory = [],
+  mode = null,
 }) {
   const documents = { STORY: storyText, METADATA: metadataText };
   const resolvedPins = [];
@@ -96,6 +97,7 @@ export function composeContext({
     xmlElement(target ? 'selection' : 'cursor', target),
     xmlElement('after', after),
     '</document_context>',
+    mode ? xmlElement('placement', mode === 'short' ? 'If the request calls for an edit, it goes inside a paragraph: use short inline alternatives. If it is a question or conversation, just answer.' : 'If the request calls for an edit, it goes at whole paragraphs or a blank line: draft with notebooks. If it is a question or conversation, just answer.', ` mode="${mode}"`) : '',
     xmlElement('request', request),
     '</noirdraft_turn>',
   ].filter(Boolean).join('\n');

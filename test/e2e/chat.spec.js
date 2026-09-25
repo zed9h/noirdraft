@@ -283,13 +283,13 @@ test('ordinary chat shows its status and raw response while it is pending', asyn
     await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
     await window.getByLabel('Chat prompt').fill('Say hello.');
     await window.getByRole('button', { name: 'Send' }).click();
-    // While the protocol is still running the card shows only its status; the
-    // drafted reply appears once the turn completes. The raw response is
-    // inspectable meanwhile and fills in as the model's calls arrive.
+    // While the protocol is still running the card shows its status until the
+    // model speaks. The raw response is inspectable meanwhile and fills in as
+    // the model's calls arrive.
     await expect(window.getByLabel('Chat history')).toContainText('Thinking…');
     await window.getByRole('button', { name: 'Show raw response for pending turn 1' }).click();
     const pendingRawDialog = window.locator('[data-context-dialog]');
-    await expect(pendingRawDialog.locator('.context-prompt')).toContainText('draft_chat');
+    await expect(pendingRawDialog.locator('.context-prompt')).toContainText('send_response');
     await pendingRawDialog.getByRole('button', { name: 'Close context' }).click();
     await expect(window.getByLabel('Chat history')).toContainText('Plain chat reply.');
     await window.getByRole('button', { name: 'Show raw response for turn 1' }).click();
@@ -381,7 +381,7 @@ test('a queued rewrite can be cancelled from its call row and releases its highl
     await job.getByRole('button', { name: /Cancel call in turn/ }).click();
     await expect(job).toHaveClass(/chat-call-cancelled/);
     await expect(window.locator('#story-editor [class*="agent-target-highlight"]')).toHaveCount(0);
-    expect(await window.evaluate(() => window.__noirDraftTest.models.STORY.text)).toBe('Keep this.');
+    expect(await window.evaluate(() => window.__noirDraftTest.models.STORY.text)).toBe('Keep this.\n');
   } finally {
     await server.close();
     await application.close();

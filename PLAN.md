@@ -2643,6 +2643,59 @@ transient color-coded in-flight selection highlights, never serialized
 
 Initial conflict handling is intentionally crude: a moved root produces an alternative and no automatic text change. A future explicit merge operation may map or reconcile ranges, but no fuzzy replacement is permitted before then.
 
+## Phase 16 — Notebook drafting protocol
+
+Replace the propose/review/finish agent protocol with a notebook protocol that lets the model write short or very long text by iterating on working drafts. Notebook drafts live entirely inside the turn loop; only submitted notebooks become revisions.
+
+Two flows, chosen by NoirDraft from the placement (`src/renderer/ai/placement.js`), never by the model; the model is given only that flow's tools.
+
+- **Short** (selection or cursor inside a paragraph, including selections that start or end mid-paragraph): `propose_edits` (a batch of sibling alternatives) → an edit review that shows every alternative inline in its surrounding passage between `⟦ ⟧` → `review_edits` (copyedit and approve/retract each at once) → `propose_edits` again or `send_response`. Approved alternatives are sibling revisions; retracted ones are removed.
+- **Block** (selection covers whole paragraphs, or the cursor is on a blank line): the notebook flow below. A cursor at the start or end of a non-empty line is still an inline (short) edit.
+
+Shared chat tools (native tool calls; the only agent mutation protocol):
+
+```text
+comment_before_changes         optional, before changes start only: intent, promise, introduction, early warning about hard parts or quality risks
+send_response                  the closing message; ends the turn. After changes: what was done, why it satisfies the request, limits. May be the first and only call: a doubt about the request, plain chat, or why the request will not be done
+```
+
+Block-flow tools:
+
+```text
+open_notebooks                 grand intent; per notebook: intent, target length, start = selection | blank
+edit_notebook                  batched range operations on one notebook's numbered paragraphs
+review_notebook                model's editorial findings + next_intent (no approve/retract verdict)
+submit_notebook                record the notebook as a revision; still editable afterwards
+clear_notebook                 wipe a notebook (blank or back to the selection); retracts its submitted branch
+finish_changes                 optional: close drafting, submit ready notebooks, return the journey summary (first message, overall intent, issues found along the way, achieved / not achieved) and remind the model what to say; with a single notebook, submit_notebook does this automatically
+```
+
+The reply is paragraphs — each message alone, all change links together — `[comment?] [change links] [response]` in the order they happen (a link sits where its notebook was first submitted or its alternative approved, points at the branch's latest submission, and disappears when retracted). Hints, not gates, steer the model. `send_response` submits ready notebooks first; blocked ones (placeholders, unreviewed, failing review) bounce the response once with reasons, then are left out; in the short flow, unreviewed alternatives bounce once, then are discarded. A notebook emptied by edits or cleared has its submitted revisions retracted immediately.
+
+Notebook model:
+
+- A notebook is a list of paragraphs (blank-line-separated blocks; internal line breaks preserved). Only paragraphs carry ids. Ids are monotonic and never reused, so ids the model saw stay valid after edits.
+- A notebook always holds at least one paragraph; deleting the last leaves a fresh empty paragraph. A notebook that is only one empty paragraph is empty and is dropped.
+- Operations: `replace` (a paragraph or an id range, with one or many paragraphs of text), `delete`, `insert_before`, `insert_after`. A batch is validated atomically against the ids of the last review; any error rejects the whole batch with every error listed and a constructive next step (make smaller edits this round, use more placeholders).
+- A placeholder is a whole paragraph that starts with `[` and ends with `]`: an outline, a reminder, or an edit intent for later. Inline brackets are prose.
+- `start: "selection"` seeds the notebook from the selected text; `start: "blank"` starts empty. With no selection the seed is empty. The model chooses per notebook. Text is always placed at the user's selection or cursor; the model never edits elsewhere.
+
+Review form (always shown after an edit and at open): the grand intent, the active notebook's intent, read-only context before and after the notebook (no ids, not addressable), the notebook with ids, compact summaries of the other notebooks (intent, length, state), automatic checks (length against target, placeholder ids, paragraphs touched since the last review), and the manager's budget status.
+
+`review_notebook` carries the copyedit checklist (sentence integrity, mechanics, clarity, style); every false check names the affected paragraph ids; `next_intent` states the model's plan for the next edit and is shown at the top of the next round. A second `edit_notebook` is rejected until a review has happened.
+
+Submission: `submit_notebook` is rejected while placeholders remain (listing their ids), while the last edit is unreviewed, and when the text equals the base or the notebook's previous submission (a puzzled response asking whether the intent or the notebook id was wrong). The first submission is a sibling agent revision from the base; resubmission is a child of that notebook's previous submission, so alternatives are siblings and their evolution is a chain. Chain heads are the alternatives shown by default; ancestors remain in history.
+
+Budget: from the declared length and paragraph count the manager derives a soft review target and a generously larger hard ceiling (superlinear in paragraph count). Past the soft target the review form nags in escalating tone; nothing blocks. At the hard ceiling the manager ends the turn: it submits notebooks that are reviewed and placeholder-free, discards the rest, and reports both to the model and the author.
+
+Failure: a dropped connection keeps everything already submitted, discards open notebooks, and tells the author which were kept and lost. Per-round snapshots stay in job state for a future evolution timeline; they are not persisted.
+
+`finish_changes` returns each notebook's state (submitted, dropped empty, dropped open), final length against target, unresolved findings, and the reminders for the final chat reply.
+
+No compatibility layer: the earlier `propose_changes`/`review_changes`/`draft_chat`/`approve_chat` names and prompts are gone (the short flow is their successor under the new names).
+
+Modules: `src/renderer/ai/placement.js` (mode classifier, inline rendering), `src/renderer/ai/notebook.js` (pure paragraph model, operations, placeholder detection, budget, review-form rendering), `agent.js` (tool schemas and the turn loop), `AGENT_PROTOCOL` in `app.js`, `test/support/fake-kobold-server.js`.
+
 ---
 
 # 64. Suggested module boundaries

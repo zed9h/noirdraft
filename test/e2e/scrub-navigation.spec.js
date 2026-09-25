@@ -28,7 +28,7 @@ test('Ctrl+Alt+Arrow scrubs the revision graph live and only checks out on relea
 
     // Panel auto-opens, live-previews the parent revision, but current is untouched.
     await expect(window.locator('[data-version-graph]')).toBeVisible();
-    await expect.poll(() => window.evaluate(() => window.__noirDraftTest.model.text)).toBe(original);
+    await expect.poll(() => window.evaluate(() => window.__noirDraftTest.model.text)).toBe(`${original.trim()}\n`);
     expect(await window.evaluate(() => window.__noirDraftTest.getHistory().currentRevision)).toBe(1);
     expect(await window.evaluate(() => window.__noirDraftTest.getScrubMode())).toBe('structural');
 

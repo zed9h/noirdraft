@@ -74,6 +74,24 @@ export class CommitController {
     this.#idleHandle = null;
   }
 
+  // Brings the model to its canonical text with the smallest edit, so a
+  // selection or caret elsewhere in the text is kept (only offsets inside the
+  // changed span are clamped, and later ones shift by the length change).
+  #applyNormalized(result) {
+    const text = this.model.text;
+    if (result === text) return;
+    const limit = Math.min(text.length, result.length);
+    let prefix = 0;
+    while (prefix < limit && text[prefix] === result[prefix]) prefix += 1;
+    let suffix = 0;
+    while (suffix < limit - prefix && text[text.length - 1 - suffix] === result[result.length - 1 - suffix]) suffix += 1;
+    const oldEnd = text.length - suffix;
+    const inserted = result.slice(prefix, result.length - suffix);
+    const delta = result.length - text.length;
+    const map = (offset) => (offset <= prefix ? offset : offset >= oldEnd ? offset + delta : Math.min(prefix + inserted.length, offset));
+    this.model.replace(prefix, oldEnd, inserted, { origin: 'history', selectionStart: map(this.model.selectionStart), selectionEnd: map(this.model.selectionEnd) });
+  }
+
   async commitPending({ origin = 'user', note = null } = {}) {
     this.#cancelIdle();
     // this.pending only means "nothing new since the last flush" — a prior
@@ -87,9 +105,7 @@ export class CommitController {
     this.beforeCommit();
     const base = normalizeVisibleRootText(this.pendingBase);
     const result = normalizeVisibleRootText(this.model.text);
-    if (result !== this.model.text) {
-      this.model.replace(0, this.model.text.length, result, { origin: 'history' });
-    }
+    this.#applyNormalized(result);
     this.pending = false;
     this.pendingBase = null;
     this.undoOperations = [];

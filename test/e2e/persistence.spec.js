@@ -148,8 +148,8 @@ test('STORY:REV and METADATA:REV persist and reload as independent current graph
     }, filePath);
     expect(saved.contents).toContain('STORY:REV\n---------');
     expect(saved.contents).toContain('METADATA:REV\n------------');
-    expect(saved.story).toEqual({ current: 1, text: 'Story revision.' });
-    expect(saved.metadata).toEqual({ current: 1, text: '# Notes\n\nMetadata revision.' });
+    expect(saved.story).toEqual({ current: 1, text: 'Story revision.\n' });
+    expect(saved.metadata).toEqual({ current: 1, text: '# Notes\n\nMetadata revision.\n' });
     expect(await readFile(filePath, 'utf8')).toBe(saved.contents);
   } finally {
     await application.close();

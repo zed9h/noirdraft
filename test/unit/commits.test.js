@@ -35,7 +35,7 @@ test('user edits stay transient until explicit save commits one authorship inter
   const revision = await controller.explicitSave('Drafted two words.');
   assert.equal(revision.id, 1);
   assert.equal(revision.note, 'Drafted two words.');
-  assert.equal(await reconstructRevision(history, 1), 'base one two');
+  assert.equal(await reconstructRevision(history, 1), 'base one two\n');
 });
 
 test('idle, close, and structural boundaries commit pending work', async () => {
@@ -85,7 +85,7 @@ test('local undo/redo operates before durable graph traversal', async () => {
   await controller.explicitSave();
   const result = await controller.undo();
   assert.deepEqual(result, { type: 'history', revisionId: 0 });
-  assert.equal(model.text, 'base');
+  assert.equal(model.text, 'base\n');
   assert.equal(history.currentRevision, 0);
 });
 
@@ -97,9 +97,9 @@ test('user→agent and agent→user transitions create distinct ordered revision
   });
   assert.equal(agent.origin, 'agent');
   assert.deepEqual([...history.revisions.values()].map(({ origin }) => origin), ['import', 'user', 'agent']);
-  assert.equal(await reconstructRevision(history, 1), 'base user');
-  assert.equal(await reconstructRevision(history, 2), 'agent result');
-  assert.equal(model.text, 'agent result');
+  assert.equal(await reconstructRevision(history, 1), 'base user\n');
+  assert.equal(await reconstructRevision(history, 2), 'agent result\n');
+  assert.equal(model.text, 'agent result\n');
 });
 
 test('editing after undo preserves the abandoned branch and requires Redo choice', async () => {
@@ -117,11 +117,11 @@ test('editing after undo preserves the abandoned branch and requires Redo choice
   assert.equal(redo.type, 'choose');
   assert.deepEqual(redo.choices.map(({ id }) => id), [1, 2]);
   assert.equal(history.currentRevision, 0);
-  assert.equal(model.text, 'base');
+  assert.equal(model.text, 'base\n');
 
   assert.deepEqual(await controller.redo(2), { type: 'history', revisionId: 2 });
-  assert.equal(model.text, 'base alternative');
-  assert.equal(await reconstructRevision(history, 1), 'base first');
+  assert.equal(model.text, 'base alternative\n');
+  assert.equal(await reconstructRevision(history, 1), 'base first\n');
 });
 
 test('no-op edits do not create durable revisions', async () => {
@@ -129,4 +129,20 @@ test('no-op edits do not create durable revisions', async () => {
   model.replace(0, 4, 'base');
   assert.equal(await controller.explicitSave(), null);
   assert.equal(history.revisions.size, 1);
+});
+
+test('normalizing the model on commit keeps the selection and adds the empty last row after the caret', async () => {
+  const { model, controller } = await setup('The window broke.');
+  model.replace(0, 0, '');
+  model.replace(17, 17, ' Loudly.', { selectionStart: 4, selectionEnd: 10 });
+  assert.equal(model.text, 'The window broke. Loudly.');
+  await controller.explicitSave();
+  assert.equal(model.text, 'The window broke. Loudly.\n');
+  assert.deepEqual([model.selectionStart, model.selectionEnd], [4, 10]);
+  model.replace(model.text.length, model.text.length, '', { selectionStart: 25, selectionEnd: 25 });
+  model.replace(25, 25, '\n\n\n');
+  await controller.explicitSave();
+  assert.equal(model.text, 'The window broke. Loudly.\n');
+  // The caret was inside the collapsed trailing rows, so it lands on the one remaining empty row.
+  assert.deepEqual([model.selectionStart, model.selectionEnd], [26, 26]);
 });

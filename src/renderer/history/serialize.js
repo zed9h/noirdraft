@@ -50,10 +50,10 @@ function findHeadingsAtLevel(source, level) {
     const line = lineMatch[0];
     if (line === '' && lineStart === source.length) break;
     if (fence) {
-      if (new RegExp(`^ {0,3}${fence}{3,}[ \\t]*(?:\\r?\\n)?$`).test(line)) fence = null;
+      if (new RegExp(`^ {0,3}${fence.char}{${fence.length},}[ \\t]*(?:\\r?\\n)?$`).test(line)) fence = null;
     } else {
       const opening = line.match(/^ {0,3}(`{3,}|~{3,})/);
-      if (opening) fence = opening[1][0];
+      if (opening) fence = { char: opening[1][0], length: opening[1].length };
       else {
         pattern.lastIndex = 0;
         const match = pattern.exec(line);

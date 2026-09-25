@@ -83,24 +83,34 @@ export function startFakeKoboldServer(options = {}) {
       const isGreeting = contextResult.includes('Say hello.');
       const toolMessages = payload.messages?.filter((message) => message.role === 'tool') ?? [];
       const lastTool = toolMessages.at(-1)?.content ?? '';
+      const isShort = payload.tools?.some((item) => item.function?.name === 'propose_edits');
       const revisionIds = [...lastTool.matchAll(/----- REVISION #(\d+) -----/g)].map((match) => Number(match[1]));
+      const notebookNumber = Number(lastTool.match(/Notebook (\d+) (?:of \d+|is recorded)/)?.[1] ?? 1);
       const call = (name, argumentsObject, index = 1) => ({ id: `call_${toolMessages.length + 1}_${index}`, type: 'function', function: { name, arguments: JSON.stringify(argumentsObject) } });
       const calls = (...items) => ({ choices: [{ message: { role: 'assistant', content: null, tool_calls: items } }] });
       const reply = !payload.tools?.length
         ? { choices: [{ message: { role: 'assistant', content: tokens.join(''), tool_calls: [] }, finish_reason: 'stop' }] }
         : toolMessages.length === 0
         ? isGreeting
-          ? calls(call('draft_chat', { message: tokens.join('') }))
-          : calls(call('propose_changes', { intent: 'Provide each requested replacement as a distinct sibling.', alternative_count: replacements.length, proposals: replacements.map((text) => ({ text })) }))
-        : isGreeting
-        ? calls(call('approve_chat', {}))
-        : lastTool.includes('NOIRDRAFT CHANGE REVIEW') && revisionIds.length
-        ? calls(call('review_changes', { set_overview: 'The proposals are grammatical and appropriate in context.', reviews: revisionIds.map((revision_id) => ({ revision_id, copyedit: { sentence_integrity: true, mechanics: true, clarity: true, style: true }, comment: 'Grammatical and appropriate in context.', verdict: 'approve' })) }))
-        : lastTool.includes('NOIRDRAFT PROGRESS')
+          ? calls(call('send_response', { message: tokens.join('') }))
+          : isShort
+          ? calls(call('propose_edits', { intent: 'Provide each requested replacement as a distinct alternative.', alternative_count: replacements.length, proposals: replacements.map((text) => ({ text })) }))
+          : calls(call('open_notebooks', { intent: 'Provide each requested replacement as a distinct alternative.', notebooks: replacements.map((_, index) => ({ intent: `Alternative ${index + 1}`, target_words: 1, start: 'blank' })) }))
+        : lastTool.includes('NOIRDRAFT WORK SUMMARY')
+        ? calls(call('send_response', { message: 'Done.' }))
+        : lastTool.includes('NOIRDRAFT EDIT REVIEW') && revisionIds.length
+        ? calls(call('review_edits', { set_overview: 'The alternatives are grammatical and appropriate in context.', reviews: revisionIds.map((revision_id) => ({ revision_id, copyedit: { sentence_integrity: true, mechanics: true, clarity: true, style: true }, comment: 'Grammatical and appropriate in context.', verdict: 'approve' })) }))
+        : lastTool.includes('NOIRDRAFT NOTEBOOK REVIEW') && lastTool.includes('Next: call review_notebook')
+        ? calls(call('review_notebook', { notebook: notebookNumber, copyedit: { sentence_integrity: true, mechanics: true, clarity: true, style: true }, next_intent: 'Submit this notebook.' }))
+        : lastTool.includes('NOIRDRAFT NOTEBOOK REVIEW') && lastTool.includes('Your plan from the last review')
+        ? calls(call('submit_notebook', { notebook: notebookNumber }))
+        : (lastTool.includes('NOIRDRAFT NOTEBOOK REVIEW') && notebookNumber <= replacements.length) || (lastTool.includes('NOIRDRAFT SUBMITTED') && notebookNumber < replacements.length)
+        ? calls(call('edit_notebook', { notebook: lastTool.includes('NOIRDRAFT SUBMITTED') ? notebookNumber + 1 : notebookNumber, operations: [{ op: 'replace', paragraph_id: 1, text: replacements[lastTool.includes('NOIRDRAFT SUBMITTED') ? notebookNumber : notebookNumber - 1] }] }))
+        : lastTool.includes('NOIRDRAFT SUBMITTED')
         ? calls(call('finish_changes', {}))
-        : lastTool.includes('NOIRDRAFT CHANGE SET COMPLETE')
-        ? calls(call('draft_chat', { message: 'Done.' }))
-        : calls(call('approve_chat', {}));
+        : lastTool.includes('NOIRDRAFT WORK SUMMARY')
+        ? calls(call('send_response', { message: 'Done.' }))
+        : calls(call('send_response', { message: 'Done.' }));
       if (tokenDelayMs > 0) return setTimeout(() => sendJSON(response, 200, reply), tokenDelayMs);
       return sendJSON(response, 200, reply);
     }
@@ -148,7 +158,7 @@ export function startFakeKoboldServer(options = {}) {
       const { port } = server.address();
       resolve({
         url: `http://127.0.0.1:${port}`,
-        close: () => new Promise((done) => server.close(done)),
+        close: () => new Promise((done) => { server.close(done); server.closeAllConnections?.(); }),
         getLastGenerateRequest: () => lastGenerateRequest,
         getChatRequests: () => chatRequests,
       });

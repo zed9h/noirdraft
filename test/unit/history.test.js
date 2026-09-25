@@ -14,7 +14,9 @@ import { hashStory } from '../../src/renderer/history/hash.js';
 import { parseHistories, parseHistory, serializeHistories, serializeHistory } from '../../src/renderer/history/serialize.js';
 
 test('SHA-256 hashes canonical UTF-8 visible-root contents deterministically', async () => {
-  assert.equal(await hashStory('abc'), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+  // Canonical visible-root text ends with exactly one line break, so 'abc' hashes as 'abc\n'.
+  assert.equal(await hashStory('abc'), 'edeaaff3f1774ad2888673770c6d64097e391bc362d7d6fb34982ddf0efd18cb');
+  assert.equal(await hashStory('abc\n\n\n'), await hashStory('abc'));
   assert.equal(await hashStory('\n line\r\n'), await hashStory('line'));
 });
 
@@ -65,7 +67,7 @@ test('history commits reconstruct, checkpoint, and preserve branches', async () 
   await commitRevision(history, '# One\nText.\n', '# One\nText changed.\n', {
     timestamp: '2026-09-18T10:02:00.000Z', origin: 'agent',
   });
-  assert.equal(await reconstructRevision(history, 2), '# One\nText changed.');
+  assert.equal(await reconstructRevision(history, 2), '# One\nText changed.\n');
 
   history.currentRevision = 1;
   await commitRevision(history, '# One\nText.\n', '# One\nAlternative.\n', {
@@ -73,8 +75,8 @@ test('history commits reconstruct, checkpoint, and preserve branches', async () 
   });
   assert.equal(history.revisions.get(3).payloadType, 'checkpoint');
   assert.deepEqual(childrenOf(history, 1).map(({ id }) => id), [2, 3]);
-  assert.equal(await reconstructRevision(history, 2), '# One\nText changed.');
-  assert.equal(await reconstructRevision(history, 3), '# One\nAlternative.');
+  assert.equal(await reconstructRevision(history, 2), '# One\nText changed.\n');
+  assert.equal(await reconstructRevision(history, 3), '# One\nAlternative.\n');
 });
 
 test('history serialization round-trips exact checkpoints, patches, notes, and current node', async () => {
@@ -89,9 +91,9 @@ test('history serialization round-trips exact checkpoints, patches, notes, and c
   const parsed = parseHistory(serialized);
   assert.equal(parsed.currentRevision, 1);
   assert.equal(parsed.checkpointInterval, 50);
-  assert.equal(parsed.revisions.get(0).payload, initial);
+  assert.equal(parsed.revisions.get(0).payload, `${initial}\n`);
   assert.equal(parsed.revisions.get(1).note, 'Added the ending.');
-  assert.equal(await reconstructRevision(parsed, 1), `${initial}\nNew ending.`);
+  assert.equal(await reconstructRevision(parsed, 1), `${initial}\nNew ending.\n`);
   assert.equal(serializeHistory(parsed), serialized);
 });
 
@@ -106,8 +108,8 @@ test('root-scoped VERSIONS graphs use canonical Setext groups and round-trip ind
   assert.match(source, /^## Revision 0$/m);
   const parsed = parseHistories(source);
   assert.equal(parsed.legacy, false);
-  assert.equal(await reconstructRevision(parsed.STORY, 1), 'Story changed');
-  assert.equal(await reconstructRevision(parsed.METADATA, 1), '# Characters\n\nMaria');
+  assert.equal(await reconstructRevision(parsed.STORY, 1), 'Story changed\n');
+  assert.equal(await reconstructRevision(parsed.METADATA, 1), '# Characters\n\nMaria\n');
   assert.throws(() => parseHistories(serializeHistory(story)));
 });
 
@@ -133,8 +135,8 @@ test('current STORY verification distinguishes legitimate external edits', async
   assert.equal((await verifyCurrentStory(history, '# Story\nOriginal.\n')).matches, true);
   const mismatch = await verifyCurrentStory(history, '# Story\nEdited outside.\n');
   assert.equal(mismatch.matches, false);
-  assert.equal(mismatch.recordedStory, '# Story\nOriginal.');
-  assert.equal(mismatch.externalStory, '# Story\nEdited outside.');
+  assert.equal(mismatch.recordedStory, '# Story\nOriginal.\n');
+  assert.equal(mismatch.externalStory, '# Story\nEdited outside.\n');
 
   const revision = await recordExternalEdit(history, mismatch.externalStory, {
     timestamp: '2026-09-18T11:00:00.000Z',
@@ -151,7 +153,7 @@ test('metadata-root recovery uses the same strict graph contract', async () => {
   assert.equal(mismatch.matches, false);
   const revision = await recordExternalEdit(history, external);
   assert.equal(revision.origin, 'recovery');
-  assert.equal(await reconstructRevision(history, history.currentRevision), external.trim());
+  assert.equal(await reconstructRevision(history, history.currentRevision), external);
 });
 
 test('parser rejects duplicate IDs and missing parents', async () => {
@@ -181,4 +183,15 @@ test('reconstruction rejects revision cycles', async () => {
     reconstructRevision(history, 1),
     (error) => error.code === 'REVISION_CYCLE',
   );
+});
+
+test('a story containing shorter code fences and headings survives a history round trip', async () => {
+  const story = 'Intro.\n\n```\ncode\n```\n\n# Chapter\n\nText.\n\n````\nnested ```\n````\n';
+  const history = await createHistory(story, { checkpointInterval: 2 });
+  const base = await reconstructRevision(history, 0);
+  const changed = base.replace('Text.', 'More text.');
+  await commitRevision(history, base, changed, { origin: 'user' });
+  await commitRevision(history, changed, `${changed}\n# After\n`, { origin: 'user' });
+  const parsed = parseHistory(serializeHistory(history));
+  for (const id of history.revisions.keys()) assert.equal(await reconstructRevision(parsed, id), await reconstructRevision(history, id));
 });

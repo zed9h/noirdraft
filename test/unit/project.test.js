@@ -7,6 +7,7 @@ import {
 } from '../../src/renderer/project/parse.js';
 import {
   demoteVisibleHeadings,
+  normalizeVisibleRootText,
   projectRoot,
   promoteStoredHeadings,
 } from '../../src/renderer/project/projection.js';
@@ -55,7 +56,8 @@ test('STORY projection normalizes LF, boundary whitespace, and Setext headings',
   const project = parseProjectDocument(source);
   const story = projectRoot(project, 'STORY');
   assert.equal(story.separator, '\n');
-  assert.equal(story.text, '## Chapter\n```md\n## literal\n```\n\\## escaped');
+  // A blank line before the end is content: the last empty row is kept.
+  assert.equal(story.text, '## Chapter\n```md\n## literal\n```\n\\## escaped\n');
 });
 
 test('heading projection keeps ATX levels H1-H6 and normalizes Setext input', () => {
@@ -70,7 +72,7 @@ test('serializer replaces projections while preserving unknown roots and order',
     STORY: '# New chapter\nText.',
     METADATA: '# Style\nSparse.\n',
   });
-  assert.equal(serialized, 'METADATA\n========\n\n# Style\nSparse.\nUNKNOWN\n=======\nKeep exactly.\n\nSTORY\n=====\n\n# New chapter\nText.\n');
+  assert.equal(serialized, 'METADATA\n========\n\n# Style\nSparse.\n\nUNKNOWN\n=======\nKeep exactly.\n\nSTORY\n=====\n\n# New chapter\nText.\n');
 });
 
 test('serializer creates missing optional roots using the existing line ending', () => {
@@ -122,4 +124,17 @@ test('heading projection round-trips randomized supported story structures', () 
     const visible = lines.join('');
     assert.equal(promoteStoredHeadings(demoteVisibleHeadings(visible)), visible);
   }
+});
+
+test('the story always ends with exactly one empty row, and it survives a save/load round trip', () => {
+  const source = 'STORY\n=====\n\nOld.\nMETADATA\n========\n\nOld notes.\n';
+  for (const [visible, expected] of [['Line one.', 'Line one.\n'], ['Line one.\n', 'Line one.\n'], ['One.\n\nTwo.\n\n\n', 'One.\n\nTwo.\n'], ['', '']]) {
+    for (const root of ['STORY', 'METADATA']) {
+      const serialized = serializeProjectDocument(parseProjectDocument(source), { [root]: visible });
+      assert.equal(projectRoot(parseProjectDocument(serialized), root).text, expected, `${root}: ${JSON.stringify(visible)}`);
+    }
+  }
+  assert.equal(normalizeVisibleRootText('  a\n\n\n  '), 'a\n');
+  assert.equal(normalizeVisibleRootText('\n\n  a  '), 'a\n');
+  assert.equal(normalizeVisibleRootText('  \n  '), '');
 });

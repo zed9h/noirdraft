@@ -40,7 +40,17 @@ export function demoteVisibleHeadings(source) {
 
 /** Canonical content used by editors, diffs, and revision hashes. */
 export function normalizeVisibleRootText(source) {
-  return promoteStoredHeadings(String(source).replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')).trim();
+  return endWithEmptyRow(promoteStoredHeadings(String(source).replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')));
+}
+
+/**
+ * Trims surrounding whitespace and ends non-empty text with exactly one line
+ * break: the empty last row an author writes on or expands from. Added when
+ * missing, collapsed when repeated; empty text stays empty.
+ */
+export function endWithEmptyRow(text) {
+  const body = String(text).trim();
+  return body ? `${body}\n` : '';
 }
 
 export function splitRootSeparator(content, lineEnding = '\n') {

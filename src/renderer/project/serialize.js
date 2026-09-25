@@ -1,16 +1,15 @@
 import { RESERVED_ROOTS } from './parse.js';
-import { demoteVisibleHeadings, splitRootSeparator } from './projection.js';
+import { demoteVisibleHeadings, endWithEmptyRow, splitRootSeparator } from './projection.js';
 
 function normalizedReplacements(replacements) {
   return replacements instanceof Map ? replacements : new Map(Object.entries(replacements ?? {}));
 }
 
 function appendRoot(output, name, visibleValue, lineEnding) {
-  const visible = (name === 'STORY' || name === 'METADATA'
-    ? demoteVisibleHeadings(String(visibleValue)).trim()
-    : String(visibleValue).trim());
+  const rowRoot = name === 'STORY' || name === 'METADATA';
+  const visible = rowRoot ? endWithEmptyRow(demoteVisibleHeadings(String(visibleValue))) : String(visibleValue).trim();
   if (output && !output.endsWith(lineEnding)) output += lineEnding;
-  return `${output}${name}${lineEnding}${'='.repeat(name.length)}${lineEnding}${lineEnding}${visible}${lineEnding}`;
+  return `${output}${name}${lineEnding}${'='.repeat(name.length)}${lineEnding}${lineEnding}${visible}${rowRoot && visible ? '' : lineEnding}`;
 }
 
 export function serializeProjectDocument(project, replacements = new Map()) {
@@ -38,13 +37,14 @@ export function serializeProjectDocument(project, replacements = new Map()) {
     }
     const visible = String(changes.get(segment.name));
     const { separator } = splitRootSeparator(segment.content, project.lineEnding);
-    let stored = (segment.name === 'STORY' || segment.name === 'METADATA'
-      ? demoteVisibleHeadings(visible).trim()
-      : visible.trim());
-    if (index < project.segments.length - 1 && stored && !stored.endsWith(project.lineEnding)) {
-      stored += project.lineEnding;
-    }
-    output += segment.headingSource + (separator || project.lineEnding) + stored + (stored && index === project.segments.length - 1 ? project.lineEnding : '');
+    const rowRoot = segment.name === 'STORY' || segment.name === 'METADATA';
+    const last = index === project.segments.length - 1;
+    let stored = rowRoot ? endWithEmptyRow(demoteVisibleHeadings(visible)) : visible.trim();
+    // STORY and METADATA already end with their empty row; the others end with one line break.
+    // A blank line separates a root from the heading that follows it.
+    if (stored && !rowRoot) stored += project.lineEnding;
+    else if (stored && !last) stored += project.lineEnding;
+    output += segment.headingSource + (separator || project.lineEnding) + stored;
   }
 
   for (const name of pending) {

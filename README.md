@@ -15,6 +15,8 @@ Undo/Redo handles recent local edits first; saved editing intervals appear as a 
 
 Start KoboldCpp separately, then set its server URL in the top-bar overflow menu. Use **App info…** there to check connection status, model name, and context length without adding persistent diagnostics to the writing view. The CHAT sidebar is its own Markdown editor. A disconnected model server never prevents ordinary writing or saving.
 
+When you ask for a change inside a paragraph, the model proposes a batch of short alternatives and reviews them inline in their sentence. For whole paragraphs or a blank line it drafts in one or more *notebooks*: numbered-paragraph working drafts that it edits, reviews, and refines over several rounds (using `[bracketed]` paragraphs as placeholders for outlines and deferred work) before submitting. Alternatives are sibling revisions; a notebook submitted again continues its own chain. Text lands only at your selection or cursor, and stays a proposal until you apply it.
+
 ## Project format
 
 NoirDraft uses Setext H1 headings for its structural roots, leaving all six
@@ -34,7 +36,7 @@ METADATA
 ========
 ```
 
-There is no database, proprietary project file, or binary sidecar. Files are UTF-8 without a BOM and are normalized to LF on load/save. STORY and METADATA content is trimmed at its outer boundaries and versioned exactly as shown in the editor. See [PLAN.md](PLAN.md) for the complete contract.
+There is no database, proprietary project file, or binary sidecar. Files are UTF-8 without a BOM and are normalized to LF on load/save. STORY and METADATA content is trimmed at its outer boundaries and always ends with exactly one empty last row (added if missing, never more than one), so there is always a row to continue writing on; it is versioned exactly as shown in the editor. See [PLAN.md](PLAN.md) for the complete contract.
 
 ## Development
 

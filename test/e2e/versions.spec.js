@@ -43,11 +43,17 @@ test('the bottom Versions panel renders explorable graph nodes and pinned variat
 
     await inspector.getByRole('button', { name: 'Checkout' }).first().click();
     await expect(graph.locator('.graph-node[data-revision-id="1"]')).toHaveClass(/current/);
+    // Checkout re-renders the pane more than once; nothing may be duplicated, and the diff stays a diff.
+    await window.waitForTimeout(300);
+    await expect(inspector.locator('.pinned-variation')).toHaveCount(2);
+    await expect(inspector.locator('.pinned-comparison')).toHaveCount(1);
+    await expect(inspector.locator('.variation-diff')).toHaveCount(1);
+    await expect(inspector.locator('[data-payload-type="patch"]').first()).toContainText('@@');
     const state = await window.evaluate(() => ({
       story: window.__noirDraftTest.model.text,
       current: window.__noirDraftTest.getHistory().currentRevision,
     }));
-    expect(state).toEqual({ story: `${original}\nLinear edit.`, current: 1 });
+    expect(state).toEqual({ story: `${original.trim()}\nLinear edit.\n`, current: 1 });
   } finally {
     await application.close();
   }
