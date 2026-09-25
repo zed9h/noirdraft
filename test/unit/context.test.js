@@ -57,7 +57,7 @@ test('composeContext includes only explicitly supplied chat history', () => {
     storyText,
     target: 'The room was cold.',
     request: 'Rewrite.',
-    references: [{ label: 'STORY/Chapter/Earlier scene', text: 'It had rained all week.' }],
+    references: [{ id: 'passage:3', label: 'STORY/Chapter/Earlier scene', text: 'It had rained all week.' }],
   });
   assert.ok(withReference.staticPrompt.includes('<reference label="REFERENCE STORY/Chapter/Earlier scene"><![CDATA[It had rained all week.]]></reference>'));
 

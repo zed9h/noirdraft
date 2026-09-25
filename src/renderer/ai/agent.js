@@ -59,7 +59,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, r
       message = response.message; calls = message.tool_calls;
     } catch (cause) {
       if (cause?.name === 'AbortError') throw new AgentError('Generation was cancelled.', { code: 'ABORTED', cause, rawText: raw });
-      throw new AgentError('KoboldCpp generation failed.', { code: cause instanceof KoboldError ? cause.code : 'GENERATE_FAILED', cause, rawText: cause?.rawText ?? raw });
+      throw new AgentError(`KoboldCpp generation failed.${cause?.message ? ` ${cause.message}` : ''}`, { code: cause instanceof KoboldError ? cause.code : 'GENERATE_FAILED', cause, rawText: cause?.rawText ?? raw });
     }
   };
   await getResponse();

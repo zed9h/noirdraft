@@ -16,6 +16,7 @@ export class CommitController {
     onError = () => {},
     onChange = () => {},
     onCommit = () => {},
+    beforeCommit = () => {},
   }) {
     this.history = history;
     this.model = model;
@@ -25,6 +26,7 @@ export class CommitController {
     this.onError = onError;
     this.onChange = onChange;
     this.onCommit = onCommit;
+    this.beforeCommit = beforeCommit;
     this.pending = false;
     this.pendingBase = null;
     this.undoOperations = [];
@@ -82,6 +84,7 @@ export class CommitController {
     // history.currentRevision) must still wait for that to land, or it can
     // observe model text ahead of the revision that's supposed to record it.
     if (!this.pending) return this.commitInFlight;
+    this.beforeCommit();
     const base = normalizeVisibleRootText(this.pendingBase);
     const result = normalizeVisibleRootText(this.model.text);
     if (result !== this.model.text) {

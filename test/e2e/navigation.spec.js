@@ -16,13 +16,16 @@ test('Story and Metadata folds keep both outlines available while pins remain vi
       refreshSidebar();
     });
 
-    const storyOutline = window.getByLabel('Story outline');
-    const metadataOutline = window.getByLabel('Metadata outline');
+    const storyOutline = window.getByLabel('Story outline', { exact: true });
+    const metadataOutline = window.getByLabel('Metadata outline', { exact: true });
     await expect(storyOutline.getByRole('button', { name: 'Chapter', exact: true })).toBeVisible();
     await expect(storyOutline.getByRole('button', { name: 'Scene', exact: true })).toBeVisible();
     await expect(metadataOutline.getByRole('button', { name: 'Maria', exact: true })).toBeVisible();
     await storyOutline.getByRole('button', { name: 'Scene', exact: true }).click();
-    expect(await window.evaluate(() => window.__noirDraftTest.models.STORY.selectionStart)).toBe(11);
+    // Clicking a section returns to the caret's last position in it (the setup
+    // edit left the caret at the end of "Scene"), so assert it landed inside
+    // the section rather than exactly on its heading.
+    expect(await window.evaluate(() => window.__noirDraftTest.models.STORY.selectionStart)).toBeGreaterThanOrEqual(11);
 
     await window.getByRole('button', { name: 'Metadata', exact: true }).click();
     await expect(window.getByRole('textbox', { name: 'Metadata source' })).toBeVisible();
@@ -30,17 +33,19 @@ test('Story and Metadata folds keep both outlines available while pins remain vi
     await metadataOutline.getByRole('button', { name: 'Pin METADATA/Characters/Maria' }).click();
     const pinnedSource = await window.evaluate(() => window.__noirDraftTest.models.METADATA.text);
     expect(pinnedSource).toContain('# Application\n\n## Context\n\n- METADATA/Characters/Maria\n');
-    await expect(window.getByLabel('Context pins')).toContainText('1 context pin');
+    // Pin state is shown on the outline's own toggle.
+    await expect(metadataOutline.getByRole('button', { name: 'Unpin METADATA/Characters/Maria' })).toBeVisible();
 
+    // A pinned row is prefixed with a pin marker, so it is located by its outline entry.
     await metadataOutline.getByRole('button', { name: 'Collapse METADATA/Characters' }).click();
-    await expect(metadataOutline.getByRole('button', { name: 'Maria', exact: true })).toBeVisible();
-    await expect(window.getByLabel('Context pins').getByRole('button', { name: 'METADATA/Characters/Maria' })).toBeVisible();
+    await expect(metadataOutline.locator('.outline-target', { hasText: 'Maria' })).toBeVisible();
+    await expect(metadataOutline.getByRole('button', { name: 'Unpin METADATA/Characters/Maria' })).toBeVisible();
 
     const metadataFold = window.getByRole('button', { name: 'Collapse Metadata', exact: true });
     await metadataFold.focus();
     await window.keyboard.press('ArrowLeft');
-    await expect(metadataOutline.getByRole('button', { name: 'Maria', exact: true })).toBeVisible();
-    await expect(window.getByLabel('Context pins')).toContainText('1 context pin');
+    await expect(metadataOutline.locator('.outline-target', { hasText: 'Maria' })).toBeVisible();
+    await expect(metadataOutline.getByRole('button', { name: 'Unpin METADATA/Characters/Maria' })).toBeVisible();
     await window.keyboard.press('ArrowRight');
     await expect(metadataOutline).toBeVisible();
 
@@ -49,8 +54,13 @@ test('Story and Metadata folds keep both outlines available while pins remain vi
       const from = models.METADATA.text.indexOf('Maria');
       editors.METADATA.replace(from, from + 5, 'Marie');
     });
-    await expect(window.getByLabel('Context pins')).toContainText('unresolved: METADATA/Characters/Maria');
-    expect(await window.evaluate(() => window.__noirDraftTest.models.METADATA.text)).toContain('- METADATA/Characters/Maria');
+    // The renamed heading no longer matches the stored pin, so once its fold is
+    // expanded it is offered as an unpinned heading.
+    await metadataOutline.getByRole('button', { name: 'Expand METADATA/Characters' }).click();
+    await expect(metadataOutline.getByRole('button', { name: 'Pin METADATA/Characters/Marie' })).toBeVisible();
+    // At the next commit the stale pin is dropped from the application context.
+    await window.evaluate(() => window.__noirDraftTest.getMetadataCommitController().explicitSave());
+    await expect.poll(() => window.evaluate(() => window.__noirDraftTest.models.METADATA.text)).not.toContain('- METADATA/Characters/Maria');
   } finally {
     await application.close();
   }
@@ -74,7 +84,7 @@ test('the outline highlight follows the caret while shift extends a selection, a
       return { one: oneOffset, two: text.indexOf('# Two'), three: text.indexOf('# Three') };
     }, source);
 
-    const storyOutline = window.getByLabel('Story outline');
+    const storyOutline = window.getByLabel('Story outline', { exact: true });
     const isCurrentLeaf = (name) => storyOutline.getByRole('button', { name, exact: true })
       .evaluate((element) => element.closest('.outline-row').classList.contains('is-current-leaf'));
 

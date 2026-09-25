@@ -200,7 +200,7 @@ test('a selected middle-pane range becomes a queued chat rewrite while Send rema
     await window.waitForFunction(() => Boolean(window.__noirDraftTest?.getCommitController()));
     await window.evaluate(() => {
       const { editors, models } = window.__noirDraftTest;
-      editors.STORY.replace(0, models.STORY.text.length, 'The window broke.\n');
+      editors.STORY.replace(0, models.STORY.text.length, 'The window broke.');
       editors.STORY.setSelection(0, 'The window broke.'.length);
     });
     await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
@@ -248,7 +248,7 @@ test('a pending rewrite folds its selection context and keeps the chosen fold wh
     await window.waitForFunction(() => Boolean(window.__noirDraftTest?.getCommitController()));
     await window.evaluate(() => {
       const { editors, models } = window.__noirDraftTest;
-      editors.STORY.replace(0, models.STORY.text.length, 'Fold this selected passage.\n');
+      editors.STORY.replace(0, models.STORY.text.length, 'Fold this selected passage.');
       editors.STORY.setSelection(0, 'Fold this selected passage.'.length);
     });
     await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
@@ -271,19 +271,22 @@ test('a pending rewrite folds its selection context and keeps the chosen fold wh
   }
 });
 
-test('ordinary chat shows its live plan and raw response while it is pending', async () => {
+test('ordinary chat shows its status and raw response while it is pending', async () => {
   const application = await electron.launch({
     args: [path.resolve('.')],
     env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
   });
-  const server = await startFakeKoboldServer({ tokens: ['Plain ', 'chat ', 'reply.'], tokenDelayMs: 250 });
+  const server = await startFakeKoboldServer({ tokens: ['Plain ', 'chat ', 'reply.'], tokenDelayMs: 600 });
   try {
     const window = await application.firstWindow();
     await window.waitForFunction(() => Boolean(window.__noirDraftTest?.getCommitController()));
     await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
     await window.getByLabel('Chat prompt').fill('Say hello.');
     await window.getByRole('button', { name: 'Send' }).click();
-    await expect(window.getByLabel('Chat history')).toContainText('Plain chat reply.');
+    // While the protocol is still running the card shows only its status; the
+    // drafted reply appears once the turn completes. The raw response is
+    // inspectable meanwhile and fills in as the model's calls arrive.
+    await expect(window.getByLabel('Chat history')).toContainText('Thinking…');
     await window.getByRole('button', { name: 'Show raw response for pending turn 1' }).click();
     const pendingRawDialog = window.locator('[data-context-dialog]');
     await expect(pendingRawDialog.locator('.context-prompt')).toContainText('draft_chat');
@@ -366,7 +369,7 @@ test('a queued rewrite can be cancelled from its call row and releases its highl
     await window.waitForFunction(() => Boolean(window.__noirDraftTest?.getCommitController()));
     await window.evaluate(() => {
       const { editors, models } = window.__noirDraftTest;
-      editors.STORY.replace(0, models.STORY.text.length, 'Keep this.\n');
+      editors.STORY.replace(0, models.STORY.text.length, 'Keep this.');
       editors.STORY.setSelection(0, 'Keep this.'.length);
     });
     await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
@@ -378,7 +381,7 @@ test('a queued rewrite can be cancelled from its call row and releases its highl
     await job.getByRole('button', { name: /Cancel call in turn/ }).click();
     await expect(job).toHaveClass(/chat-call-cancelled/);
     await expect(window.locator('#story-editor [class*="agent-target-highlight"]')).toHaveCount(0);
-    expect(await window.evaluate(() => window.__noirDraftTest.models.STORY.text)).toBe('Keep this.\n');
+    expect(await window.evaluate(() => window.__noirDraftTest.models.STORY.text)).toBe('Keep this.');
   } finally {
     await server.close();
     await application.close();

@@ -30,14 +30,23 @@ function parseStreamRecord(record) {
  * or misbehaving server can never affect the editor itself.
  */
 export class KoboldClient {
-  constructor(baseUrl, { fetch: fetchImpl = globalThis.fetch.bind(globalThis) } = {}) {
+  constructor(baseUrl, { fetch: fetchImpl = globalThis.fetch.bind(globalThis), apiKey = '' } = {}) {
     this.baseUrl = String(baseUrl).replace(/\/+$/, '');
     this.fetch = fetchImpl;
+    this.apiKey = String(apiKey ?? '').trim();
+  }
+
+  #headers() {
+    return this.apiKey
+      ? { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` }
+      : { 'Content-Type': 'application/json' };
   }
 
   async checkAvailability() {
     try {
-      const response = await this.fetch(`${this.baseUrl}/api/v1/model`);
+      // Only this cheap probe has a timeout: generation calls may legitimately
+      // spend minutes processing a large prompt before the first byte.
+      const response = await this.fetch(`${this.baseUrl}/api/v1/model`, { headers: this.#headers(), signal: AbortSignal.timeout(4000) });
       if (!response.ok) return { available: false };
       const body = await response.json();
       return { available: true, model: typeof body.result === 'string' ? body.result : null };
@@ -49,7 +58,7 @@ export class KoboldClient {
   async fetchContextLength() {
     let response;
     try {
-      response = await this.fetch(`${this.baseUrl}/api/v1/config/max_context_length`);
+      response = await this.fetch(`${this.baseUrl}/api/v1/config/max_context_length`, { headers: this.#headers() });
     } catch (cause) {
       throw new KoboldError('Could not reach KoboldCpp to query the context length.', { code: 'UNAVAILABLE', cause });
     }
@@ -65,7 +74,7 @@ export class KoboldClient {
     try {
       response = await this.fetch(`${this.baseUrl}/api/extra/tokencount`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.#headers(),
         body: JSON.stringify({ prompt: String(prompt) }),
       });
     } catch (cause) {
@@ -88,7 +97,7 @@ export class KoboldClient {
     try {
       response = await this.fetch(`${this.baseUrl}/api/extra/generate/stream`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.#headers(),
         body: JSON.stringify(request),
         signal,
       });
@@ -125,7 +134,7 @@ export class KoboldClient {
     try {
       await this.fetch(`${this.baseUrl}/api/extra/abort`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.#headers(),
         body: JSON.stringify({ genkey: genKey ?? '' }),
       });
     } catch {
@@ -144,7 +153,7 @@ export class KoboldClient {
         payload.tool_choice = toolChoice;
       }
       response = await this.fetch(`${this.baseUrl}/v1/chat/completions`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: this.#headers(),
         body: JSON.stringify(payload), signal,
       });
     } catch (cause) {
@@ -177,7 +186,7 @@ export class KoboldClient {
     let response;
     try {
       response = await this.fetch(`${this.baseUrl}/v1/chat/completions`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: this.#headers(),
         body: JSON.stringify({ model: 'koboldcpp', messages, max_tokens: maxTokens, temperature, stream: true }), signal,
       });
     } catch (cause) {

@@ -307,6 +307,7 @@ toggleAutoNotesButton.addEventListener('click', async () => {
   await preferences?.set({ autoNotes: autoNotesEnabled });
   storeProjectOption({ autoNotes: autoNotesEnabled });
   showStatus(`Automatic revision notes ${autoNotesEnabled ? 'enabled' : 'disabled'}`);
+  onConnectionChange();
 });
 
 const toggleTimestampedSavesButton = document.querySelector('[data-toggle-timestamped-saves]');
@@ -323,6 +324,7 @@ const aiStatus = document.querySelector('[data-ai-status]');
 const aiConnectionButton = document.querySelector('[data-ai-connection]');
 const aiConnectionPopover = document.querySelector('[data-ai-connection-popover]');
 const aiConnectionInput = document.querySelector('[data-ai-connection-input]');
+const aiConnectionKey = document.querySelector('[data-ai-connection-key]');
 const aiConnectionConfirm = document.querySelector('[data-ai-connection-confirm]');
 const aiConnectionCancel = document.querySelector('[data-ai-connection-cancel]');
 const preferences = window.noirDraft?.preferences;
@@ -382,16 +384,47 @@ appInfoButton.addEventListener('click', async () => {
   }
 });
 
+let aiApiKey = '';
+let livenessTimer = null;
+let livenessMisses = 0;
+let onAIOffline = () => {};
+
+// A generation call has no timeout (prompt processing can take minutes), so
+// this cheap probe is how a server that vanished mid-call is noticed: the
+// status turns red and the in-flight call fails now instead of hanging.
+const startLivenessMonitor = () => {
+  clearInterval(livenessTimer);
+  livenessMisses = 0;
+  livenessTimer = setInterval(async () => {
+    const client = koboldClient;
+    if (!client) return;
+    const availability = await client.checkAvailability();
+    if (client !== koboldClient) return;
+    const connected = aiStatus.dataset.connected === 'true';
+    if (availability.available) {
+      livenessMisses = 0;
+      if (!connected && aiStatus.dataset.connected !== undefined && aiStatus.textContent.startsWith('Disconnected')) void connectToKobold(client.baseUrl);
+    } else if (connected && ++livenessMisses >= 2) {
+      setAIStatus(`Disconnected (${client.baseUrl})`, 'error');
+      showStatus(`Lost connection to the AI server at ${client.baseUrl}`, true);
+      onAIOffline();
+      onConnectionChange();
+    }
+  }, 5000);
+};
+
 const connectToKobold = async (baseUrl) => {
-  koboldClient = new KoboldClient(baseUrl);
+  koboldClient = new KoboldClient(baseUrl, { apiKey: aiApiKey });
+  livenessMisses = 0;
   koboldContextLength = null;
   koboldModel = null;
   setAIStatus(`Connecting to ${baseUrl}…`);
   const availability = await koboldClient.checkAvailability();
   if (!availability.available) {
     setAIStatus(`Disconnected (${baseUrl})`, 'error');
-    showStatus(`Could not connect to KoboldCpp at ${baseUrl}`, true);
+    showStatus(`Could not connect to the AI server at ${baseUrl}`, true);
     onConnectionChange();
+    startLivenessMonitor();
     return;
   }
   try {
@@ -404,11 +437,13 @@ const connectToKobold = async (baseUrl) => {
   setAIStatus(`Connected: ${availability.model ?? 'unknown model'}${contextLabel}`, 'true');
   showStatus(`Connected to ${availability.model ?? 'unknown model'} at ${baseUrl}`);
   onConnectionChange();
+  startLivenessMonitor();
 };
 
 aiConnectionButton.addEventListener('click', () => {
   closeOverflowMenu();
   aiConnectionInput.value = koboldClient?.baseUrl ?? '';
+  aiConnectionKey.value = aiApiKey;
   aiConnectionPopover.hidden = false;
   aiConnectionInput.focus();
 });
@@ -417,7 +452,8 @@ aiConnectionConfirm.addEventListener('click', async () => {
   const baseUrl = aiConnectionInput.value.trim();
   aiConnectionPopover.hidden = true;
   if (!baseUrl) return;
-  await preferences?.set({ koboldUrl: baseUrl });
+  aiApiKey = aiConnectionKey.value.trim();
+  await preferences?.set({ koboldUrl: baseUrl, apiKey: aiApiKey });
   await connectToKobold(baseUrl);
 });
 aiConnectionInput.addEventListener('keydown', (event) => {
@@ -446,6 +482,7 @@ if (preferences) {
       toggleTimestampedSavesButton.setAttribute('aria-pressed', String(saveTimestampedCopiesEnabled));
       saveOnEveryRevisionEnabled = stored.saveOnEveryRevision === true;
       toggleSaveOnRevisionButton.setAttribute('aria-pressed', String(saveOnEveryRevisionEnabled));
+      aiApiKey = typeof stored.apiKey === 'string' ? stored.apiKey : '';
       return connectToKobold(stored.koboldUrl);
     })
     .catch(() => setAIStatus('Disconnected', 'error'));
@@ -474,7 +511,6 @@ const outlines = {
   STORY: document.querySelector('[data-outline-story]'),
   METADATA: document.querySelector('[data-outline-metadata]'),
 };
-const pinStatus = document.querySelector('[data-pin-status]');
 const passageHistoryContainer = document.querySelector('[data-passage-history]');
 const passageHistoryToggle = document.querySelector('[data-passage-history-toggle]');
 const passageHistoryList = document.querySelector('[data-passage-history-list]');
@@ -959,7 +995,7 @@ try {
       cancel.setAttribute('aria-label', `Cancel call in turn ${job.turnIndex ?? 'pending'}`);
       cancel.addEventListener('click', () => cancelChatJob(job));
       call.append(cancel);
-    } else if (job.state === 'complete' || job.state === 'failed') {
+    } else if (['complete', 'failed', 'cancelled'].includes(job.state)) {
       const retry = document.createElement('button');
       retry.type = 'button';
       retry.className = 'chat-call-icon';
@@ -1095,7 +1131,7 @@ try {
       && job.history.currentRevision === job.revisionId && job.model.text === await reconstructRevision(job.history, job.revisionId)) {
       await job.controller.checkout(job.baseRevisionId);
     }
-    if (job.state === 'failed') {
+    if (job.state === 'failed' || job.state === 'cancelled') {
       job.state = 'queued';
       job.output = '';
       job.rawResponse = '';
@@ -1148,6 +1184,7 @@ try {
     const job = chatJobs.find(({ state }) => state === 'queued');
     if (!job) return;
     activeChatJob = job;
+    job.offline = false;
     job.state = 'generating';
     job.progress = 'Thinking…';
     job.abortController = new AbortController();
@@ -1218,8 +1255,9 @@ try {
         await completeChatJob(job, output, rawResponse);
       }
     } catch (error) {
-      job.state = error.name === 'AbortError' || error.code === 'ABORTED' ? 'cancelled' : 'failed';
-      job.output = job.state === 'cancelled' ? 'Cancelled.' : error.message;
+      job.state = !job.offline && (error.name === 'AbortError' || error.code === 'ABORTED') ? 'cancelled' : 'failed';
+      job.output = job.state === 'cancelled' ? 'Cancelled.'
+        : job.offline ? 'The AI server became unreachable while this turn was running. Reconnect and retry.' : error.message;
       job.rawResponse = error.rawText ?? null;
       job.progress = job.output;
     } finally {
@@ -1229,7 +1267,15 @@ try {
       refreshAgentTargetHighlights();
       renderChatHistory();
       void processChatQueue();
+      pumpNotes();
     }
+  };
+  onAIOffline = () => {
+    if (activeChatJob?.state === 'generating') {
+      activeChatJob.offline = true;
+      activeChatJob.abortController?.abort();
+    }
+    noteAbortController?.abort();
   };
   chatSendButton.addEventListener('click', async () => {
     const input = chatPrompt.value.trim();
@@ -1271,6 +1317,7 @@ try {
     chatPrompt.value = '';
     chatPrompt.focus();
     renderChatHistory();
+    abortIdleNote();
     void processChatQueue();
   });
   chatCancelButton.addEventListener('click', () => activeChatJob && cancelChatJob(activeChatJob));
@@ -1545,8 +1592,7 @@ try {
   // and the draft still in the composer.
   contextToggle.addEventListener('click', () => void previewDraftContext());
 
-  onConnectionChange = () => {
-  };
+  onConnectionChange = () => { void pumpNotes(); };
 
   const refreshHistoryControls = () => {
     const currentHistory = activeHistory();
@@ -1567,6 +1613,7 @@ try {
     commitController = new CommitController({
       history,
       model: models.STORY,
+      beforeCommit: () => prunePins({ fold: false }),
       onError: (error) => showStatus(error.message, true),
       onChange: () => {
         recordVisitIfChanged('STORY');
@@ -1593,6 +1640,7 @@ try {
     metadataCommitController = new CommitController({
       history: metadataHistory,
       model: models.METADATA,
+      beforeCommit: () => prunePins({ fold: true }),
       onError: (error) => showStatus(error.message, true),
       onChange: () => {
         recordVisitIfChanged('METADATA');
@@ -1623,6 +1671,22 @@ try {
   };
   const documentsForPins = () => ({ STORY: models.STORY.text, METADATA: models.METADATA.text });
 
+  // Pins are ephemeral working-set hints: right before a commit (alongside
+  // normalization) any pin whose heading no longer exists is dropped from the
+  // application context. From the METADATA controller the change is folded
+  // into that same commit; from STORY it is an ordinary METADATA edit that
+  // METADATA commits on its own.
+  const prunePins = ({ fold }) => {
+    if (suppressAutoPersist) return;
+    const pins = readPins(models.METADATA.text);
+    const documents = documentsForPins();
+    const kept = pins.filter((path) => resolveHeadingPath(documents, path).status !== 'unresolved');
+    if (kept.length === pins.length) return;
+    const updated = writePins(models.METADATA.text, kept);
+    if (fold) models.METADATA.replace(0, models.METADATA.text.length, updated, { origin: 'history' });
+    else editors.METADATA.replace(0, models.METADATA.text.length, updated, 'pin');
+  };
+
   const revisionDepth = (revisionId, cache = new Map()) => {
     if (cache.has(revisionId)) return cache.get(revisionId);
     const currentHistory = activeHistory();
@@ -1635,31 +1699,68 @@ try {
   };
 
   const pendingNotes = new Set();
+  const failedNotes = new Set();
+  let noteAbortController = null;
 
-  const generateNoteFor = async (revision) => {
+  const noteKey = (rootName, revision) => `${rootName}:${revision.id}`;
+  const nextUnnotedRevision = () => {
+    for (const [rootName, currentHistory] of [['STORY', history], ['METADATA', metadataHistory]]) {
+      if (!currentHistory) continue;
+      for (const revision of currentHistory.revisions.values()) {
+        if (!revision.note && revision.parents.length > 0 && !failedNotes.has(noteKey(rootName, revision))) {
+          return { rootName, currentHistory, revision };
+        }
+      }
+    }
+    return null;
+  };
+
+  const generateNoteFor = async ({ rootName, currentHistory, revision }) => {
     pendingNotes.add(revision.id);
+    noteAbortController = new AbortController();
+    const { signal } = noteAbortController;
     renderVersions();
     try {
-      const parentId = revision.parents[0];
-      const parentText = parentId !== undefined ? await reconstructRevision(history, parentId) : '';
-      const resultText = await reconstructRevision(history, revision.id);
-      revision.note = await generateNote({ client: koboldClient, origin: revision.origin, parentText, resultText });
+      const parentText = await reconstructRevision(currentHistory, revision.parents[0]);
+      const resultText = await reconstructRevision(currentHistory, revision.id);
+      revision.note = await generateNote({ client: koboldClient, origin: revision.origin, parentText, resultText, signal });
       await persistAfterCommit();
-    } catch {
-      // Failure to generate a note is silent and never blocks editor work;
-      // the revision keeps its existing note (or none) and stays usable.
+    } catch (error) {
+      // Cancelled notes (a chat turn arrived) are retried later; a real failure
+      // is skipped for this session so one bad revision cannot loop forever.
+      if (error?.name !== 'AbortError') failedNotes.add(noteKey(rootName, revision));
     } finally {
       pendingNotes.delete(revision.id);
+      noteAbortController = null;
       renderVersions();
     }
   };
 
-  const enqueueNoteGeneration = (revision) => {
-    if (!revision || revision.note || pendingNotes.has(revision.id)) return;
-    if (revision.parents.length === 0) return;
-    if (!autoNotesEnabled || !koboldClient || aiStatus.dataset.connected !== 'true') return;
-    void generateNoteFor(revision);
+  let notePumpRunning = false;
+  // Notes are idle work: they fill in missing revision notes one at a time and
+  // only while no chat turn is running or waiting.
+  const pumpNotes = async () => {
+    if (notePumpRunning) return;
+    notePumpRunning = true;
+    try {
+      while (autoNotesEnabled && koboldClient && aiStatus.dataset.connected === 'true'
+        && !activeChatJob && !chatJobs.some(({ state }) => state === 'queued')) {
+        const next = nextUnnotedRevision();
+        if (!next) break;
+        await generateNoteFor(next);
+      }
+    } finally {
+      notePumpRunning = false;
+    }
   };
+
+  const abortIdleNote = () => {
+    if (!noteAbortController) return;
+    noteAbortController.abort();
+    void koboldClient?.abort();
+  };
+
+  const enqueueNoteGeneration = () => { void pumpNotes(); };
 
   let focusedRevisionId = null;
   let inspectedRevisionId = null;
@@ -2014,37 +2115,6 @@ try {
       }
     }
 
-    const pinResults = pins.map((path) => resolveHeadingPath(documentsForPins(), path));
-    const unresolved = pinResults.filter(({ status }) => status !== 'resolved');
-    pinStatus.replaceChildren();
-    const summary = document.createElement('div');
-    summary.className = 'pinned-heading';
-    summary.textContent = `${pins.length} context pin${pins.length === 1 ? '' : 's'}`;
-    pinStatus.append(summary);
-    for (const result of pinResults.filter(({ status }) => status === 'resolved')) {
-      const item = document.createElement('button');
-      item.type = 'button';
-      item.className = 'pinned-entry';
-      item.textContent = result.path;
-      item.title = `Open pinned ${result.path}`;
-      const [pinnedRoot] = result.path.split('/');
-      item.addEventListener('click', (event) => {
-        if (event.shiftKey && pinnedRoot === activeRoot && editors[pinnedRoot]) {
-          editors[pinnedRoot].extendTo(result.heading.from);
-          elements[pinnedRoot].focus();
-          editors[pinnedRoot].revealOffset(result.heading.from);
-          return;
-        }
-        navigateToSection(result.path);
-      });
-      pinStatus.append(item);
-    }
-    for (const result of unresolved) {
-      const warning = document.createElement('div');
-      warning.className = 'unresolved-pin';
-      warning.textContent = `${result.status}: ${result.path}`;
-      pinStatus.append(warning);
-    }
     updateDraftContextSummary();
   };
 

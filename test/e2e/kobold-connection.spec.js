@@ -36,8 +36,8 @@ test('the app info dialog reports a disconnected server, then the connected fake
     const server = await startFakeKoboldServer({ model: 'gemma-fake', contextLength: 8192 });
     try {
       await window.getByLabel('More actions').click();
-      await window.getByRole('button', { name: 'AI server…' }).click();
-      await window.getByLabel('KoboldCpp server URL').fill(server.url);
+      await window.getByRole('button', { name: 'OpenAI API…' }).click();
+      await window.getByLabel('OpenAI API URL').fill(server.url);
       await window.getByRole('button', { name: 'Connect', exact: true }).click();
 
       await window.getByLabel('More actions').click();

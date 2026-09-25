@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { startFakeKoboldServer } from '../support/fake-kobold-server.js';
 
-test('generating a stable rewrite applies it immediately as a reversible STORY revision', async () => {
+test('generating a stable rewrite records a STORY proposal that applies only on checkout', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'noirdraft-e2e-prefs-'));
   const preferencesPath = path.join(directory, 'preferences.json');
   await writeFile(preferencesPath, JSON.stringify({ koboldUrl: 'http://127.0.0.1:1' }), 'utf8');
@@ -34,18 +34,23 @@ test('generating a stable rewrite applies it immediately as a reversible STORY r
     await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
     await window.getByLabel('Chat prompt').fill('Make it colder.');
     await window.getByRole('button', { name: 'Send' }).click();
-    await expect(window.getByLabel('Chat history')).toContainText('freezing', { timeout: 5000 });
+    // The chat reply cites the proposal revision, then the agent's own message.
+    await expect(window.getByLabel('Chat history')).toContainText('#2 Done.', { timeout: 5000 });
 
-    // The setup edit above is revision 1; because it stayed stable while the
-    // request ran, the agent child becomes current revision 2 immediately.
-    await expect.poll(() => window.evaluate(() => window.__noirDraftTest.model.text)).toContain('freezing');
+    // The setup edit above is revision 1. The agent's rewrite is revision 2,
+    // a child of 1, but stays a proposal: the editor still shows revision 1.
     const graph = await window.evaluate(() => {
       const history = window.__noirDraftTest.getHistory();
-      return { currentRevision: history.currentRevision, applied: history.revisions.get(2) };
+      return { currentRevision: history.currentRevision, proposal: history.revisions.get(2), text: window.__noirDraftTest.model.text };
     });
-    expect(graph.currentRevision).toBe(2);
-    expect(graph.applied.origin).toBe('agent');
-    expect(graph.applied.parents).toEqual([1]);
+    expect(graph.currentRevision).toBe(1);
+    expect(graph.text).not.toContain('freezing');
+    expect(graph.proposal.origin).toBe('agent');
+    expect(graph.proposal.parents).toEqual([1]);
+
+    // Explicit application is a checkout of the proposal revision.
+    await window.evaluate(() => window.__noirDraftTest.getCommitController().checkout(2));
+    await expect.poll(() => window.evaluate(() => window.__noirDraftTest.model.text)).toContain('freezing');
   } finally {
     await server.close();
     await application.close();
@@ -53,7 +58,7 @@ test('generating a stable rewrite applies it immediately as a reversible STORY r
   }
 });
 
-test('an empty chat rewrite shows a failed call row and never applies text', async () => {
+test('an empty chat rewrite shows a failed turn with a retry and never applies text', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'noirdraft-e2e-prefs-'));
   const preferencesPath = path.join(directory, 'preferences.json');
   await writeFile(preferencesPath, JSON.stringify({ koboldUrl: 'http://127.0.0.1:1' }), 'utf8');
@@ -80,7 +85,10 @@ test('an empty chat rewrite shows a failed call row and never applies text', asy
 
     await window.getByLabel('Chat prompt').fill('Rewrite this.');
     await window.getByRole('button', { name: 'Send' }).click();
-    await expect(window.locator('.chat-call-failed')).toContainText('failed', { timeout: 5000 });
+    // The failed card explains the failure in its status text and offers a
+    // retry on the same card (the call row itself is icon-only).
+    await expect(window.locator('.chat-message-error')).toContainText('Retry the turn', { timeout: 5000 });
+    await expect(window.locator('.chat-call-failed').getByRole('button', { name: 'Retry call' })).toBeVisible();
     // The setup edit was committed as revision 1 (the user->agent commit
     // boundary); the failed generation itself must add nothing further.
     const revisionCount = await window.evaluate(() => window.__noirDraftTest.getHistory().revisions.size);
@@ -114,12 +122,17 @@ test('a stable METADATA selection is rewritten into its own revision graph', asy
     await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
     await window.getByLabel('Chat prompt').fill('Make the character older.');
     await window.getByRole('button', { name: 'Send' }).click();
-    await expect.poll(() => window.evaluate(() => window.__noirDraftTest.models.METADATA.text)).toContain('retired detective');
-    const state = await window.evaluate(() => {
+    await expect(window.getByLabel('Chat history')).toContainText('#2 Done.', { timeout: 5000 });
+    // The proposal is revision 2 in the METADATA graph; METADATA still shows revision 1.
+    const proposed = await window.evaluate(() => {
       const history = window.__noirDraftTest.getMetadataHistory();
-      return { current: history.currentRevision, origin: history.revisions.get(history.currentRevision).origin };
+      return { current: history.currentRevision, origin: history.revisions.get(2).origin, text: window.__noirDraftTest.models.METADATA.text };
     });
-    expect(state).toEqual({ current: 2, origin: 'agent' });
+    expect(proposed.current).toBe(1);
+    expect(proposed.origin).toBe('agent');
+    expect(proposed.text).not.toContain('retired detective');
+    await window.evaluate(() => window.__noirDraftTest.getMetadataCommitController().checkout(2));
+    await expect.poll(() => window.evaluate(() => window.__noirDraftTest.models.METADATA.text)).toContain('retired detective');
   } finally {
     await server.close();
     await application.close();
@@ -127,7 +140,7 @@ test('a stable METADATA selection is rewritten into its own revision graph', asy
   }
 });
 
-test('an advanced root leaves its completed rewrite as a merge-later alternative', async () => {
+test('an advanced root leaves its completed rewrite as an unapplied alternative', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'noirdraft-e2e-prefs-'));
   const preferencesPath = path.join(directory, 'preferences.json');
   await writeFile(preferencesPath, JSON.stringify({ koboldUrl: 'http://127.0.0.1:1' }), 'utf8');
@@ -152,7 +165,7 @@ test('an advanced root leaves its completed rewrite as a merge-later alternative
       editors.STORY.replace(models.STORY.text.length, models.STORY.text.length, 'Author continuation.\n');
       await getCommitController().explicitSave('Author continued.');
     });
-    await expect(window.getByLabel('Chat history')).toContainText('alternative branch for STORY');
+    await expect(window.getByLabel('Chat history')).toContainText('#3 Done.');
     const state = await window.evaluate(() => {
       const history = window.__noirDraftTest.getHistory();
       return {

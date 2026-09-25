@@ -30,6 +30,10 @@ const preferencesPath = process.env.NOIRDRAFT_E2E_PREFERENCES_PATH
 // running instead of exiting. Disposable dev scratch state is fine to
 // discard, so skip that prompt entirely under the watcher.
 const isDevAutoRestart = Boolean(process.env.NOIRDRAFT_DEV_AUTORESTART);
+// E2E runs (playwright.config.js) close dirty windows through the Playwright
+// API, where nothing answers the in-window prompt and close() would hang until
+// the test times out.
+const skipClosePrompt = isDevAutoRestart || Boolean(process.env.NOIRDRAFT_E2E_FORCE_CLOSE);
 
 function publicError(error) {
   return {
@@ -134,7 +138,7 @@ function registerCloseHandlers(window) {
   ipcMain.on('document:dirtyState', (event, dirty) => {
     if (BrowserWindow.fromWebContents(event.sender) === window) window.__noirDraftDirty = dirty;
   });
-  if (isDevAutoRestart) return;
+  if (skipClosePrompt) return;
   window.on('close', (event) => {
     if (window.__noirDraftClosing || !window.__noirDraftDirty) return;
     event.preventDefault();

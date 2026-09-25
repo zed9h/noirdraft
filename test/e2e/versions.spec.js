@@ -30,8 +30,11 @@ test('the bottom Versions panel renders explorable graph nodes and pinned variat
     await expect(inspector.getByRole('heading', { name: 'Revision 1' })).toBeVisible();
     await expect(window.locator('[data-payload-type="patch"]')).toContainText('Linear edit.');
     await inspector.getByRole('button', { name: 'Pin variation' }).click();
+    // Once something is pinned the inspector lists only pinned revisions, so a
+    // further node is pinned from the graph with Space (Enter just inspects).
     await graph.getByRole('button', { name: 'Revision 2' }).click();
-    await inspector.getByRole('button', { name: 'Pin variation' }).click();
+    await graph.focus();
+    await window.keyboard.press('Space');
     await expect(inspector.getByRole('heading', { name: 'Automatic comparison' })).toBeVisible();
 
     await graph.focus();

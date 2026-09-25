@@ -3,6 +3,7 @@ import path from 'node:path';
 
 export const DEFAULT_PREFERENCES = Object.freeze({
   koboldUrl: 'http://localhost:5001',
+  apiKey: '',
   autoNotes: false,
   saveTimestampedCopies: true,
   saveOnEveryRevision: false,

@@ -39,8 +39,8 @@
               <button type="button" data-new-document title="Start a new, empty document. Unsaved work is checked before it is replaced.">New</button>
               <button type="button" data-save-as title="Save the project to a new file (Ctrl+Shift+S). Later saves continue with that file.">Save as…</button>
               <button type="button" data-save-note title="Record a revision with an optional note (Shift+Alt+S). The file is written only if Save each revision is on.">Record revision…</button>
-              <button type="button" data-ai-connection title="Set the KoboldCpp server address used for chat and proposals. Editing and saving work without it.">AI server…</button>
-              <button type="button" data-toggle-auto-notes aria-pressed="false" title="Ask the AI to write a short note for each new revision. Needs a connected AI server.">Auto notes</button>
+              <button type="button" data-ai-connection title="Set the OpenAI-compatible API address (and optional API key) used for chat and proposals. Editing and saving work without it.">OpenAI API…</button>
+              <button type="button" data-toggle-auto-notes aria-pressed="false" title="Ask the AI to write a short note for each new revision. Runs while chat is idle. Needs a connected API.">Auto notes</button>
               <button type="button" data-toggle-save-on-revision aria-pressed="false" title="Write the file to disk every time a revision is recorded. When off, the file is written only by Save.">Save each revision</button>
               <button type="button" data-toggle-timestamped-saves aria-pressed="true" title="Every save creates a new file named with the date and time, so no earlier save is overwritten.">Timestamped saves</button>
               <button type="button" data-app-info title="Show document statistics, AI connection details, and app version.">Info…</button>
@@ -56,8 +56,10 @@
         <button type="button" data-save-note-cancel title="Close without recording (Escape)">Cancel</button>
       </div>
       <div class="save-note-popover" data-ai-connection-popover hidden>
-        <label for="ai-connection-input">KoboldCpp server URL</label>
-        <input type="text" id="ai-connection-input" data-ai-connection-input placeholder="http://localhost:5001" title="Base URL of a running KoboldCpp server (Enter to connect)">
+        <label for="ai-connection-input">OpenAI API URL</label>
+        <input type="text" id="ai-connection-input" data-ai-connection-input placeholder="http://localhost:5001" title="Base URL of an OpenAI-compatible server such as KoboldCpp (Enter to connect)">
+        <label for="ai-connection-key">API key</label>
+        <input type="password" id="ai-connection-key" data-ai-connection-key placeholder="Optional" autocomplete="off" title="Sent as a Bearer token. Leave empty for servers without authentication. Stored in app preferences, not in the project file.">
         <button type="button" data-ai-connection-confirm title="Connect to this server (Enter)">Connect</button>
         <button type="button" data-ai-connection-cancel title="Close without connecting (Escape)">Cancel — don't connect</button>
       </div>
@@ -185,7 +187,6 @@
           <div class="ai-status" data-ai-status aria-label="AI connection status" hidden>Disconnected</div>
           <div class="chat-history" data-chat-history aria-label="Chat history"></div>
           <div class="chat-composer" data-chat-composer>
-            <div data-pin-status hidden></div>
           <div class="chat-context-preview chat-message-label">
               <button type="button" class="chat-role-action" data-context-toggle title="Preview the raw context that would be sent with this message" aria-label="Preview context for draft message">USER</button>
               <span class="chat-token-count" data-chat-context-summary aria-live="polite"></span>

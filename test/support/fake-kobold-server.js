@@ -17,6 +17,7 @@ export function startFakeKoboldServer(options = {}) {
 
   const abortedKeys = new Set();
   let lastGenerateRequest = null;
+  const chatRequests = [];
 
   const server = createServer((request, response) => {
     response.setHeader('Access-Control-Allow-Origin', '*');
@@ -56,6 +57,7 @@ export function startFakeKoboldServer(options = {}) {
     }
     if (method === 'POST' && url.pathname === '/v1/chat/completions') {
       const payload = JSON.parse(body || '{}');
+      chatRequests.push(payload);
       if (payload.stream === true && !payload.tools?.length) {
         response.writeHead(200, {
           'Content-Type': 'text/event-stream',
@@ -148,6 +150,7 @@ export function startFakeKoboldServer(options = {}) {
         url: `http://127.0.0.1:${port}`,
         close: () => new Promise((done) => server.close(done)),
         getLastGenerateRequest: () => lastGenerateRequest,
+        getChatRequests: () => chatRequests,
       });
     });
   });

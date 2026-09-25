@@ -57,11 +57,12 @@ export function composeContext({
   // volatile editing packet is a single JSON tool result, built below.
   const components = [
     { id: 'protocol', label: 'AGENT PROTOCOL', text: agentProtocol },
-    ...resolvedPins.map((pin) => ({ id: `pin:${pin.path}`, label: `REFERENCE ${pin.path}`, text: pin.text })),
+    ...resolvedPins.map((pin) => ({ id: `pin:${pin.path}`, label: `REFERENCE ${pin.path}`, text: pin.text, reference: true })),
     ...references.map((reference, index) => ({
       id: reference.id ?? `reference:${index}`,
       label: `REFERENCE ${reference.label ?? reference.id ?? `#${index + 1}`}`,
       text: reference.text,
+      reference: true,
     })),
     { id: 'before', label: 'CONTEXT BEFORE CURSOR', text: before },
     { id: 'cursor', label: 'CURSOR', text: target },
@@ -70,7 +71,7 @@ export function composeContext({
   ].filter((component) => component.text !== '' && component.text != null);
 
   const staticReferences = components
-    .filter((component) => component.id.startsWith('pin:') || component.id.startsWith('reference:'))
+    .filter((component) => component.reference)
     .map((component) => xmlElement('reference', component.text, ` label="${component.label.replaceAll('"', '&quot;')}"`))
     .join('\n');
   const staticPrompt = [

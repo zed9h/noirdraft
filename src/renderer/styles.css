@@ -415,12 +415,6 @@ button { font: inherit; }
 .pin-status { margin-top: auto; padding: .45rem .2rem 0; border-top: 1px solid #262220; color: #7d746a; font-size: .7rem; line-height: 1.3; }
 .sidebar-footer { display: flex; align-items: center; margin-top: auto; padding-top: .5rem; border-top: 1px solid #262220; }
 .chat-pins { flex: 0 0 auto; margin: 0 0 .55rem; padding: 0 0 .45rem; }
-.pinned-heading { margin-bottom: .15rem; color: #bd8f61; font-size: .68rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
-.pinned-entry { display: block; width: 100%; padding: .14rem .18rem; overflow: hidden; border: 0; color: #b8aea2; background: transparent; text-align: left; text-overflow: ellipsis; white-space: nowrap; font-size: .7rem; }
-.pinned-entry::before { content: '●'; margin-right: .32rem; color: #bd8f61; font-size: .55rem; vertical-align: .05em; }
-.pinned-entry:hover { color: #e2dbd1; background: transparent; }
-.pinned-entry:focus-visible { outline: 1px solid #6a5a44; outline-offset: -1px; }
-.unresolved-pin { color: #ffb4a9; overflow-wrap: anywhere; }
 
 .passage-history { margin-top: .5rem; }
 .passage-history-toggle, [data-passage-history-toggle] {
@@ -513,7 +507,7 @@ button { font: inherit; }
 .chat-message + .chat-message { margin-top: .38rem; }
 .chat-agent-intent { margin-top: .32rem; padding: .24rem .38rem; border-left: 2px solid #6f5843; color: #a99e91; font: italic .72rem/1.35 "Noto Serif", serif; }
 .chat-message-label { position: relative; display: flex; align-items: center; gap: .35rem; margin-bottom: .08rem; padding: .1rem .35rem; color: #8a8074; background: #302b26; font: 600 .62rem/1 "Noto Sans", sans-serif; letter-spacing: .08em; text-transform: uppercase; }
-.chat-token-count { position: absolute; left: 50%; margin: 0; color: #9d9286; font-weight: 400; letter-spacing: 0; text-transform: none; transform: translateX(-50%); }
+.chat-token-count { position: absolute; left: 50%; margin: 0; color: #9d9286; font-weight: 400; letter-spacing: 0; text-transform: none; transform: translateX(-50%); pointer-events: none; }
 .chat-role-action { padding: 0; border: 0; color: inherit; background: transparent; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
 .chat-role-action:hover { color: #e8ad70; }
 .chat-version-reference { display: inline; margin: 0 .12rem; padding: .04rem .2rem; border: 0; border-radius: .15rem; cursor: pointer; line-height: 1; vertical-align: .08em; }

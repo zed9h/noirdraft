@@ -41,8 +41,6 @@ test('including a compared passage as an AI reference shows it as included and s
     await referenceButton.click();
     await expect(entry.getByRole('button', { name: 'Remove from AI reference' })).toBeVisible();
 
-    await expect(window.locator('[data-chat-selection-summary]')).toContainText('1 context reference');
-
     const includedBeforeGenerate = await window.evaluate(() => window.__noirDraftTest.getAgentReferences());
     expect(includedBeforeGenerate).toHaveLength(1);
     expect(includedBeforeGenerate[0].text).toContain('The room was cold.');
@@ -56,18 +54,18 @@ test('including a compared passage as an AI reference shows it as included and s
     await window.evaluate(({ from, to }) => window.__noirDraftTest.editors.STORY.setSelection(from, to), selectionForGenerate);
     await window.getByLabel('Chat prompt').fill('Rewrite this.');
     await window.getByRole('button', { name: 'Send' }).click();
-    await expect(window.getByLabel('Chat history')).toContainText('Rewritten.', { timeout: 5000 });
+    await expect(window.getByLabel('Chat history')).toContainText('Done.', { timeout: 5000 });
 
     // Prove the reference was actually sent to the model, not just tracked in the UI.
-    const lastRequest = await server.getLastGenerateRequest();
-    expect(lastRequest.prompt).toContain('REFERENCE Revision 1 passage (user)');
-    expect(lastRequest.prompt).toContain('The room was cold.');
+    const sentText = server.getChatRequests().flatMap(({ messages }) => messages.map(({ content }) => String(content))).join('\n');
+    expect(sentText).toContain('REFERENCE Revision 1 passage (user)');
+    expect(sentText).toContain('The room was cold.');
 
-    // Removing it must clear the composer summary again. The button's accessible name
+    // Removing it must clear the reference again. The button's accessible name
     // changed after the first click, so re-query it rather than reusing the
     // stale "Include as AI reference" locator.
     await entry.getByRole('button', { name: 'Remove from AI reference' }).click();
-    await expect(window.locator('[data-chat-selection-summary]')).not.toContainText('context reference');
+    await expect(entry.getByRole('button', { name: 'Include as AI reference' })).toBeVisible();
     const includedAfterRemove = await window.evaluate(() => window.__noirDraftTest.getAgentReferences());
     expect(includedAfterRemove).toHaveLength(0);
   } finally {

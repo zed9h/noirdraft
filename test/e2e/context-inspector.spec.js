@@ -48,10 +48,10 @@ test('selecting a STORY passage previews the exact composed model input with tok
     await expect(dialog.locator('[data-context-dialog-summary]')).toContainText('(estimated)');
     const promptText = await dialog.locator('.context-prompt').textContent();
     expect(promptText).toContain('<noirdraft_static>');
-    expect(promptText).toContain('<reference><![CDATA[## Maria');
+    expect(promptText).toContain('<reference label="REFERENCE METADATA/Characters/Maria"><![CDATA[## Maria');
     expect(promptText).toContain('A cautious investigator.');
-    expect(promptText).toContain('<noirdraft_context>');
-    expect(promptText).toContain('<context><![CDATA[');
+    expect(promptText).toContain('<noirdraft_turn>');
+    expect(promptText).toContain('<document_context>');
     expect(promptText).toContain('<selection><![CDATA[The room was cold.]]></selection>');
     expect(promptText).toContain('<request><![CDATA[Make the room colder.]]></request>');
     expect(promptText).toContain('<instructions><![CDATA[');
