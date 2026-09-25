@@ -2996,6 +2996,11 @@ try {
       openSaveNotePopover();
       return;
     }
+    if (!event.shiftKey && event.altKey && !event.ctrlKey && !event.metaKey && event.code === 'KeyS') {
+      event.preventDefault();
+      void recordRevision();
+      return;
+    }
     if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
     const key = event.key.toLowerCase();
     if (key === 'z' && !event.shiftKey) {
