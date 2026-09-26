@@ -12,7 +12,8 @@ import { KoboldClient } from './ai/kobold.js';
 import { generateNote } from './ai/notes.js';
 import { adoptIntoComposite } from './history/composite.js';
 import { mapRange, passageHistory } from './history/lineage.js';
-import { buildLocalGraph, searchRevisions } from './history/local-graph.js';
+import { buildLocalGraph } from './history/local-graph.js';
+import { excerptAround, findTextMatches, paragraphRange, searchHistory } from './search.js';
 import { wordDiff } from './history/word-diff.js';
 import { extractHeadings, resolveHeadingPath } from './project/headings.js';
 import { createVisitLog, jumpVisitLog, recordVisit, stepVisitLog } from './history/visit-log.js';
@@ -521,7 +522,14 @@ const versionList = document.querySelector('[data-version-list]');
 const versionInspector = document.querySelector('[data-version-inspector]');
 const versionGraph = document.querySelector('[data-version-graph]');
 const versionSearchInput = document.querySelector('[data-version-search]');
-const versionSearchResults = document.querySelector('[data-version-search-results]');
+const versionSearchCount = document.querySelector('[data-version-search-count]');
+const textSearchInput = document.querySelector('[data-text-search]');
+const textSearchResults = document.querySelector('[data-text-search-results]');
+const textSearchPrev = document.querySelector('[data-text-search-prev]');
+const textSearchNext = document.querySelector('[data-text-search-next]');
+const versionSearchPrev = document.querySelector('[data-version-search-prev]');
+const versionSearchNext = document.querySelector('[data-version-search-next]');
+const projectFolds = document.querySelector('.project-folds');
 const versionToggleButtons = document.querySelectorAll('[data-toggle-versions]');
 const undoButton = document.querySelector('[data-undo]');
 const redoButton = document.querySelector('[data-redo]');
@@ -1861,7 +1869,9 @@ try {
       const hint = document.createElement('p');
       hint.textContent = 'Select a node with the arrow keys, then pin it to keep its content here. Pinned revisions compare automatically.';
       output.append(hint);
+      const hadFocus = versionsView.contains(document.activeElement);
       versionInspector.replaceChildren(output);
+      restoreVersionsFocus(hadFocus);
       return;
     }
     const revisions = ids.map((id) => currentHistory.revisions.get(id)).filter(Boolean);
@@ -1921,7 +1931,11 @@ try {
       }
       output.append(compare);
     }
-    if (token === pinnedRenderToken) versionInspector.replaceChildren(output);
+    if (token === pinnedRenderToken) {
+      const hadFocus = versionsView.contains(document.activeElement);
+      versionInspector.replaceChildren(output);
+      restoreVersionsFocus(hadFocus);
+    }
   };
 
   const inspectRevision = (revision) => {
@@ -1938,11 +1952,10 @@ try {
     renderVersions();
   };
 
-  const focusGraphOn = (revisionId) => {
+  const focusGraphOn = (revisionId, { keepSearch = false } = {}) => {
     focusedRevisionId = revisionId;
     inspectedRevisionId = revisionId;
-    versionSearchResults.hidden = true;
-    versionSearchInput.value = '';
+    if (!keepSearch) clearVersionSearch();
     renderVersions();
   };
 
@@ -1959,11 +1972,22 @@ try {
     switchView('VERSIONS', { focus: false });
   };
 
+  // A pane must always hold focus: if a rebuild removed the focused element
+  // from the Versions pane, put focus on the graph itself.
+  const restoreVersionsFocus = (hadFocus) => {
+    if (!hadFocus) return;
+    const active = document.activeElement;
+    if (active === document.body || !active || !versionsView.contains(active)) versionGraph.focus();
+  };
+
   const renderLocalGraph = () => {
     const currentHistory = activeHistory();
     if (!currentHistory || !versionGraph) return;
     const centerId = focusedRevisionId ?? currentHistory.currentRevision;
     const graph = buildLocalGraph(currentHistory, centerId, { radius: 2 });
+    // Rebuilding the graph destroys the node button that was just clicked;
+    // without this, focus falls to <body> and no pane has focus.
+    const hadVersionsFocus = versionsView.contains(document.activeElement);
     versionGraph.replaceChildren();
     const nodes = [...graph.nodes].sort((left, right) => left.id - right.id);
     renderedGraphNodeIds = nodes.map(({ id }) => id);
@@ -1994,7 +2018,7 @@ try {
       const point = positions.get(node.id);
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = ['graph-node', node.isCurrent ? 'current' : '', node.id === centerId ? 'focused' : '', pinnedRevisionIds.includes(node.id) ? 'pinned' : ''].filter(Boolean).join(' ');
+      button.className = ['graph-node', node.isCurrent ? 'current' : '', node.id === centerId ? 'focused' : '', pinnedRevisionIds.includes(node.id) ? 'pinned' : '', versionSearch.results.some(({ revision }) => revision.id === node.id) ? 'search-hit' : ''].filter(Boolean).join(' ');
       button.dataset.revisionId = String(node.id);
       button.style.setProperty('--x', `${point.x}px`);
       button.style.setProperty('--y', `${point.y}px`);
@@ -2005,6 +2029,7 @@ try {
       stage.append(button);
     }
     versionGraph.append(stage);
+    versionGraph.querySelector('.graph-node.focused')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     for (const jump of graph.jumps) {
       const jumpButton = document.createElement('button');
       jumpButton.type = 'button';
@@ -2016,20 +2041,251 @@ try {
       jumpButton.addEventListener('click', () => focusGraphOn(jump.towardId));
       versionGraph.append(jumpButton);
     }
+    restoreVersionsFocus(hadVersionsFocus);
+  };
+
+  // Alt+Shift+F search over revision notes and change sets. Results replace
+  // nothing: the graph stays visible and steps to each hit as it is browsed.
+  const versionSearch = { results: [], index: -1, originRevisionId: null, active: false };
+
+  const renderVersionSearchCount = () => {
+    const { results, index, active } = versionSearch;
+    versionSearchCount.hidden = !active || versionSearchInput.value.trim() === '';
+    versionSearchCount.textContent = results.length === 0 ? 'No matches' : `${index + 1} of ${results.length}`;
+    versionSearchPrev.disabled = versionSearchNext.disabled = results.length === 0;
+  };
+
+  const stepVersionSearch = (index) => {
+    const { results } = versionSearch;
+    if (results.length === 0) return;
+    versionSearch.index = (index + results.length) % results.length;
+    focusGraphOn(results[versionSearch.index].revision.id, { keepSearch: true });
+    renderVersionSearchCount();
+  };
+
+  const focusVersionGraphKeepingSearch = () => requestAnimationFrame(() => versionGraph.focus());
+
+  function clearVersionSearch() {
+    versionSearch.results = [];
+    versionSearch.index = -1;
+    versionSearch.active = false;
+    versionSearchInput.value = '';
+    versionSearchCount.hidden = true;
+    versionSearchPrev.disabled = versionSearchNext.disabled = true;
+  }
+
+  const openVersionSearch = () => {
+    if (!activeHistory()) return;
+    if (!versionSearch.active) {
+      versionSearch.active = true;
+      versionSearch.originRevisionId = focusedRevisionId;
+    }
+    setVersionsOpen(true, { focus: false });
+    versionSearchInput.focus();
+    versionSearchInput.select();
   };
 
   versionSearchInput.addEventListener('input', () => {
     const currentHistory = activeHistory();
     if (!currentHistory) return;
-    const results = searchRevisions(currentHistory, versionSearchInput.value);
-    versionSearchResults.replaceChildren();
-    versionSearchResults.hidden = results.length === 0;
-    for (const revision of results) {
+    if (!versionSearch.active) {
+      versionSearch.active = true;
+      versionSearch.originRevisionId = focusedRevisionId;
+    }
+    versionSearch.results = searchHistory(currentHistory, versionSearchInput.value);
+    versionSearch.index = -1;
+    renderVersionSearchCount();
+    if (versionSearch.results.length > 0) stepVersionSearch(0);
+    else renderVersions();
+  });
+
+  versionSearchInput.addEventListener('keydown', (event) => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || (event.key === 'Enter' && !event.isComposing)) {
+      event.preventDefault();
+      const backwards = event.key === 'ArrowUp' || (event.key === 'Enter' && event.shiftKey);
+      stepVersionSearch(versionSearch.index + (backwards ? -1 : 1));
+    } else if (event.key === 'ArrowRight') {
+      // Go to the node, keep the search so the next hit is one Alt/arrow away.
+      event.preventDefault();
+      focusVersionGraphKeepingSearch();
+    } else if (event.key === 'ArrowLeft') {
+      // Clear the search but stay on the node it reached.
+      event.preventDefault();
+      clearVersionSearch();
+      renderVersions();
+      focusVersionGraphKeepingSearch();
+    } else if (event.key === 'Escape') {
+      // Clear the search and go back to where the search began.
+      event.preventDefault();
+      event.stopPropagation();
+      const origin = versionSearch.originRevisionId;
+      clearVersionSearch();
+      focusedRevisionId = origin;
+      inspectedRevisionId = origin;
+      renderVersions();
+      focusPanel('TEXT');
+    }
+  });
+
+  // Ctrl+F search over the active editor's text. While a query is present the
+  // navigation sidebar shows the hits instead of the section outline.
+  const textSearch = { root: 'STORY', matches: [], index: -1, origin: null, active: false };
+
+  const textSearchModel = () => models[textSearch.root];
+
+  const renderTextSearchResults = () => {
+    const text = textSearchModel().text;
+    const { matches } = textSearch;
+    textSearchResults.replaceChildren();
+    const summary = document.createElement('p');
+    summary.className = 'search-summary';
+    summary.textContent = matches.length === 0 ? 'No matches.' : `${matches.length} match${matches.length === 1 ? '' : 'es'} in ${textSearch.root[0]}${textSearch.root.slice(1).toLowerCase()}`;
+    textSearchResults.append(summary);
+    textSearchPrev.disabled = textSearchNext.disabled = matches.length === 0;
+    matches.forEach((match, index) => {
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = `Revision ${revision.id} · ${revision.origin} · ${revision.note ?? '[no note]'}`;
-      button.addEventListener('click', () => focusGraphOn(revision.id));
-      versionSearchResults.append(button);
+      button.tabIndex = -1;
+      button.classList.toggle('is-active', index === textSearch.index);
+      const { before, hit, after } = excerptAround(text, match);
+      const mark = document.createElement('mark');
+      mark.textContent = hit;
+      button.append(before, mark, after);
+      button.addEventListener('click', () => { previewTextMatch(index); acceptTextMatch(); });
+      textSearchResults.append(button);
+    });
+  };
+
+  const previewTextMatch = (index) => {
+    const { matches } = textSearch;
+    if (matches.length === 0) { editors[textSearch.root].setSearchHighlight(null); return; }
+    textSearch.index = (index + matches.length) % matches.length;
+    const match = matches[textSearch.index];
+    editors[textSearch.root].setSearchHighlight(match, paragraphRange(textSearchModel().text, match.from));
+    editors[textSearch.root].revealOffset(match.from);
+    renderTextSearchResults();
+    textSearchResults.querySelector('.is-active')?.scrollIntoView({ block: 'nearest' });
+  };
+
+  const setTextSearchMode = (on) => {
+    projectFolds.hidden = on;
+    textSearchResults.hidden = !on;
+  };
+
+  const endTextSearch = ({ restore }) => {
+    const { root, origin } = textSearch;
+    editors[root].setSearchHighlight(null);
+    textSearch.matches = [];
+    textSearch.index = -1;
+    textSearch.active = false;
+    textSearchInput.value = '';
+    textSearchPrev.disabled = textSearchNext.disabled = true;
+    setTextSearchMode(false);
+    if (restore && origin) {
+      editors[root].setSelection(origin.start, origin.end);
+      elements[root].focus();
+      requestAnimationFrame(() => { editors[root].element.scrollTop = origin.scrollTop; });
+    } else {
+      elements[root].focus();
+    }
+  };
+
+  // Right arrow / clicking a hit: select it and move to the text, keeping the
+  // search (and its highlight) alive.
+  const acceptTextMatch = () => {
+    const match = textSearch.matches[textSearch.index];
+    if (!match) return;
+    editors[textSearch.root].setSelection(match.from, match.to);
+    elements[textSearch.root].focus();
+    requestAnimationFrame(() => editors[textSearch.root].revealOffset(match.from));
+  };
+
+  const beginTextSearch = () => {
+    if (!['STORY', 'METADATA'].includes(activeRoot)) return;
+    if (!textSearch.active) {
+      textSearch.root = activeRoot;
+      textSearch.active = true;
+      const editor = editors[activeRoot];
+      textSearch.origin = {
+        start: models[activeRoot].selectionStart,
+        end: models[activeRoot].selectionEnd,
+        scrollTop: editor.element.scrollTop,
+      };
+    }
+  };
+
+  // Ctrl+F: focus the field with any previous query selected, ready to be
+  // replaced. Typing into the field never goes through here.
+  const focusTextSearch = () => {
+    beginTextSearch();
+    textSearchInput.focus();
+    textSearchInput.select();
+  };
+
+  textSearchInput.addEventListener('input', () => {
+    if (!textSearch.active) beginTextSearch();
+    if (textSearchInput.value === '') {
+      // Emptying the field is the same as leaving the search where it is.
+      const { root } = textSearch;
+      editors[root].setSearchHighlight(null);
+      textSearch.matches = [];
+      textSearch.index = -1;
+      textSearchPrev.disabled = textSearchNext.disabled = true;
+      setTextSearchMode(false);
+      return;
+    }
+    setTextSearchMode(true);
+    textSearch.matches = findTextMatches(textSearchModel().text, textSearchInput.value);
+    // Start from the first hit at or after where the search began.
+    const from = textSearch.origin?.start ?? 0;
+    const first = textSearch.matches.findIndex((match) => match.from >= from);
+    textSearch.index = -1;
+    renderTextSearchResults();
+    previewTextMatch(first === -1 ? 0 : first);
+  });
+
+  // The glass is hidden as soon as the field gains focus, so it acts on
+  // mousedown (before the button itself can take focus and vanish).
+  for (const [selector, open] of [['[data-text-search-glass]', focusTextSearch], ['[data-version-search-glass]', openVersionSearch]]) {
+    const glass = document.querySelector(selector);
+    glass.addEventListener('mousedown', (event) => { event.preventDefault(); open(); });
+    glass.addEventListener('click', (event) => { if (event.detail === 0) open(); }); // keyboard activation
+  }
+
+  // Buttons keep focus where it is (the field or the editor) so stepping never
+  // interrupts typing.
+  for (const [button, delta] of [[textSearchPrev, -1], [textSearchNext, 1]]) {
+    button.addEventListener('mousedown', (event) => event.preventDefault());
+    button.addEventListener('click', () => previewTextMatch(textSearch.index + delta));
+  }
+  for (const [button, delta] of [[versionSearchPrev, -1], [versionSearchNext, 1]]) {
+    button.addEventListener('mousedown', (event) => event.preventDefault());
+    button.addEventListener('click', () => stepVersionSearch(versionSearch.index + delta));
+  }
+
+  textSearchInput.addEventListener('keydown', (event) => {
+    if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter') {
+      event.preventDefault();
+      const backwards = event.key === 'ArrowUp' || (event.key === 'Enter' && event.shiftKey);
+      previewTextMatch(textSearch.index + (backwards ? -1 : 1));
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      acceptTextMatch();
+    } else if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      const match = textSearch.matches[textSearch.index];
+      const { root } = textSearch;
+      endTextSearch({ restore: false });
+      if (match) {
+        editors[root].setSelection(match.from, match.to);
+        requestAnimationFrame(() => editors[root].revealOffset(match.from));
+      }
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      endTextSearch({ restore: true });
     }
   });
 
@@ -2316,6 +2572,23 @@ try {
   versionGraph.addEventListener('keydown', (event) => {
     const currentHistory = activeHistory();
     if (!currentHistory) return;
+    // Ctrl+Alt+Arrows belong to the search results while a search is active
+    // (handled at the window level), not to the node-by-node arrow stepping.
+    if (versionSearch.active && event.ctrlKey && event.altKey && !event.shiftKey && event.key.startsWith('Arrow')) return;
+    // Search navigation mode: while a search is active, F3 / Shift+F3 step
+    // through the highlighted nodes and Escape ends the search on the node.
+    if (versionSearch.active && versionSearch.results.length > 0 && event.key === 'F3') {
+      event.preventDefault();
+      stepVersionSearch(versionSearch.index + (event.shiftKey ? -1 : 1));
+      return;
+    }
+    if (versionSearch.active && event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      clearVersionSearch();
+      renderVersions();
+      return;
+    }
     const currentId = focusedRevisionId ?? currentHistory.currentRevision;
     const revision = currentHistory.revisions.get(currentId);
     let nextId = null;
@@ -2986,16 +3259,50 @@ try {
   };
   for (const container of [sidebarLeft, workspace, sidebarRight, versionsView]) trapTabWithin(container);
 
+  // Ctrl+Alt+Arrows walk the active search's results, like the Shift+Alt
+  // timeline: Left/Right previous/next, Up/Down first/last. Which search it
+  // is depends on the panel; with no search active in that panel the keys
+  // fall through to the structural scrub.
+  const handleSearchResultKeydown = (event) => {
+    const move = { ArrowLeft: (i) => i - 1, ArrowRight: (i) => i + 1, ArrowUp: () => 0, ArrowDown: (n) => n - 1 }[event.key];
+    if (!move) return false;
+    const panel = event.target === textSearchInput ? 'TEXT' : panelForElement(event.target);
+    if (panel === 'TEXT' && textSearch.active && textSearch.matches.length > 0) {
+      event.preventDefault();
+      const count = textSearch.matches.length;
+      previewTextMatch(event.key === 'ArrowDown' ? count - 1 : move(textSearch.index));
+      return true;
+    }
+    if (panel === 'VERSIONS' && versionSearch.active && versionSearch.results.length > 0) {
+      event.preventDefault();
+      const count = versionSearch.results.length;
+      stepVersionSearch(event.key === 'ArrowDown' ? count - 1 : move(versionSearch.index));
+      return true;
+    }
+    return false;
+  };
+
   window.addEventListener('keydown', (event) => {
     if (scrubSession && event.key === 'Escape') {
       event.preventDefault();
       cancelScrub();
       return;
     }
+    if (event.altKey && event.ctrlKey && !event.shiftKey && !event.metaKey && handleSearchResultKeydown(event)) return;
     if (event.altKey && !event.metaKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
       if (event.ctrlKey) { handleScrubKeydown('structural', event); return; }
       if (event.shiftKey) { handleScrubKeydown('visit-time', event); return; }
       handleLocationScrub(event);
+      return;
+    }
+    if (event.shiftKey && event.altKey && !event.ctrlKey && !event.metaKey && event.code === 'KeyF') {
+      event.preventDefault();
+      openVersionSearch();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.code === 'KeyF') {
+      event.preventDefault();
+      focusTextSearch();
       return;
     }
     // Escape backs out of a panel toward the editor. The prompt textarea has

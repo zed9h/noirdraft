@@ -88,10 +88,10 @@ test('the local graph collapses distant revisions into a searchable jump, and se
     await expect(graph.locator('.graph-node.focused')).toContainText('3');
     await expect(graph.locator('.graph-jump[data-direction="ancestor"]')).toBeVisible();
 
+    await window.getByRole('button', { name: 'Open revision search' }).click();
     await window.getByLabel('Search revisions').fill('Edit 5');
-    const results = window.locator('[data-version-search-results] button');
-    await expect(results).toHaveCount(1);
-    await results.first().click();
+    // Search highlights and steps to the hit; there is no separate result list.
+    await expect(window.locator('[data-version-search-count]')).toHaveText('1 of 1');
     await expect(graph.locator('.graph-node.focused')).toContainText('6');
   } finally {
     await application.close();

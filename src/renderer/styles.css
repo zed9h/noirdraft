@@ -57,7 +57,12 @@
 
 * { box-sizing: border-box; }
 
-::selection { color: #fff8ed; background: #765638; }
+::selection { color: #fff; background: #44b; }
+/* Blue is selection and "in use by the agent"; yellow is search. */
+::highlight(search-paragraph) { background-color: rgb(66, 66, 33); }
+::highlight(search-term) { color: #222; background-color: #ffa; }
+::highlight(agent-paragraph) { background-color: rgb(30, 59, 30); }
+::highlight(agent-target) { color: #fff; background-color: rgb(64, 114, 64); }
 ::-webkit-scrollbar { width: .7rem; height: .7rem; }
 ::-webkit-scrollbar-track { background: #15120f; }
 ::-webkit-scrollbar-thumb { border: 2px solid #15120f; border-radius: 999px; background: #5c4938; }
@@ -496,10 +501,6 @@ button { font: inherit; }
 .chat-call-icon:hover, .chat-turn-delete:hover, .chat-context-marker:hover:not(:disabled) { color: #e8ad70; border-color: #6f5843; background: #3a3028; }
 .chat-call-icon:focus-visible, .chat-turn-delete:focus-visible, .chat-context-marker:focus-visible { outline: 1px solid #e8ad70; outline-offset: 1px; }
 .chat-turn-delete { color: #b67562; font-size: .95rem; }
-.agent-target-highlight-0 { background: color-mix(in srgb, #bd8f61 30%, transparent); }
-.agent-target-highlight-1 { background: color-mix(in srgb, #6c93b8 30%, transparent); }
-.agent-target-highlight-2 { background: color-mix(in srgb, #8b9b62 30%, transparent); }
-.agent-target-highlight-3 { background: color-mix(in srgb, #9b6e9c 30%, transparent); }
 .chat-turn.context-start { border-color: #bd8f61; }
 .chat-turn > header { position: relative; z-index: 3; display: flex; align-items: center; justify-content: flex-start; min-height: 1.2rem; gap: .35rem; color: #bd8f61; font-size: .68rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
 .chat-turn-actions { display: flex; align-items: center; gap: .2rem; margin-left: auto; }
@@ -568,17 +569,6 @@ button { font: inherit; }
   color: #ddd4ca;
   background: #12100e;
   font-size: .82rem;
-}
-.version-search-results { display: flex; flex-direction: column; gap: .25rem; }
-.version-search-results[hidden] { display: none; }
-.version-search-results button {
-  text-align: left;
-  padding: .3rem .5rem;
-  border: 1px solid #2c2722;
-  border-radius: .2rem;
-  color: #ccc2b6;
-  background: #1c1916;
-  font-size: .78rem;
 }
 .version-graph { position: relative; overflow: auto; flex: 1; min-height: 8rem; border: 1px solid #2c2722; border-radius: .25rem; background: #12100e; outline: none; }
 .version-graph:focus-visible { border-color: #8d6a48; box-shadow: 0 0 0 1px #8d6a48; }
@@ -691,3 +681,39 @@ button { font: inherit; }
 .chat-agent-progress { white-space: pre-line; opacity: 0.8; }
 .chat-agent-quote { margin: 0; padding-left: 0.75em; border-left: 3px solid currentColor; white-space: pre-wrap; }
 .chat-agent-notebooks { margin: 0; font-family: ui-monospace, Consolas, monospace; white-space: pre; overflow-x: auto; }
+
+.search-results { display: flex; flex-direction: column; gap: .1rem; padding: .3rem; overflow-y: auto; flex: 1 1 auto; }
+.search-results[hidden] { display: none; }
+.project-folds[hidden] { display: none; }
+.search-results .search-summary { margin: 0 0 .3rem; color: #8a8074; font-size: .74rem; }
+.search-results button {
+  text-align: left; padding: .25rem .4rem; border: 1px solid transparent; border-radius: .2rem;
+  color: #978d81; background: transparent; font-size: .78rem; line-height: 1.3;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.search-results button:hover { color: #e2dbd1; }
+.search-results button.is-active { border-color: #6a5a44; color: #e2dbd1; background: #1c1916; }
+.search-results mark { color: #222; background: #ffa; }
+.graph-node.search-hit { box-shadow: 0 0 0 2px #ffa; }
+
+.version-search-count { color: #8a8074; font-size: .76rem; white-space: nowrap; }
+.version-search-count[hidden] { display: none; }
+.versions-heading .icon-button:disabled, .header-actions .icon-button:disabled { opacity: .4; cursor: default; }
+
+.icon-svg { width: 1rem; height: 1rem; display: block; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.search-field { display: flex; align-items: center; gap: .25rem; }
+.versions-heading .search-field { margin-left: auto; }
+.search-field input {
+  width: 14rem; padding: .3rem .55rem;
+  border: 1px solid #3a342e; border-radius: .25rem;
+  color: #ddd4ca; background: #12100e; font-size: .82rem;
+  transition: width .12s ease;
+}
+.versions-heading .search-field input:not(:placeholder-shown), .versions-heading .search-field input:focus { width: 16rem; }
+.search-field input:focus-visible { outline: 1px solid #6a5a44; }
+/* Empty and unfocused: only the looking glass remains. */
+/* No query: no counter, no step buttons — the field alone (or just the glass). */
+.search-field:has(input:placeholder-shown) > :not(.search-glass):not(input) { display: none; }
+.search-field:not(:focus-within) input:placeholder-shown { width: 0; padding: 0; border-width: 0; opacity: 0; }
+.search-field .search-glass { padding: .3rem .4rem; }
+.search-field:focus-within .search-glass, .search-field:has(input:not(:placeholder-shown)) .search-glass { display: none; }

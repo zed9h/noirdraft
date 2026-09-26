@@ -16,6 +16,8 @@
           <span class="status" data-document-status>No document open</span>
         </div>
         <div class="header-actions toolbar" data-toolbar>
+          <div class="search-field header-search" data-search-field><button type="button" class="icon-button search-glass" data-text-search-glass aria-label="Open text search" title="Search the text (Ctrl+F). Then ↑/↓ or Ctrl+Alt+←/→ step through matches."><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="M15 15l6 6"/></svg></button><input type="search" data-text-search aria-label="Search text" title="Search the text (Ctrl+F). Up/Down step through results, Right goes there and keeps the search, Left clears it and stays, Escape clears it and returns." placeholder="Search text…" autocomplete="off" spellcheck="false"><button type="button" class="icon-button" data-text-search-prev disabled title="Previous match (Up, Ctrl+Alt+←; Ctrl+Alt+↑ for the first)" aria-label="Previous text match"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg></button><button type="button" class="icon-button" data-text-search-next disabled title="Next match (Down, Enter, Ctrl+Alt+→; Ctrl+Alt+↓ for the last)" aria-label="Next text match"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button></div>
+          <span class="toolbar-divider" aria-hidden="true"></span>
           <button type="button" class="icon-button" data-nav-stop-back title="Previous stop (Alt+←)" aria-label="Previous stop"><span class="icon-glyph">chevron_left</span></button>
           <button type="button" class="icon-button" data-nav-stop-forward title="Next stop (Alt+→)" aria-label="Next stop"><span class="icon-glyph">chevron_right</span></button>
           <span class="toolbar-divider" aria-hidden="true"></span>
@@ -130,6 +132,7 @@
               <div id="metadata-outline" class="outline fold-outline" data-outline-metadata aria-label="Metadata outline"></div>
             </section>
           </div>
+          <div class="search-results" data-text-search-results aria-label="Text search results" hidden></div>
           <div class="passage-history" data-passage-history aria-label="Passage history" hidden>
             <button type="button" data-passage-history-toggle title="Show how the selected passage has changed across revisions">Passage history…</button>
             <div class="passage-history-list" data-passage-history-list hidden></div>
@@ -213,9 +216,7 @@
       <div class="pane-resizer pane-resizer-horizontal" data-pane-resizer="versions" data-resizer-for="versions-view" role="separator" aria-label="Resize versions pane" aria-orientation="horizontal" tabindex="0" hidden></div>
       <section id="versions-view" class="versions-view" aria-label="Versions graph" hidden>
         <div class="version-graph-panel" data-version-graph-panel>
-          <div class="versions-heading"><p class="eyebrow">Versions</p></div>
-          <input type="text" data-version-search aria-label="Search revisions" title="Search revisions by id, note, or origin" placeholder="Search revisions (id, note, origin)…">
-          <div class="version-search-results" data-version-search-results hidden></div>
+          <div class="versions-heading"><p class="eyebrow">Versions</p><div class="search-field" data-search-field><button type="button" class="icon-button search-glass" data-version-search-glass aria-label="Open revision search" title="Search revision notes and changes (Alt+Shift+F). Then ↑/↓, F3 or Ctrl+Alt+←/→ step through matching nodes."><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="M15 15l6 6"/></svg></button><span class="version-search-count" data-version-search-count aria-live="polite" hidden></span><input type="text" data-version-search aria-label="Search revisions" title="Search revision notes and change sets (Alt+Shift+F). Up/Down step through results, Right goes there and keeps the search, Left clears it and stays, Escape clears it and returns to the text." placeholder="Search notes and changes…"><button type="button" class="icon-button" data-version-search-prev disabled title="Previous matching revision (Up, Shift+F3, Ctrl+Alt+←; Ctrl+Alt+↑ for the first)" aria-label="Previous matching revision"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg></button><button type="button" class="icon-button" data-version-search-next disabled title="Next matching revision (Down, F3, Ctrl+Alt+→; Ctrl+Alt+↓ for the last)" aria-label="Next matching revision"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button></div></div>
           <div class="version-graph" data-version-graph aria-label="Version graph" tabindex="0"></div>
         </div>
         <aside class="version-inspector" data-version-inspector aria-label="Pinned variations">

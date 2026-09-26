@@ -1,6 +1,8 @@
 import { createCommandHandler } from './commands.js';
+import { setHighlightRanges } from './highlight-registry.js';
 import { OffsetMapping } from './mapping.js';
 import { MarkdownRenderer } from './render.js';
+import { paragraphRange } from '../search.js';
 import { readDOMSelection, writeDOMSelection } from './selection.js';
 
 function asDOMRect(rect) {
@@ -105,6 +107,32 @@ export class EditContextEditor {
       .filter(({ from, to }) => Number.isSafeInteger(from) && Number.isSafeInteger(to) && from < to)
       .map(({ from, to, color = 0 }) => ({ from, to, color }));
     this.#applyHighlights();
+  }
+
+  /**
+   * Search decoration: the matched term plus the paragraph around it. Uses the
+   * CSS Custom Highlight API so it never touches the rendered runs, and is
+   * kept apart from setHighlights (agent targets), which it must not disturb.
+   */
+  setSearchHighlight(term = null, paragraph = null) {
+    this.searchHighlight = term && term.from < term.to ? { term, paragraph } : null;
+    this.#applySearchHighlight();
+  }
+
+  #rangeFor({ from, to }) {
+    const start = this.mapping.toDOM(from);
+    const end = this.mapping.toDOM(to);
+    if (!start || !end) return null;
+    const range = new Range();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+    return range;
+  }
+
+  #applySearchHighlight() {
+    const found = this.searchHighlight;
+    setHighlightRanges(this, 'search-term', found ? [this.#rangeFor(found.term)].filter(Boolean) : [], 4);
+    setHighlightRanges(this, 'search-paragraph', found?.paragraph ? [this.#rangeFor(found.paragraph)].filter(Boolean) : [], 2);
   }
 
   #listen() {
@@ -251,8 +279,9 @@ export class EditContextEditor {
   #modelChanged(snapshot, change) {
     if (change.type === 'replace') {
       this.renderer.render(snapshot.text, change);
-      this.#applyHighlights();
       this.mapping.refresh();
+      this.#applyHighlights();
+      this.#applySearchHighlight();
       // Every edit (typing, IME commit, paste, undo, …) lands on a fresh,
       // direction-less caret/range: resync here, synchronously, before the
       // DOM sync below reads #anchor/#focus — model.replace() emits this
@@ -370,13 +399,12 @@ export class EditContextEditor {
     this.element.style.setProperty('--caret-height', `${glyph.height}px`);
   }
 
+  // Agent-target decoration: the targeted range plus its paragraph.
   #applyHighlights() {
-    for (const run of this.element.querySelectorAll('.source-run')) {
-      const from = Number(run.dataset.from);
-      const to = Number(run.dataset.to);
-      const highlight = this.highlights.find((range) => range.from < to && range.to > from);
-      run.classList.remove('agent-target-highlight-0', 'agent-target-highlight-1', 'agent-target-highlight-2', 'agent-target-highlight-3');
-      if (highlight) run.classList.add(`agent-target-highlight-${highlight.color % 4}`);
-    }
+    const text = this.model.text;
+    const targets = this.highlights.map((range) => this.#rangeFor(range)).filter(Boolean);
+    const paragraphs = this.highlights.map((range) => this.#rangeFor(paragraphRange(text, range.from))).filter(Boolean);
+    setHighlightRanges(this, 'agent-target', targets, 3);
+    setHighlightRanges(this, 'agent-paragraph', paragraphs, 1);
   }
 }

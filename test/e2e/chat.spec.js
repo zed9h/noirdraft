@@ -377,10 +377,10 @@ test('a queued rewrite can be cancelled from its call row and releases its highl
     await window.getByRole('button', { name: 'Send' }).click();
     const job = window.locator('.chat-call');
     await expect(job.getByRole('button', { name: /Cancel call in turn/ })).toBeVisible();
-    await expect(window.locator('#story-editor .agent-target-highlight-1')).toHaveCount(1);
+    await expect.poll(() => window.evaluate(() => CSS.highlights.get('agent-target')?.size)).toBe(1);
     await job.getByRole('button', { name: /Cancel call in turn/ }).click();
     await expect(job).toHaveClass(/chat-call-cancelled/);
-    await expect(window.locator('#story-editor [class*="agent-target-highlight"]')).toHaveCount(0);
+    await expect.poll(() => window.evaluate(() => CSS.highlights.get('agent-target')?.size ?? 0)).toBe(0);
     expect(await window.evaluate(() => window.__noirDraftTest.models.STORY.text)).toBe('Keep this.\n');
   } finally {
     await server.close();
