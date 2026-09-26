@@ -65,5 +65,27 @@ test('passageHistory returns no entries when the passage was never touched', asy
   const result = await passageHistory(history, history.currentRevision, range);
   assert.equal(result.entries.length, 0);
   assert.equal(result.approximate, false);
+  assert.deepEqual(result.roots.map((root) => root.revisionId), [0]);
+  assert.deepEqual(result.roots[0].rangeInResult, range);
   assert.equal(result.stoppedReason, 'root');
+});
+
+test('passageHistory follows the passage across sibling branches and later revisions, not just ancestors', async () => {
+  const v0 = '# Chapter\n\nMaria walked in.\n\nElias watched.\n';
+  const history = await createHistory(v0, { checkpointInterval: 1000 });
+  const from = v0.indexOf('Maria walked in.');
+  const range = [from, from + 'Maria walked in.'.length];
+
+  const branchA = v0.replace('Maria walked in.', 'Maria strode in.');
+  await commitRevision(history, v0, branchA, { origin: 'agent', note: 'Alt A' });
+  history.currentRevision = 0;
+  const branchB = v0.replace('Maria walked in.', 'Maria crept in.');
+  await commitRevision(history, v0, branchB, { origin: 'agent', note: 'Alt B' });
+  const later = branchB.replace('Elias watched.', 'Elias watched, unmoved.');
+  await commitRevision(history, branchB, later, { origin: 'user', note: 'Elsewhere' });
+  const finalText = later.replace('crept', 'crept quietly');
+  await commitRevision(history, later, finalText, { origin: 'user', note: 'Refined' });
+
+  const result = await passageHistory(history, history.currentRevision, range);
+  assert.deepEqual(result.entries.map((entry) => entry.revisionId).sort((a, b) => a - b), [1, 2, 4]);
 });

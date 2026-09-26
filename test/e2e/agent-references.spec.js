@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { startFakeKoboldServer } from '../support/fake-kobold-server.js';
 
-test('including a compared passage as an AI reference shows it as included and sends it in the next request', async () => {
+test('a pinned version is sent as AI context and leaves it when unpinned', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'noirdraft-e2e-prefs-'));
   const preferencesPath = path.join(directory, 'preferences.json');
   await writeFile(preferencesPath, JSON.stringify({ koboldUrl: 'http://127.0.0.1:1' }), 'utf8');
@@ -37,13 +37,13 @@ test('including a compared passage as an AI reference shows it as included and s
     await window.getByRole('button', { name: 'Versions', exact: true }).click();
 
     await window.locator('[data-version-graph]').getByRole('button', { name: /^Revision 1\b/ }).click();
-    const card = window.locator('.graph-card');
-    await card.getByRole('button', { name: 'Include as AI reference' }).click();
-    await expect(card.getByRole('button', { name: 'Remove from AI reference' })).toBeVisible();
+    const card = window.locator('[data-version-detail]');
+    await card.getByRole('button', { name: 'Pin revision' }).click();
+    await expect.poll(() => window.evaluate(() => window.__noirDraftTest.getAgentReferences().length)).toBe(1);
 
     const includedBeforeGenerate = await window.evaluate(() => window.__noirDraftTest.getAgentReferences());
     expect(includedBeforeGenerate).toHaveLength(1);
-    expect(includedBeforeGenerate[0].text).toContain('The room was cold.');
+    expect(includedBeforeGenerate[0].text).toContain('room was cold.');
 
     // Selecting a fresh target and generating must actually send this reference.
     const selectionForGenerate = await window.evaluate(() => {
@@ -58,16 +58,12 @@ test('including a compared passage as an AI reference shows it as included and s
 
     // Prove the reference was actually sent to the model, not just tracked in the UI.
     const sentText = server.getChatRequests().flatMap(({ messages }) => messages.map(({ content }) => String(content))).join('\n');
-    expect(sentText).toContain('REFERENCE Revision 1 passage (user)');
-    expect(sentText).toContain('The room was cold.');
+    expect(sentText).toContain('REFERENCE Pinned STORY revision 1 (Base state)');
+    expect(sentText).toContain('room was cold.');
 
-    // Removing it must clear the reference again. The button's accessible name
-    // changed after the first click, so re-query it rather than reusing the
-    // stale "Include as AI reference" locator.
-    await card.getByRole('button', { name: 'Remove from AI reference' }).click();
-    await expect(card.getByRole('button', { name: 'Include as AI reference' })).toBeVisible();
-    const includedAfterRemove = await window.evaluate(() => window.__noirDraftTest.getAgentReferences());
-    expect(includedAfterRemove).toHaveLength(0);
+    // Unpinning the version removes it from the context again.
+    await card.getByRole('button', { name: 'Unpin revision' }).click();
+    await expect.poll(() => window.evaluate(() => window.__noirDraftTest.getAgentReferences().length)).toBe(0);
   } finally {
     await server.close();
     await application.close();

@@ -6,6 +6,7 @@ const definitions = {
   autoNotes: { type: 'boolean', fallback: false },
   saveTimestampedCopies: { type: 'boolean', fallback: true },
   saveOnEveryRevision: { type: 'boolean', fallback: false },
+  validPatchDiff: { type: 'boolean', fallback: false },
   chatHistoryMessages: { type: 'integer', fallback: 6, min: 0 },
   contextRows: { type: 'integer', fallback: 12, min: 1, max: 200 },
 };

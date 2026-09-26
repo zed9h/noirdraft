@@ -1,4 +1,6 @@
 import { test, expect, _electron as electron } from '@playwright/test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 test('the bottom Versions panel renders explorable graph nodes and pinned variations', async () => {
@@ -26,7 +28,7 @@ test('the bottom Versions panel renders explorable graph nodes and pinned variat
     await expect(graph.locator('.graph-edges path')).toHaveCount(2);
 
     await graph.getByRole('button', { name: /^Revision 1\b/ }).click();
-    const card = graph.locator('.graph-card');
+    const card = window.locator('[data-version-detail]');
     await expect(card.getByRole('heading', { name: 'Revision 1' })).toBeVisible();
     await expect(card).toContainText('Linear note');
     await card.getByRole('button', { name: 'Pin revision' }).click();
@@ -40,7 +42,7 @@ test('the bottom Versions panel renders explorable graph nodes and pinned variat
     await window.keyboard.press('ArrowLeft');
     await expect(graph.locator('.graph-node.focused')).toContainText('0');
 
-    await graph.getByRole('button', { name: 'Check out revision' }).click();
+    await window.getByRole('button', { name: 'Check out revision' }).click();
     await expect(graph.locator('.graph-node[data-revision-id="0"]')).toHaveClass(/current/);
     await expect(graph.locator('.graph-node.current')).toHaveCount(1);
   } finally {
@@ -88,5 +90,87 @@ test('the graph shows the whole history, zooms and pans with the mouse, and sear
     await expect(graph.locator('.graph-node.focused')).toContainText('6');
   } finally {
     await application.close();
+  }
+});
+
+test('clicking the selected node again deselects it and hides the detail pane', async () => {
+  const application = await electron.launch({
+    args: [path.resolve('.')],
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
+  });
+  try {
+    const window = await application.firstWindow();
+    await window.waitForFunction(() => Boolean(window.__noirDraftTest?.getCommitController()));
+    await window.evaluate(async () => {
+      const { model, getCommitController } = window.__noirDraftTest;
+      model.replace(model.text.length, model.text.length, '\nOne more line.');
+      await getCommitController().explicitSave('Note');
+    });
+    await window.getByRole('button', { name: 'Versions', exact: true }).click();
+    const graph = window.locator('[data-version-graph]');
+    const detail = window.locator('[data-version-detail]');
+    await expect(detail).toBeHidden();
+    await expect(graph.locator('.graph-node.focused')).toHaveCount(0);
+    const before = (await graph.boundingBox()).width;
+
+    await graph.getByRole('button', { name: /^Revision 0\b/ }).click();
+    await expect(graph.locator('.graph-node.focused')).toHaveCount(1);
+    await expect(detail).toBeVisible();
+    expect((await graph.boundingBox()).width).toBeLessThan(before);
+
+    // The divider between graph and detail is resizable, and the detail scrolls inside the pane.
+    const resizer = window.locator('[data-pane-resizer="detail"]');
+    await expect(resizer).toBeVisible();
+    const detailWidth = (await detail.boundingBox()).width;
+    await resizer.focus();
+    await window.keyboard.press('ArrowLeft');
+    await expect.poll(async () => (await detail.boundingBox()).width).toBeGreaterThan(detailWidth);
+    const paneBox = await window.locator('#versions-view').boundingBox();
+    const detailBox = await detail.boundingBox();
+    expect(detailBox.y + detailBox.height).toBeLessThanOrEqual(paneBox.y + paneBox.height + 1);
+
+    await graph.getByRole('button', { name: /^Revision 0\b/ }).click();
+    await expect(graph.locator('.graph-node.focused')).toHaveCount(0);
+    await expect(detail).toBeHidden();
+    await expect.poll(async () => (await graph.boundingBox()).width).toBe(before);
+  } finally {
+    await application.close();
+  }
+});
+
+test('the Patch prefixes toggle shows the stored + / - / space prefixes in revision diffs and is saved as a project option', async () => {
+  // Isolated machine preferences: the toggle persists there and must not touch the real ones.
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'noirdraft-e2e-prefs-'));
+  const application = await electron.launch({
+    args: [path.resolve('.')],
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true', NOIRDRAFT_E2E_PREFERENCES_PATH: path.join(directory, 'preferences.json') },
+  });
+  try {
+    const window = await application.firstWindow();
+    await window.waitForFunction(() => Boolean(window.__noirDraftTest?.getCommitController()));
+    await window.evaluate(async () => {
+      const { model, getCommitController } = window.__noirDraftTest;
+      model.replace(model.text.length, model.text.length, '\nAdded line.');
+      await getCommitController().explicitSave('Note');
+    });
+    await window.getByRole('button', { name: 'Versions', exact: true }).click();
+    const graph = window.locator('[data-version-graph]');
+    await graph.getByRole('button', { name: /^Revision 1\b/ }).click();
+    const added = window.locator('[data-version-detail] .diff-row-add', { hasText: 'Added line.' });
+    await expect(added.first()).toContainText('Added line.');
+    await expect(added.first()).not.toContainText('+');
+
+    await window.getByRole('button', { name: 'More actions' }).click();
+    await window.getByRole('button', { name: 'Patch prefixes' }).click();
+    await expect(window.getByRole('button', { name: 'Patch prefixes' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(added.first()).toHaveText(/^\+.*Added line\./);
+    await expect(window.locator('[data-version-detail] .diff-row-context').first()).toHaveText(/^ /);
+    await expect.poll(() => window.evaluate(() => window.__noirDraftTest.models.METADATA.text)).toContain('validPatchDiff: true');
+
+    await window.getByRole('button', { name: 'Patch prefixes' }).click();
+    await expect(added.first()).not.toContainText('+');
+  } finally {
+    await application.close();
+    await rm(directory, { recursive: true, force: true });
   }
 });

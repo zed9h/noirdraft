@@ -44,6 +44,7 @@
               <button type="button" data-ai-connection title="Set the OpenAI-compatible API address (and optional API key) used for chat and proposals. Editing and saving work without it.">OpenAI API…</button>
               <button type="button" data-toggle-auto-notes aria-pressed="false" title="Ask the AI to write a short note for each new revision. Runs while chat is idle. Needs a connected API.">Auto notes</button>
               <button type="button" data-toggle-save-on-revision aria-pressed="false" title="Write the file to disk every time a revision is recorded. When off, the file is written only by Save.">Save each revision</button>
+              <button type="button" data-toggle-valid-patch aria-pressed="false" title="Show revision diffs as the stored patch, keeping the + / - / space prefix on every row. When off, rows are shown without prefixes.">Patch prefixes</button>
               <button type="button" data-toggle-timestamped-saves aria-pressed="true" title="Every save creates a new file named with the date and time, so no earlier save is overwritten.">Timestamped saves</button>
               <button type="button" data-app-info title="Show document statistics, AI connection details, and app version.">Info…</button>
             </div>
@@ -162,23 +163,6 @@
             spellcheck="true"
             hidden
           ></div>
-          <section id="composite-view" class="composite-view editor-pane" aria-label="Composite" hidden>
-            <div class="composite-toolbar">
-              <span class="composite-hint">Editable composite — adopt hunks from compared revisions, edit directly, then commit.</span>
-              <button type="button" data-composite-commit title="Save the composite as a new revision">Commit composite</button>
-              <button type="button" data-composite-discard title="Discard the composite and return to Story">Discard</button>
-            </div>
-            <div
-              id="composite-editor"
-              class="story-editor editor-pane"
-              role="textbox"
-              aria-label="Composite source"
-              aria-multiline="true"
-              tabindex="0"
-              spellcheck="true"
-            ></div>
-            <div class="composite-provenance" data-composite-provenance aria-label="Composite provenance"></div>
-          </section>
           <div class="pane-resizer pane-resizer-horizontal pinned-resizer" data-pane-resizer="pinned" role="separator" aria-label="Resize pinned versions pane" aria-orientation="horizontal" tabindex="0" hidden></div>
           <section class="pinned-panel" data-pinned-panel aria-label="Pinned versions" hidden>
             <div class="pinned-panel-heading">
@@ -220,9 +204,11 @@
       <div class="pane-resizer pane-resizer-horizontal" data-pane-resizer="versions" data-resizer-for="versions-view" role="separator" aria-label="Resize versions pane" aria-orientation="horizontal" tabindex="0" hidden></div>
       <section id="versions-view" class="versions-view" aria-label="Versions graph" hidden>
         <div class="version-graph-panel" data-version-graph-panel>
-          <div class="versions-heading"><p class="eyebrow">Versions</p><div class="search-field" data-search-field><button type="button" class="icon-button search-glass" data-version-search-glass aria-label="Open revision search" title="Search revision notes and changes (Alt+Shift+F). Then ↑/↓, F3 or Ctrl+Alt+←/→ step through matching nodes."><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="M15 15l6 6"/></svg></button><span class="version-search-count" data-version-search-count aria-live="polite" hidden></span><input type="text" data-version-search aria-label="Search revisions" title="Search revision notes and change sets (Alt+Shift+F). Up/Down step through results, Right goes there and keeps the search, Left clears it and stays, Escape clears it and returns to the text." placeholder="Search notes and changes…"><button type="button" class="icon-button" data-version-search-prev disabled title="Previous matching revision (Up, Shift+F3, Ctrl+Alt+←; Ctrl+Alt+↑ for the first)" aria-label="Previous matching revision"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg></button><button type="button" class="icon-button" data-version-search-next disabled title="Next matching revision (Down, F3, Ctrl+Alt+→; Ctrl+Alt+↓ for the last)" aria-label="Next matching revision"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button></div></div>
+          <div class="versions-heading"><p class="eyebrow">Versions</p><div class="passage-banner" data-passage-banner hidden></div><div class="search-field" data-search-field><button type="button" class="icon-button search-glass" data-version-search-glass aria-label="Open revision search" title="Search revision notes and changes (Alt+Shift+F). Then ↑/↓, F3 or Ctrl+Alt+←/→ step through matching nodes."><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="M15 15l6 6"/></svg></button><span class="version-search-count" data-version-search-count aria-live="polite" hidden></span><input type="text" data-version-search aria-label="Search revisions" title="Search revision notes and change sets (Alt+Shift+F). Up/Down step through results, Right goes there and keeps the search, Left clears it and stays, Escape clears it and returns to the text." placeholder="Search notes and changes…"><button type="button" class="icon-button" data-version-search-prev disabled title="Previous matching revision (Up, Shift+F3, Ctrl+Alt+←; Ctrl+Alt+↑ for the first)" aria-label="Previous matching revision"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg></button><button type="button" class="icon-button" data-version-search-next disabled title="Next matching revision (Down, F3, Ctrl+Alt+→; Ctrl+Alt+↓ for the last)" aria-label="Next matching revision"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button></div></div>
           <div class="version-graph" data-version-graph aria-label="Version graph" tabindex="0"></div>
         </div>
+        <div class="pane-resizer pane-resizer-vertical" data-pane-resizer="detail" role="separator" aria-label="Resize revision detail pane" aria-orientation="vertical" tabindex="0" hidden></div>
+        <aside class="version-detail" data-version-detail aria-label="Revision detail" hidden></aside>
       </section>
     </div>
     <script type="module" src="./app.js"></script>

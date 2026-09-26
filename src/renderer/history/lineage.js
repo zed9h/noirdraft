@@ -52,44 +52,74 @@ export function mapRange(fromText, toText, range) {
 }
 
 /**
- * Walks a selected STORY range backward through ancestor revisions, mapping
- * it through each parent transition. Only hops whose single changed block
- * overlaps the (possibly widened) tracked range are reported, since those are
- * the revisions that plausibly touched the passage. Once a hop is uncertain,
- * every later entry is also flagged `approximate` because the tracked range
- * it is compared against is itself a hint rather than an exact position.
- * This never invents stable paragraph identity; it only replays exact patches.
+ * Traces a selected STORY range through the whole revision graph, across every
+ * branch: from the revision it was selected in, the range is mapped to each
+ * parent and child in turn (primary-parent edges only, since those are the
+ * diff bases). An edge whose single changed block overlaps the tracked range
+ * marks its child revision as one that changed the passage; the tracked range
+ * is then the whole corresponding block, so entries are hints, never exact
+ * positions. A branch stops where the passage stops existing (inserted or
+ * deleted), since nothing beyond that point is about this text. `roots` lists
+ * the root revisions the passage traces back to, for a passage never changed. This never
+ * invents stable paragraph identity; it only replays exact patches.
+ * `rangeInResult` is expressed in the entry revision's own coordinates.
  */
 export async function passageHistory(history, revisionId, range, options = {}) {
   const maxHops = options.maxHops ?? 500;
   const cache = new Map();
-  const entries = [];
-  let currentId = revisionId;
-  let currentRange = [range[0], range[1]];
-  let currentText = await reconstructRevision(history, currentId, cache);
-  let approximate = false;
-  let stoppedReason = 'max-hops';
-  for (let hop = 0; hop < maxHops; hop += 1) {
-    const revision = history.revisions.get(currentId);
-    if (!revision || revision.parents.length === 0) { stoppedReason = 'root'; break; }
-    const parentId = revision.parents[0];
-    const parentText = await reconstructRevision(history, parentId, cache);
-    const mapped = mapRange(currentText, parentText, currentRange);
-    if (mapped.status === 'uncertain') {
-      approximate = true;
-      entries.push({
-        revisionId: currentId,
-        origin: revision.origin,
-        timestamp: revision.timestamp,
-        note: revision.note,
-        rangeInResult: currentRange,
-        rangeInParent: mapped.range,
-        approximate,
-      });
-    }
-    currentId = parentId;
-    currentRange = mapped.range;
-    currentText = parentText;
+  const childrenByParent = new Map();
+  for (const revision of history.revisions.values()) {
+    const [primary] = revision.parents;
+    if (primary === undefined) continue;
+    if (!childrenByParent.has(primary)) childrenByParent.set(primary, []);
+    childrenByParent.get(primary).push(revision.id);
   }
-  return { entries, approximate, stoppedReason };
+  const entries = new Map();
+  const record = (revision, resultRange) => {
+    if (entries.has(revision.id)) return;
+    entries.set(revision.id, {
+      revisionId: revision.id,
+      origin: revision.origin,
+      timestamp: revision.timestamp,
+      note: revision.note,
+      rangeInResult: resultRange,
+      approximate: true,
+    });
+  };
+
+  const tracked = new Map([[revisionId, [range[0], range[1]]]]);
+  const queue = [revisionId];
+  let stoppedReason = 'root';
+  for (let hop = 0; queue.length > 0; hop += 1) {
+    if (hop >= maxHops) { stoppedReason = 'max-hops'; break; }
+    const id = queue.shift();
+    const currentRange = tracked.get(id);
+    const currentText = await reconstructRevision(history, id, cache);
+    const neighbors = [];
+    const parentId = history.revisions.get(id)?.parents[0];
+    if (parentId !== undefined && history.revisions.has(parentId)) neighbors.push({ id: parentId, entryId: id });
+    for (const childId of childrenByParent.get(id) ?? []) neighbors.push({ id: childId, entryId: childId });
+    for (const neighbor of neighbors) {
+      if (tracked.has(neighbor.id) && entries.has(neighbor.entryId)) continue;
+      const neighborText = await reconstructRevision(history, neighbor.id, cache);
+      const mapped = mapRange(currentText, neighborText, currentRange);
+      const uncertain = mapped.status === 'uncertain';
+      if (uncertain) {
+        const owner = history.revisions.get(neighbor.entryId);
+        record(owner, neighbor.entryId === id ? currentRange : mapped.range);
+      }
+      const gone = uncertain && mapped.range[0] === mapped.range[1];
+      if (!tracked.has(neighbor.id) && !gone) {
+        tracked.set(neighbor.id, mapped.range);
+        queue.push(neighbor.id);
+      }
+    }
+  }
+  // Where nothing ever changed the passage, its origin is the root it traces to.
+  const roots = [...tracked].filter(([id]) => history.revisions.get(id)?.parents.length === 0).map(([id, rangeInResult]) => {
+    const revision = history.revisions.get(id);
+    return { revisionId: id, origin: revision.origin, timestamp: revision.timestamp, note: revision.note, rangeInResult, approximate: false };
+  });
+  const ordered = [...entries.values()].sort((left, right) => right.revisionId - left.revisionId);
+  return { entries: ordered, roots, approximate: ordered.length > 0, stoppedReason };
 }

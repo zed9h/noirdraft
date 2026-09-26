@@ -9,7 +9,7 @@ NoirDraft is a local-first desktop editor for fiction. A project is one ordinary
 3. Switch the left sidebar to METADATA for characters, world notes, and other reference material. Pin useful headings for AI context.
 4. Save regularly. NoirDraft stores all four views in the same Markdown file and makes timestamped backups before replacing an existing file.
 
-Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z) undo and redo your own edits in the focused editor and never change revision. The header Undo/Redo buttons move to the parent/child revision instead (like Ctrl+Alt+←/→). Saved editing intervals appear as a branching graph in **Versions**. Select a STORY passage to inspect its history, compare revisions, or open a composite workbench. Agent rewrites are proposals until you explicitly apply or check them out.
+Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z) undo and redo your own edits in the focused editor and never change revision. The header Undo/Redo buttons move to the parent/child revision instead (like Ctrl+Alt+←/→). Saved editing intervals appear as a branching graph in **Versions**. Select a STORY passage and the **Versions** graph highlights every revision that changed it (or its original version if none did), with **Pin all**; a highlighted node's card can replace the selected words with that version at once, recording it as a secondary parent. Agent rewrites are proposals until you explicitly apply or check them out.
 
 ### Optional KoboldCpp
 
@@ -75,7 +75,7 @@ Release builds are produced with [electron-builder](https://www.electron.build/)
 - `src/main/`: Electron startup, IPC, files/backups, and preferences.
 - `src/renderer/editor/`: canonical text model, EditContext, selection/caret geometry, Markdown scanner, and renderer.
 - `src/renderer/project/`: transparent Markdown root parsing and serialization.
-- `src/renderer/history/`: commits, patches, graphs, lineage, comparisons, and composites.
+- `src/renderer/history/`: commits, patches, graphs, lineage, and comparisons.
 - `src/renderer/ai/`: KoboldCpp, context, proposals, and automatic notes.
 - `src/renderer/app.js`: UI composition; `index.html` and `styles.css`: shell and presentation.
 

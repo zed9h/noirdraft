@@ -5,18 +5,21 @@
  * only a presentation aid for the comparison workbench and is never stored.
  */
 
-function tokenize(text) {
-  return text.match(/\s+|[^\s]+/g) ?? [];
+const WORD_OR_SPACE = /\s+|[^\s]+/g;
+
+function tokenize(text, pattern = WORD_OR_SPACE) {
+  return text.match(pattern) ?? [];
 }
 
 /**
  * Returns a sequence of { type: 'equal' | 'delete' | 'insert', text }
  * tokens describing how to turn `before` into `after`, diffing at word
- * granularity via a longest-common-subsequence over tokens.
+ * granularity via a longest-common-subsequence over tokens. `pattern`
+ * (global) changes what a token is; the default keeps punctuation attached.
  */
-export function wordDiff(before, after) {
-  const a = tokenize(String(before));
-  const b = tokenize(String(after));
+export function wordDiff(before, after, pattern = WORD_OR_SPACE) {
+  const a = tokenize(String(before), pattern);
+  const b = tokenize(String(after), pattern);
   const lengths = Array.from({ length: a.length + 1 }, () => new Uint32Array(b.length + 1));
   for (let i = a.length - 1; i >= 0; i -= 1) {
     for (let j = b.length - 1; j >= 0; j -= 1) {

@@ -59,8 +59,7 @@ test('pinned versions open a read-only cherry-pick panel; Enter checks out, Tab 
     await window.keyboard.press('Space');
     await expect(panel.locator('.pinned-card')).toHaveCount(2);
 
-    // Enter checks out the focused node and returns to the editor.
-    await graph.getByRole('button', { name: 'Revision 0' }).click();
+    // Enter checks out the selected node (Revision 0 stays selected; clicking it again would deselect) and returns to the editor.
     await graph.focus();
     await window.keyboard.press('Enter');
     await expect(graph.locator('.graph-node[data-revision-id="0"]')).toHaveClass(/current/);

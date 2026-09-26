@@ -7,6 +7,7 @@ export const DEFAULT_PREFERENCES = Object.freeze({
   autoNotes: false,
   saveTimestampedCopies: true,
   saveOnEveryRevision: false,
+  validPatchDiff: false,
   chatHistoryMessages: 6,
   contextRows: 12,
   generationDefaults: Object.freeze({

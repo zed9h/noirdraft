@@ -5,9 +5,9 @@ import { readPins, writePins } from '../../src/renderer/project/pins.js';
 
 test('options round-trip under # Application and coexist with pins', () => {
   let source = writePins('# Notes\nText.\n', ['METADATA/Notes']);
-  source = writeOptions(source, { saveOnEveryRevision: true, contextRows: 20 });
+  source = writeOptions(source, { saveOnEveryRevision: true, contextRows: 20, validPatchDiff: true });
   source = writeOptions(source, { autoNotes: true });
-  assert.deepEqual(readOptions(source), { autoNotes: true, saveOnEveryRevision: true, contextRows: 20 });
+  assert.deepEqual(readOptions(source), { autoNotes: true, saveOnEveryRevision: true, contextRows: 20, validPatchDiff: true });
   assert.deepEqual(readPins(source), ['METADATA/Notes']);
   assert.match(source, /## Options\n\n- autoNotes: true\n/);
 });
