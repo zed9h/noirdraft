@@ -689,3 +689,4 @@ button { font: inherit; }
 }
 
 .chat-agent-progress { white-space: pre-line; opacity: 0.8; }
+.chat-agent-notebooks { margin: 0; font-family: ui-monospace, Consolas, monospace; white-space: pre; overflow-x: auto; }

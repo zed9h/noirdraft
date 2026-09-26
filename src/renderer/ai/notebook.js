@@ -119,8 +119,8 @@ export function budgetStatus(notebook) {
   const round = notebook.reviews;
   const short = notebook.targetWords && wordCount(notebookText(notebook)) < notebook.targetWords * 0.8 ? ' The text is still short of its length, so keep writing rather than polishing.' : '';
   if (round >= hard) return `Deadline passed (${round} reviews). NoirDraft will wrap this turn up now.`;
-  if (round >= Math.ceil((soft + hard) / 2)) return `Well past the deadline (${round} reviews; target was about ${soft}). Fix only what is listed as failing, then submit_notebook or drop this notebook. NoirDraft ends the turn at ${hard} reviews.${short}`;
-  if (round >= soft) return `Past the review target (${round} of about ${soft}). Address the outstanding findings and submit soon; the manager is waiting for delivery.${short}`;
+  if (round >= Math.ceil((soft + hard) / 2)) return `Well past the deadline (${round} reviews; target was about ${soft}). Fix only what is listed as failing, then save_notebook or drop this notebook. NoirDraft ends the turn at ${hard} reviews.${short}`;
+  if (round >= soft) return `Past the review target (${round} of about ${soft}). Address the outstanding findings and save soon; the manager is waiting for delivery.${short}`;
   if (round >= Math.floor(soft * 0.75)) return `Review ${round} of about ${soft}: approaching the review target. Aim to converge.${short}`;
   return `Review ${round} of about ${soft}.`;
 }
@@ -130,7 +130,7 @@ export function renderParagraphs(notebook) {
 }
 
 export function stateOf(notebook) {
-  if (notebook.submissions.length) return notebookText(notebook) === notebook.submittedText ? `submitted (revision #${notebook.submissions.at(-1)})` : `submitted (revision #${notebook.submissions.at(-1)}), edited since`;
+  if (notebook.submissions.length) return notebookText(notebook) === notebook.submittedText ? `saved (revision #${notebook.submissions.at(-1)})` : `saved (revision #${notebook.submissions.at(-1)}), edited since`;
   return isEmptyNotebook(notebook) ? 'empty' : 'open';
 }
 
@@ -141,10 +141,8 @@ export function renderReview({ grandIntent, notebooks, activeId, before = '', af
   if (active.nextIntent) lines.push(`Your plan from the last review: ${active.nextIntent}`);
   if (lastEdit) lines.push(lastEdit);
   lines.push('Only notebook paragraphs are editable. The surrounding context is read-only; judge the notebook by how it joins it.', '----- CONTEXT BEFORE (read-only) -----', before, '----- NOTEBOOK (editable) -----', renderParagraphs(active), '----- CONTEXT AFTER (read-only) -----', after, '----- END -----');
-  const others = notebooks.filter((notebook) => notebook !== active);
-  if (others.length) lines.push('Other notebooks:', ...others.map((notebook) => `- Notebook ${notebook.id} (${stateOf(notebook)}): ${notebook.intent} — ${wordCount(notebookText(notebook))} words`));
   const placeholders = placeholderIds(active); const touched = touchedIds(active);
-  lines.push('Checks:', `- ${lengthCheck(active)}`, placeholders.length ? `- Placeholders still to write: ${idList(placeholders)}. submit_notebook is rejected until they are replaced or deleted.` : '- No placeholders remain.', touched.length ? `- Changed since your last review: ${idList(touched)}. Reread these in context.` : '- Nothing changed since your last review.', `- ${budgetStatus(active)}`);
-  lines.push(active.needsReview ? 'Next: call review_notebook with your editorial findings and next_intent.' : 'Next: edit_notebook to act on your plan, or submit_notebook if this notebook is ready, or open another notebook for comparison.');
+  lines.push('Checks:', `- ${lengthCheck(active)}`, placeholders.length ? `- Placeholders still to write: ${idList(placeholders)}. save_notebook is rejected until they are replaced or deleted.` : '- No placeholders remain.', touched.length ? `- Changed since your last review: ${idList(touched)}. Reread these in context.` : '- Nothing changed since your last review.', `- ${budgetStatus(active)}`);
+  lines.push(active.needsReview ? 'Next: call review_notebook with your editorial findings and next_intent.' : 'Next: edit_notebook to act on your plan, or save_notebook if this notebook is ready, or open another notebook for comparison.');
   return lines.join('\n');
 }

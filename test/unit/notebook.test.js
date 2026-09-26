@@ -92,7 +92,7 @@ test('the review form shows intents, read-only context, ids, other notebooks, an
   assert.match(form, /Notebook 1 of 2 — Test\./);
   assert.match(form, /read-only/);
   assert.match(form, /\[¶4\] \(placeholder\)/);
-  assert.match(form, /Notebook 2 \(empty\): A bleaker take\./);
+  assert.doesNotMatch(form, /Other notebooks|A bleaker take/);
   assert.match(form, /Placeholders still to write: ¶4/);
   assert.match(form, /call review_notebook/);
 });

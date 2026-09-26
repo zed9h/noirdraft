@@ -2662,12 +2662,12 @@ send_response                  the closing message; ends the turn. After changes
 Block-flow tools:
 
 ```text
-open_notebooks                 grand intent; per notebook: intent, target length, start = selection | blank
+initialize_changes               grand intent; per notebook: intent, target length, start = selection | blank
 edit_notebook                  batched range operations on one notebook's numbered paragraphs
 review_notebook                model's editorial findings + next_intent (no approve/retract verdict)
-submit_notebook                record the notebook as a revision; still editable afterwards
+save_notebook                record the notebook as a revision; still editable afterwards
 clear_notebook                 wipe a notebook (blank or back to the selection); retracts its submitted branch
-finish_changes                 optional: close drafting, submit ready notebooks, return the journey summary (first message, overall intent, issues found along the way, achieved / not achieved) and remind the model what to say; with a single notebook, submit_notebook does this automatically
+finish_changes                 optional: close drafting, submit ready notebooks, return the journey summary (first message, overall intent, issues found along the way, achieved / not achieved) and remind the model what to say; with a single notebook, save_notebook does this automatically
 ```
 
 The reply is paragraphs — each message alone, all change links together — `[comment?] [change links] [response]` in the order they happen (a link sits where its notebook was first submitted or its alternative approved, points at the branch's latest submission, and disappears when retracted). Hints, not gates, steer the model. `send_response` submits ready notebooks first; blocked ones (placeholders, unreviewed, failing review) bounce the response once with reasons, then are left out; in the short flow, unreviewed alternatives bounce once, then are discarded. A notebook emptied by edits or cleared has its submitted revisions retracted immediately.
@@ -2684,7 +2684,7 @@ Review form (always shown after an edit and at open): the grand intent, the acti
 
 `review_notebook` carries the copyedit checklist (sentence integrity, mechanics, clarity, style); every false check names the affected paragraph ids; `next_intent` states the model's plan for the next edit and is shown at the top of the next round. A second `edit_notebook` is rejected until a review has happened.
 
-Submission: `submit_notebook` is rejected while placeholders remain (listing their ids), while the last edit is unreviewed, and when the text equals the base or the notebook's previous submission (a puzzled response asking whether the intent or the notebook id was wrong). The first submission is a sibling agent revision from the base; resubmission is a child of that notebook's previous submission, so alternatives are siblings and their evolution is a chain. Chain heads are the alternatives shown by default; ancestors remain in history.
+Submission: `save_notebook` is rejected while placeholders remain (listing their ids), while the last edit is unreviewed, and when the text equals the base or the notebook's previous submission (a puzzled response asking whether the intent or the notebook id was wrong). The first submission is a sibling agent revision from the base; resubmission is a child of that notebook's previous submission, so alternatives are siblings and their evolution is a chain. Chain heads are the alternatives shown by default; ancestors remain in history.
 
 Budget: from the declared length and paragraph count the manager derives a soft review target and a generously larger hard ceiling (superlinear in paragraph count). Past the soft target the review form nags in escalating tone; nothing blocks. At the hard ceiling the manager ends the turn: it submits notebooks that are reviewed and placeholder-free, discards the rest, and reports both to the model and the author.
 

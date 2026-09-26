@@ -11,7 +11,7 @@ export class AgentError extends Error {
 
 const object = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const text = { type: 'string' };
-const notebookId = { type: 'integer', description: 'Which notebook. Omit to use the notebook you last worked on.' };
+const notebookId = { type: 'integer', description: 'The number of the notebook to act on (1, 2, ...). Use it to switch between notebooks.' };
 const notebookSpec = object({
   intent: { ...text, description: 'What this variation should be or do, in plain prose. The author reads it as progress; never name tools or protocol steps.' },
   target_words: { type: 'integer', minimum: 1, description: 'About how long this variation should be, in words. If the author asks for a longer, fuller, or expanded text, or names a length, be generous: at least the size asked for, rounded up, never below. NoirDraft derives your review budget and its reminders from it.' },
@@ -29,24 +29,24 @@ const assessment = object({ revision_id: { type: 'integer' }, copyedit, comment:
 const tool = (name, description, parameters) => ({ type: 'function', function: { name, description, parameters } });
 
 const COMMENT = tool('comment_before_changes', 'Say something to the author before the work starts: what you intend to do, a promise, an introduction to the work ahead, or an early warning about the hard parts or quality risks you expect. Optional, and only before changes begin. It is never your final answer: after the work, finish with send_response.', object({ message: text }, ['message']));
-const RESPONSE = tool('send_response', 'Send your message to the author and end the turn. This is how you answer: questions about the text, craft and style, research on any setting, culture, period or subject, brainstorming, or plain conversation, in as much substance as it deserves. After changes, use it to explain what was done and why it satisfies the request, with any limits or trade-offs. It may also be your first and only call when no edit is needed: to answer a question about the story or its text, to help with research or understanding, to ask about a doubt in the request, to simply chat, or to explain why the request will not be done. NoirDraft submits ready work before sending it.', object({ message: text }, ['message']));
+const RESPONSE = tool('send_response', 'Send your message to the author and end the turn. This is how you answer: questions about the text, craft and style, research on any setting, culture, period or subject, brainstorming, or plain conversation, in as much substance as it deserves. After changes, use it to explain what was done and why it satisfies the request, with any limits or trade-offs. It may also be your first and only call when no edit is needed: to answer a question about the story or its text, to help with research or understanding, to ask about a doubt in the request, to simply chat, or to explain why the request will not be done. NoirDraft saves ready work before sending it.', object({ message: text }, ['message']));
 const SHORT_TOOLS = [
   tool('propose_edits', 'Propose a batch of fresh sibling alternatives for the selection or cursor. On the first call, intent and alternative_count establish the fixed Objective; on later calls they are the next pending batch plan. Its result shows every alternative inside its surrounding text, to review.', object({ intent: { ...text, description: 'What this batch aims for, in plain prose. The author reads it as progress; never name tools or protocol steps.' }, alternative_count: { type: 'integer', minimum: 1 }, proposals: { type: 'array', minItems: 1, items: proposal } }, ['intent', 'alternative_count', 'proposals'])),
   tool('review_edits', 'First diagnose the whole displayed set, then copyedit every alternative in its context. Approval requires sentence integrity, mechanics, clarity, and style all true; approved alternatives are recorded, retracted ones discarded.', object({ set_overview: { ...text, description: 'A brief diagnosis of the set as a whole: its strongest quality and concrete problems to correct.' }, reviews: { type: 'array', items: assessment } }, ['set_overview', 'reviews'])),
 ];
 const BLOCK_TOOLS = [
-  tool('open_notebooks', 'Begin drafting: declare the overall intent and one notebook per variation. For a very long text or an unrequested single result, open one notebook; open several only for requested alternatives. Its result is the first notebook review.', object({ intent: { ...text, description: 'What the whole piece of writing is meant to achieve, in plain prose. The author reads it as progress; never name tools or protocol steps.' }, notebooks: { type: 'array', minItems: 1, maxItems: 6, items: notebookSpec } }, ['intent', 'notebooks'])),
-  tool('edit_notebook', 'Apply a batch of operations to numbered notebook paragraphs. Only notebook paragraphs can be edited; the surrounding context is read-only. Its result is the updated review.', object({ notebook: notebookId, operations: { type: 'array', minItems: 1, items: operation } }, ['operations'])),
-  tool('review_notebook', 'Give your editorial findings on the notebook as displayed in its context, and state what you will do next. This is a critique to guide the next edit, not a verdict.', object({ notebook: notebookId, copyedit, findings: { ...text, description: 'Concise, concrete problems, naming paragraph ids. Required when any check is false.' }, next_intent: { ...text, description: 'A short working note, one line of about a dozen words, in plain prose: what you will do next, or that the draft is finished and ready to be delivered. The author sees it as live progress. Never write tool or function names.' } }, ['copyedit', 'next_intent'])),
-  tool('submit_notebook', 'Record the notebook as a change to the document. Submit only when you consider it good. You may edit and submit it again later; each resubmission continues the same chain.', object({ notebook: notebookId, summary: { ...text, description: 'One line, in plain prose, on what this version offers.' } })),
-  tool('clear_notebook', 'Wipe a notebook to start it over. Any revisions it submitted are retracted, and its next submission starts a new alternative.', object({ notebook: notebookId, restart: { type: 'string', enum: ['blank', 'selection'], description: 'blank (default): empty. selection: back to the originally selected text.' } })),
-  tool('finish_changes', 'Close the drafting phase. NoirDraft submits notebooks that are ready, and answers with a summary of what was delivered and a reminder of what to tell the author. It takes no parameters.', object()),
+  tool('initialize_changes', 'Initialize the changes, once per request: declare the overall intent and every notebook (one per variation) in this single call. Never call it again to add or open a notebook; use edit_notebook to work on any of them. For a very long text or an unrequested single result, open one notebook; open several only for requested alternatives. Its result is the first notebook review.', object({ intent: { ...text, description: 'What the whole piece of writing is meant to achieve, in plain prose. The author reads it as progress; never name tools or protocol steps.' }, notebooks: { type: 'array', minItems: 1, maxItems: 6, items: notebookSpec } }, ['intent', 'notebooks'])),
+  tool('edit_notebook', 'Apply a batch of operations to numbered notebook paragraphs. Only notebook paragraphs can be edited; the surrounding context is read-only. Its result is the updated review.', object({ notebook: notebookId, operations: { type: 'array', minItems: 1, items: operation } }, ['notebook', 'operations'])),
+  tool('review_notebook', 'Give your editorial findings on the notebook as displayed in its context, and state what you will do next. This is a critique to guide the next edit, not a verdict.', object({ notebook: notebookId, copyedit, findings: { ...text, description: 'Concise, concrete problems, naming paragraph ids. Required when any check is false.' }, next_intent: { ...text, description: 'A short working note, one line of about a dozen words, in plain prose: what you will do next, or that the draft is finished and ready to be delivered. The author sees it as live progress. Never write tool or function names.' } }, ['notebook', 'copyedit', 'next_intent'])),
+  tool('save_notebook', 'Record the notebook as a change to the document. Save only when you consider it good. You may edit and save it again later; each save continues the same chain.', object({ notebook: notebookId, summary: { ...text, description: 'One line, in plain prose, on what this version offers.' } }, ['notebook'])),
+  tool('clear_notebook', 'Wipe a notebook to start it over. Any revisions it saved are retracted, and its next save starts a new alternative.', object({ notebook: notebookId, restart: { type: 'string', enum: ['blank', 'selection'], description: 'blank (default): empty. selection: back to the originally selected text.' } }, ['notebook'])),
+  tool('finish_changes', 'Close the drafting phase. NoirDraft saves notebooks that are ready, and answers with a summary of what was delivered and a reminder of what to tell the author. It takes no parameters.', object()),
 ];
 export const agentTools = (mode) => [COMMENT, ...(mode === 'short' ? SHORT_TOOLS : BLOCK_TOOLS), RESPONSE];
 
 const EDITORIAL = 'Copyedit every alternative in its complete surrounding passage: first sentence integrity (no duplicated, missing, or stranded words); then mechanics (spelling, grammar, punctuation, capitalization, spacing, and line breaks); then clarity and coherence; then diction, rhythm, concision, tone, and consistency with the manuscript. Retract any alternative that fails a pass.';
 
-const TOOL_NAME = /\b(?:comment_before_changes|send_response|open_notebooks|edit_notebook|review_notebook|submit_notebook|clear_notebook|finish_changes|propose_edits|review_edits)\b/;
+const TOOL_NAME = /\b(?:comment_before_changes|send_response|initialize_changes|edit_notebook|review_notebook|save_notebook|clear_notebook|finish_changes|propose_edits|review_edits)\b/;
 // Intents are shown to the author as live progress, so they must read as plain prose.
 const leaked = (value, label) => { const name = String(value ?? '').match(TOOL_NAME)?.[0]; return name ? `${label} names an internal tool (${name}). The author reads it as progress, so say it in plain prose about the writing, for example "the scene is finished and ready to be delivered" or "I will make the ending less abrupt".` : null; };
 
@@ -57,7 +57,7 @@ const CHAT_ROUND_LIMIT = 40;
 function assertComplete({ message, finishReason, raw }) {
   if (finishReason === 'length') throw new AgentError('KoboldCpp stopped before completing the tool response. Increase the output limit and retry.', { code: 'TRUNCATED_TOOL_RESPONSE', rawText: raw });
   const content = String(message?.content ?? '').trim();
-  const names = 'comment_before_changes|send_response|open_notebooks|edit_notebook|review_notebook|submit_notebook|propose_edits|review_edits';
+  const names = 'comment_before_changes|send_response|initialize_changes|edit_notebook|review_notebook|save_notebook|propose_edits|review_edits';
   const unparsed = /^[\[{]/.test(content) && new RegExp(`"(?:tool_calls|function|${names})"`).test(content) || new RegExp(`<\\|tool_call(?:\\|>|>)|call:(?:${names})\\{|\\b(?:${names})\\s*\\(`).test(content);
   if (!message?.tool_calls?.length && unparsed) throw new AgentError('KoboldCpp returned an unparsed tool call instead of a completed response. Retry the turn.', { code: 'UNPARSED_TOOL_CALL', rawText: raw });
   if (!message?.tool_calls?.length) throw new AgentError('KoboldCpp did not return the required native tool call. Retry the turn.', { code: 'MISSING_REQUIRED_TOOL_CALL', rawText: raw });
@@ -116,9 +116,15 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
   };
   const progressLine = () => {
     if (mode === 'short') return objective ? `Alternatives: ${approved.length} approved of ${objective.alternativeCount} planned${pending.length ? `, ${pending.length} under review` : ''}` : '';
-    const mark = (notebook) => `${notebook.id === activeId && notebooks.length > 1 ? '▸' : ''}${notebook.id} ${isEmptyNotebook(notebook) ? '–' : notebook.submissions.length && notebookText(notebook) === notebook.submittedText ? '✓' : '…'} ${wordCount(notebookText(notebook))}/${notebook.targetWords}w`;
+    const status = (notebook) => isEmptyNotebook(notebook) ? '–' : notebook.submissions.length && notebookText(notebook) === notebook.submittedText ? '✓' : '…';
+    const delivered = notebooks.map((notebook) => String(wordCount(notebookText(notebook))));
+    const planned = notebooks.map((notebook) => String(notebook.targetWords));
+    const idWidth = Math.max(...notebooks.map((notebook) => String(notebook.id).length));
+    const deliveredWidth = Math.max(...delivered.map((text) => text.length));
+    const plannedWidth = Math.max(...planned.map((text) => text.length));
+    const rows = notebooks.map((notebook, index) => `Notebook ${notebook.id === activeId && notebooks.length > 1 ? '▸' : ' '}${String(notebook.id).padStart(idWidth)} ${delivered[index].padStart(deliveredWidth)}/${planned[index].padStart(plannedWidth)}w ${status(notebook)}`);
     const next = notebooks.find((notebook) => notebook.id === activeId)?.nextIntent;
-    return `Notebooks ${notebooks.map(mark).join(' · ')}${next ? `\nNext: ${next}` : ''}`;
+    return `${rows.join('\n')}${next ? `\nNext: ${next}` : ''}`;
   };
   const report = () => onProgress?.({ rawResponse: raw, chat: finalChat(), revisions: heads(), intent: grandIntent ?? objective?.text ? { intent: grandIntent ?? objective.text, progress: progressLine() } : null });
   const reject = (reason) => ({ ok: false, content: receipt('rejected', reason) });
@@ -156,23 +162,23 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
   const totalReviews = () => notebooks.reduce((sum, notebook) => sum + notebook.reviews, 0);
   const totalHard = () => notebooks.reduce((sum, notebook) => sum + notebook.budget.hard, 0);
   const problem = (notebook) => {
-    if (isEmptyNotebook(notebook)) return 'It is empty, so there is nothing to submit.';
+    if (isEmptyNotebook(notebook)) return 'It is empty, so there is nothing to save.';
     if (notebook.needsReview) return 'It changed since its last review. Call review_notebook first.';
     const placeholders = placeholderIds(notebook);
     if (placeholders.length) return `Placeholder paragraphs remain: ${placeholders.map((id) => `¶${id}`).join(', ')}. Replace them with finished text or delete them.`;
-    if (notebook.lastReviewClean === false) return 'Your last review found problems. Edit to address them, review again, then submit.';
+    if (notebook.lastReviewClean === false) return 'Your last review found problems. Edit to address them, review again, then save.';
     return null;
   };
   const submit = async (notebook, summary) => {
     const body = notebookText(notebook);
     const previous = notebook.submissions.length ? notebook.submittedText : notebook.baseline;
-    if (body === previous) return reject(`Notebook ${notebook.id} has no changes ${notebook.submissions.length ? 'since it was submitted' : 'from its starting text'}. What did you intend? You may have edited a different notebook, or meant to submit another id. Edit this notebook, or submit the one you changed.`);
+    if (body === previous) return reject(`Notebook ${notebook.id} has no changes ${notebook.submissions.length ? 'since it was saved' : 'from its starting text'}. What did you intend? You may have edited a different notebook, or meant to save another id. Edit this notebook, or save the one you changed.`);
     const candidate = compose(notebook);
     if (candidate === base) return reject(`Notebook ${notebook.id} would leave the document unchanged. Change its text before submitting.`);
     const parentId = notebook.submissions.at(-1) ?? baseRevisionId;
     if (!notebook.submissions.length) {
       const sibling = await identical(candidate);
-      if (sibling) return reject(`Notebook ${notebook.id} matches existing revision #${sibling.id}. Give this variation its own direction, or submit a different notebook.`);
+      if (sibling) return reject(`Notebook ${notebook.id} matches existing revision #${sibling.id}. Give this variation its own direction, or save a different notebook.`);
     }
     const parentText = notebook.submissions.length ? texts.get(parentId) : base;
     const revision = await commitRevision(history, parentText, candidate, { origin: 'agent', parentId, setCurrent: false, note: null });
@@ -195,6 +201,15 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
     }
     return { delivered, blocked };
   };
+  const pendingText = () => {
+    const pending = notebooks.filter((notebook) => !notebook.submissions.length);
+    if (!pending.length) return '';
+    const next = pending.find((notebook) => isEmptyNotebook(notebook));
+    const lines = ['', `${notebooks.length - pending.length}/${notebooks.length} notebooks saved.`];
+    if (next) lines.push(`Next, write notebook ${next.id}: "${next.intent}" It is still empty. Start with edit_notebook (notebook: ${next.id}), then review and save it.`);
+    else lines.push(`Still unsaved: ${pending.map((notebook) => `notebook ${notebook.id}`).join(', ')}.`);
+    return lines.join('\n');
+  };
   const receiptText = () => {
     const lines = ['NOIRDRAFT WORK SUMMARY', `The author's request: ${request}`];
     if (firstMessage()) lines.push(`Your first message to the author: "${firstMessage()}"`);
@@ -202,10 +217,10 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
     for (const notebook of notebooks) {
       const words = wordCount(notebookText(notebook));
       const size = notebook.targetWords && words < notebook.targetWords * 0.5 ? ' (well under target)' : notebook.targetWords && words > notebook.targetWords * 1.5 ? ' (well over target)' : '';
-      lines.push(`Notebook ${notebook.id} — ${notebook.intent} (target about ${notebook.targetWords} words)`, ...notebook.journal.map((entry) => `  along the way: ${entry}`));
+      lines.push(`Notebook ${notebook.id} — ${notebook.intent} (target about ${notebook.targetWords} words)`);
       if (notebook.submissions.length) lines.push(`  achieved: ${stateOf(notebook)}, ${words} words${size}${notebook.summary ? ` — ${notebook.summary}` : ''}`);
       else if (isEmptyNotebook(notebook)) lines.push('  not achieved: empty, nothing delivered.');
-      else lines.push(`  not achieved: not delivered — ${problem(notebook) ?? 'left unsubmitted'}`);
+      else lines.push(`  not achieved: not delivered — ${problem(notebook) ?? 'left unsaved'}`);
     }
     if (deadline) lines.push(deadline);
     lines.push('Now use send_response as the culmination of this: continue naturally from your first message, say what was achieved and what was not (unmet targets, dropped variations, limits), and why it satisfies the request. Do not narrate the drafting, editing, or review steps, and do not repeat the revision text.');
@@ -213,7 +228,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
   };
   const wrapUp = async () => {
     const { delivered, blocked } = await settle();
-    deadline = `The review deadline was reached, so NoirDraft closed the work. ${delivered.length ? `It submitted notebook${delivered.length === 1 ? '' : 's'} ${delivered.join(', ')}. ` : ''}${blocked.length ? `Not ready and discarded: ${blocked.map(({ id }) => id).join(', ')}.` : ''}`.trim();
+    deadline = `The review deadline was reached, so NoirDraft closed the work. ${delivered.length ? `It saved notebook${delivered.length === 1 ? '' : 's'} ${delivered.join(', ')}. ` : ''}${blocked.length ? `Not ready and discarded: ${blocked.map(({ id }) => id).join(', ')}.` : ''}`.trim();
     closed = true;
     return accept(receiptText());
   };
@@ -222,7 +237,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
     const { delivered, blocked } = await settle();
     if (blocked.length && !finishWarned) {
       finishWarned = true;
-      return ['NOIRDRAFT RESPONSE NOT SENT YET', delivered.length ? `NoirDraft submitted the ready notebook${delivered.length === 1 ? '' : 's'}: ${delivered.join(', ')}.` : '', ...blocked.map(({ id, reason }) => `- Notebook ${id}: ${reason}`), 'Fix and submit these, or clear_notebook to abandon one, then call send_response again. Calling it again now leaves them out and ends the turn.'].filter(Boolean).join('\n');
+      return ['NOIRDRAFT RESPONSE NOT SENT YET', delivered.length ? `NoirDraft saved the ready notebook${delivered.length === 1 ? '' : 's'}: ${delivered.join(', ')}.` : '', ...blocked.map(({ id, reason }) => `- Notebook ${id}: ${reason}`), 'Fix and save these, or clear_notebook to abandon one, then call send_response again. Calling it again now leaves them out and ends the turn.'].filter(Boolean).join('\n');
     }
     closed = true;
     return null;
@@ -305,7 +320,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
       if (typeof args.message !== 'string' || !args.message.trim()) return reject('comment_before_changes requires a nonempty message.');
       if (notebooks.length || batchNumber) return reject('Changes have already started. Use send_response after the work to explain what was done.');
       segments.push({ say: args.message.trim() });
-      return accept(['NOIRDRAFT COMMENT ADDED', 'Your comment was added to the reply. Now start the work, or, if no edit is needed, answer with send_response.', mode === 'short' ? 'Start with propose_edits.' : 'Start with open_notebooks.'].join('\n'));
+      return accept(['NOIRDRAFT COMMENT ADDED', 'Your comment was added to the reply. Now start the work, or, if no edit is needed, answer with send_response.', mode === 'short' ? 'Start with propose_edits.' : 'Start with initialize_changes.'].join('\n'));
     }
     if (name === 'send_response') {
       if (typeof args.message !== 'string' || !args.message.trim()) return reject('send_response requires a nonempty message.');
@@ -326,11 +341,11 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
       if (!objective) return reject('There is no active objective to review. Call propose_edits first.');
       return assessBatch(args.set_overview, args.reviews);
     }
-    if (name === 'open_notebooks') {
+    if (name === 'initialize_changes') {
       if (closed) return reject('Your work is finished. Tell the author what happened with send_response.');
       if (notebooks.length) return reject('Notebooks are already open. Use edit_notebook on them, or call finish_changes.');
-      if (typeof args.intent !== 'string' || !args.intent.trim()) return reject('open_notebooks requires the overall intent of the writing.');
-      if (!Array.isArray(args.notebooks) || !args.notebooks.length || args.notebooks.length > MAX_NOTEBOOKS) return reject(`open_notebooks requires between 1 and ${MAX_NOTEBOOKS} notebooks.`);
+      if (typeof args.intent !== 'string' || !args.intent.trim()) return reject('initialize_changes requires the overall intent of the writing.');
+      if (!Array.isArray(args.notebooks) || !args.notebooks.length || args.notebooks.length > MAX_NOTEBOOKS) return reject(`initialize_changes requires between 1 and ${MAX_NOTEBOOKS} notebooks.`);
       const specs = args.notebooks;
       const bad = specs.findIndex((spec) => typeof spec?.intent !== 'string' || !spec.intent.trim() || !Number.isSafeInteger(spec.target_words) || spec.target_words < 1 || (spec.start != null && !['selection', 'blank'].includes(spec.start)));
       if (bad >= 0) return reject(`Notebook ${bad + 1} needs an intent and a positive target_words; start, if given, is selection or blank.`);
@@ -342,8 +357,8 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
       roundLimit = CHAT_ROUND_LIMIT + 4 * totalHard();
       return accept(form(notebooks[0]));
     }
-    if (['edit_notebook', 'review_notebook', 'submit_notebook', 'clear_notebook'].includes(name)) {
-      if (!notebooks.length) return reject('There are no open notebooks. Call open_notebooks first.');
+    if (['edit_notebook', 'review_notebook', 'save_notebook', 'clear_notebook'].includes(name)) {
+      if (!notebooks.length) return reject('There are no open notebooks. Call initialize_changes first.');
       if (closed) return reject('Your work is finished. Tell the author what happened with send_response.');
     }
     if (name === 'edit_notebook') {
@@ -355,7 +370,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
       if (retracted) updated = retract(updated);
       updated = replaceNotebook(updated);
       snapshots.push({ notebook: updated.id, review: updated.reviews, text: notebookText(updated) });
-      return accept(form(updated, `Applied ${args.operations.length} operation${args.operations.length === 1 ? '' : 's'}.${retracted ? ` Notebook ${updated.id} is now empty, so its submitted revisions were retracted; anything you write next starts a new alternative.` : ''}`));
+      return accept(form(updated, `Applied ${args.operations.length} operation${args.operations.length === 1 ? '' : 's'}.${retracted ? ` Notebook ${updated.id} is now empty, so its saved revisions were retracted; anything you write next starts a new alternative.` : ''}`));
     }
     if (name === 'clear_notebook') {
       const { notebook, error } = pick(args); if (error) return error;
@@ -363,13 +378,13 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
       if (!['blank', 'selection'].includes(restart)) return reject('clear_notebook restart must be blank or selection.');
       const had = notebook.submissions.length > 0;
       const cleared = replaceNotebook(resetNotebook(retract(notebook), restart === 'selection' ? context.target : ''));
-      return accept(form(cleared, `Notebook ${cleared.id} was cleared${restart === 'selection' ? ' back to the selected text' : ''}.${had ? ' Its submitted revisions were retracted.' : ''} Its next submission starts a new alternative.`));
+      return accept(form(cleared, `Notebook ${cleared.id} was cleared${restart === 'selection' ? ' back to the selected text' : ''}.${had ? ' Its saved revisions were retracted.' : ''} Its next save starts a new alternative.`));
     }
     if (name === 'review_notebook') {
       const { notebook, error } = pick(args); if (error) return error;
       const checklist = args.copyedit;
       if (!checklist || !['sentence_integrity', 'mechanics', 'clarity', 'style'].every((key) => typeof checklist[key] === 'boolean')) return reject('review_notebook requires copyedit sentence_integrity, mechanics, clarity, and style, each true or false.');
-      if (typeof args.next_intent !== 'string' || !args.next_intent.trim()) return reject('review_notebook requires next_intent: what you will do next, or that the notebook is ready to submit.');
+      if (typeof args.next_intent !== 'string' || !args.next_intent.trim()) return reject('review_notebook requires next_intent: what you will do next, or that the notebook is ready to save.');
       const leak = leaked(args.next_intent, 'Your next_intent') ?? leaked(args.findings, 'Your findings'); if (leak) return reject(leak);
       if (args.next_intent.trim().length > 200) return reject('Keep next_intent to one short line, a working note about what comes next, for example "tighten the dialogue in the middle". Put detail about problems in findings.');
       const clean = Object.values(checklist).every(Boolean);
@@ -379,21 +394,21 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
       if (reviewed.reviews >= reviewed.budget.hard || totalReviews() >= totalHard()) return wrapUp();
       return accept(form(reviewed));
     }
-    if (name === 'submit_notebook') {
+    if (name === 'save_notebook') {
       const { notebook, error } = pick(args); if (error) return error;
       const leak = leaked(args.summary, 'Your summary'); if (leak) return reject(leak);
       const blocked = problem(notebook);
-      if (blocked) return reject(`Notebook ${notebook.id} cannot be submitted yet. ${blocked}`);
+      if (blocked) return reject(`Notebook ${notebook.id} cannot be saved yet. ${blocked}`);
       const words = wordCount(notebookText(notebook));
       if (!notebook.shortWarned && !notebook.submissions.length && notebook.targetWords && words < notebook.targetWords * 0.6) {
         replaceNotebook({ ...notebook, shortWarned: true });
-        return reject(`Notebook ${notebook.id} is ${words} words against a target of about ${notebook.targetWords}. The author asked for more: keep expanding it, or submit again to deliver it as it is.`);
+        return reject(`Notebook ${notebook.id} is ${words} words against a target of about ${notebook.targetWords}. The author asked for more: keep expanding it, or save again to deliver it as it is.`);
       }
       const result = await submit(notebook, args.summary);
       if (!result.revision) return result;
       const label = notebook.submissions.length ? `a continuation of revision #${notebook.submissions.at(-1)}` : 'a new alternative';
-      if (notebooks.length === 1) { closed = true; return accept(`NOIRDRAFT SUBMITTED\nNotebook ${notebook.id} is recorded as revision #${result.revision.id}, ${label}. It is your only notebook, so there is nothing to compare and NoirDraft closed the drafting.\n${receiptText()}`); }
-      return accept(`NOIRDRAFT SUBMITTED\nNotebook ${notebook.id} is recorded as revision #${result.revision.id}, ${label}. It stays open: you may compare it with other notebooks and edit and submit again, or call finish_changes.`);
+      if (notebooks.length === 1) { closed = true; return accept(`NOIRDRAFT SAVED\nNotebook ${notebook.id} is recorded as revision #${result.revision.id}, ${label}. It is your only notebook, so there is nothing to compare and NoirDraft closed the drafting.\n${receiptText()}`); }
+      return accept(`NOIRDRAFT SAVED\nNotebook ${notebook.id} is recorded as revision #${result.revision.id}, ${label}. Saving is not final: the notebook stays open, and you can keep editing it and save again at any time.${pendingText()}`);
     }
     if (name === 'finish_changes') {
       if (!notebooks.length) return reject('There are no notebooks to finish. If you are done, tell the author with send_response.');
@@ -401,7 +416,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
       const { delivered, blocked } = await settle();
       if (blocked.length && !finishWarned) {
         finishWarned = true;
-        return accept(['NOIRDRAFT NOT READY TO FINISH', delivered.length ? `NoirDraft submitted the ready notebook${delivered.length === 1 ? '' : 's'}: ${delivered.join(', ')}.` : '', ...blocked.map(({ id, reason }) => `- Notebook ${id}: ${reason}`), 'Fix and submit these, clear_notebook to abandon one, or call finish_changes again to leave them out.'].filter(Boolean).join('\n'));
+        return accept(['NOIRDRAFT NOT READY TO FINISH', delivered.length ? `NoirDraft saved the ready notebook${delivered.length === 1 ? '' : 's'}: ${delivered.join(', ')}.` : '', ...blocked.map(({ id, reason }) => `- Notebook ${id}: ${reason}`), 'Fix and save these, clear_notebook to abandon one, or call finish_changes again to leave them out.'].filter(Boolean).join('\n'));
       }
       closed = true;
       return accept(receiptText());
