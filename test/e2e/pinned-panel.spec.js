@@ -83,12 +83,25 @@ test('pinned versions open a read-only cherry-pick panel; Enter checks out, Tab 
     await window.keyboard.press('Escape');
     await expect(window.locator('#story-editor')).toBeFocused();
 
+    // Tab in the panel returns to the editor.
+    await window.keyboard.press('Tab');
+    await expect(panel.locator('.pinned-card').first()).toBeFocused();
+    await window.keyboard.press('Tab');
+    await expect(window.locator('#story-editor')).toBeFocused();
+
     // The panel resizes like the other panes.
     const resizer = window.locator('[data-pane-resizer="pinned"]');
     const height = (await panel.boundingBox()).height;
     await resizer.focus();
     await window.keyboard.press('ArrowDown');
     expect((await panel.boundingBox()).height).toBeLessThan(height);
+    const grip = await resizer.boundingBox();
+    const shrunk = (await panel.boundingBox()).height;
+    await window.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+    await window.mouse.down();
+    await window.mouse.move(grip.x + grip.width / 2, grip.y + 40, { steps: 5 });
+    await window.mouse.up();
+    expect((await panel.boundingBox()).height).toBeLessThan(shrunk - 20);
 
     // Copy the branch passage from its card and paste it into the text.
     const card = panel.locator('.pinned-card[data-revision-id="1"]');
@@ -104,6 +117,26 @@ test('pinned versions open a read-only cherry-pick panel; Enter checks out, Tab 
     });
     expect(parents).toEqual([0, 1]);
     await expect(graph.locator('.graph-edges path.secondary')).toHaveCount(1);
+
+    // Clicking a card (text or button) moves the cursor to it.
+    await window.locator('#story-editor').focus();
+    await card.locator('.pinned-passage').click();
+    await expect(card).toBeFocused();
+    await window.locator('#story-editor').focus();
+    await card.getByRole('button', { name: /Copy revision 1/ }).click();
+    await expect(card).toBeFocused();
+
+    // Coming straight from the Versions pane, a click on a card enters the panel fully.
+    await graph.focus();
+    await card.locator('.pinned-passage').click();
+    await expect(card).toBeFocused();
+    await window.keyboard.press('Tab');
+    await expect(window.locator('#story-editor')).toBeFocused();
+
+    // The card's copy button puts everything the revision added on the clipboard.
+    await window.evaluate(() => navigator.clipboard.writeText('x'));
+    await card.getByRole('button', { name: /Copy revision 1/ }).click();
+    await expect.poll(() => window.evaluate(() => navigator.clipboard.readText())).toBe('Branch rain fell over the quiet harbor tonight.');
 
     // Closing the panel unpins everything.
     await panel.getByRole('button', { name: /Close pinned versions/ }).click();

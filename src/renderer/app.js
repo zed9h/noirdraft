@@ -1796,12 +1796,37 @@ try {
       card.tabIndex = 0;
       card.dataset.revisionId = String(id);
       card.setAttribute('aria-label', `Revision ${id}${revision.note ? `: ${revision.note}` : ''}`);
-      const heading = document.createElement('h4');
-      heading.textContent = `Revision ${id}`;
-      const detail = document.createElement('span');
-      detail.textContent = revision.note ?? revision.origin;
-      detail.title = revision.note ?? revision.origin;
-      heading.append(detail);
+      const heading = document.createElement('div');
+      heading.className = 'pinned-card-header';
+      const title = document.createElement('h4');
+      title.textContent = `Revision ${id}`;
+      const actions = document.createElement('span');
+      actions.className = 'pinned-card-actions';
+      const copyButton = document.createElement('button');
+      copyButton.type = 'button';
+      copyButton.tabIndex = -1;
+      copyButton.dataset.pinnedCopy = '';
+      copyButton.textContent = '⧉';
+      copyButton.title = 'Copy everything this revision added';
+      copyButton.setAttribute('aria-label', `Copy revision ${id} passages`);
+      const unpinButton = document.createElement('button');
+      unpinButton.type = 'button';
+      unpinButton.tabIndex = -1;
+      unpinButton.dataset.pinnedUnpin = '';
+      unpinButton.textContent = '✕';
+      unpinButton.title = 'Unpin this revision';
+      unpinButton.setAttribute('aria-label', `Unpin revision ${id}`);
+      actions.append(copyButton, unpinButton);
+      heading.append(title);
+      const noteText = revision.note ?? revision.origin;
+      if (noteText) {
+        const note = document.createElement('span');
+        note.className = 'pinned-note';
+        note.textContent = noteText;
+        note.title = noteText;
+        heading.append(note);
+      }
+      heading.append(actions);
       card.append(heading);
       const passages = insertedPassages(before, after);
       if (passages.length === 0) {
@@ -1853,6 +1878,36 @@ try {
     pendingCopies[activeRoot] = addPendingCopy(pendingCopies[activeRoot], { sourceRevisionId: Number(card.dataset.revisionId), text });
   });
 
+  // The card cursor survives leaving the panel: Tab back in lands on it.
+  let lastPinnedCardId = null;
+  pinnedCards.addEventListener('focusin', (event) => {
+    const card = event.target.closest?.('.pinned-card');
+    if (card) lastPinnedCardId = card.dataset.revisionId;
+  });
+  // Pressing anywhere on a card moves the cursor to it (buttons and text
+  // selection would otherwise leave focus elsewhere).
+  pinnedCards.addEventListener('mousedown', (event) => {
+    const card = event.target.closest?.('.pinned-card');
+    if (!card || card === document.activeElement) return;
+    if (event.target.closest('button')) event.preventDefault();
+    card.focus({ preventScroll: true });
+  });
+  pinnedCards.addEventListener('click', (event) => {
+    const button = event.target.closest?.('button');
+    const card = (button ?? event.target).closest?.('.pinned-card');
+    if (!card) return;
+    if (!button) return;
+    if (button.matches('[data-pinned-unpin]')) togglePinnedRevision(Number(card.dataset.revisionId));
+    else if (button.matches('[data-pinned-copy]')) {
+      const text = [...card.querySelectorAll('.pinned-passage')].map((node) => node.textContent).join('\n\n');
+      if (!text || !['STORY', 'METADATA'].includes(activeRoot)) return;
+      const root = activeRoot;
+      navigator.clipboard.writeText(text).then(() => {
+        pendingCopies[root] = addPendingCopy(pendingCopies[root], { sourceRevisionId: Number(card.dataset.revisionId), text });
+      });
+    }
+  });
+
   // Up/Down step between the pinned versions, Left/Right jump to first/last.
   pinnedCards.addEventListener('keydown', (event) => {
     const cards = [...pinnedCards.querySelectorAll('.pinned-card')];
@@ -1865,14 +1920,22 @@ try {
     target.scrollIntoView({ block: 'nearest' });
   });
 
-  // With the panel open, Tab from the editor goes to the panel instead of
-  // typing a tab; Escape (handled with the other panels) comes back.
+  // With the panel open, Tab toggles between the editor and the panel
+  // (landing on the remembered card); Escape also comes back.
   workspace.addEventListener('keydown', (event) => {
     if (event.key !== 'Tab' || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || pinnedPanel.hidden) return;
-    if (!event.target.closest?.('.editor-pane') || pinnedPanel.contains(event.target)) return;
+    if (pinnedPanel.contains(event.target)) {
+      event.preventDefault();
+      event.stopPropagation();
+      focusPanel('TEXT');
+      return;
+    }
+    if (!event.target.closest?.('.editor-pane')) return;
     event.preventDefault();
     event.stopPropagation();
-    (pinnedCards.querySelector('.pinned-card') ?? pinnedClose).focus();
+    const target = pinnedCards.querySelector(`[data-revision-id="${lastPinnedCardId}"]`) ?? pinnedCards.querySelector('.pinned-card') ?? pinnedClose;
+    target.focus();
+    target.scrollIntoView?.({ block: 'nearest' });
   }, true);
 
   const focusGraphOn = (revisionId, { keepSearch = false } = {}) => {
