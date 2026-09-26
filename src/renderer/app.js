@@ -2,6 +2,8 @@ import { EditContextEditor } from './editor/edit-context.js';
 import { MarkdownRenderer } from './editor/render.js';
 import { StoryModel } from './editor/model.js';
 import { CommitController } from './history/commits.js';
+import { UndoStack } from './editor/undo-stack.js';
+import { addPendingCopy, resolvePendingCopies } from './history/secondary-parents.js';
 import { childrenOf, commitRevision, createHistory, recordExternalEdit, reconstructRevision, verifyCurrentStory } from './history/graph.js';
 import { hashStory } from './history/hash.js';
 import { createUnifiedDiff } from './history/diff.js';
@@ -14,7 +16,7 @@ import { adoptIntoComposite } from './history/composite.js';
 import { mapRange, passageHistory } from './history/lineage.js';
 import { buildLocalGraph } from './history/local-graph.js';
 import { excerptAround, findTextMatches, paragraphRange, searchHistory } from './search.js';
-import { wordDiff } from './history/word-diff.js';
+import { insertedPassages, wordDiff } from './history/word-diff.js';
 import { extractHeadings, resolveHeadingPath } from './project/headings.js';
 import { createVisitLog, jumpVisitLog, recordVisit, stepVisitLog } from './history/visit-log.js';
 import { endScrub, startScrub, stepScrub } from './history/scrub-session.js';
@@ -37,7 +39,9 @@ const paneResizers = {
   navigation: document.querySelector('[data-pane-resizer="navigation"]'),
   chat: document.querySelector('[data-pane-resizer="chat"]'),
   versions: document.querySelector('[data-pane-resizer="versions"]'),
+  pinned: document.querySelector('[data-pane-resizer="pinned"]'),
 };
+const pinnedPanel = document.querySelector('[data-pinned-panel]');
 let editorsForBounds = null;
 const toggleLeftButton = document.querySelector('[data-toggle-left]');
 const toggleRightButton = document.querySelector('[data-toggle-right]');
@@ -159,6 +163,7 @@ const paneLimits = {
   navigation: { minimum: 9 * 16, workspace: 20 * 16, other: 18 * 16 },
   chat: { minimum: 18 * 16, workspace: 20 * 16, other: 9 * 16 },
   versions: { minimum: 13 * 16, workspace: 14 * 16 },
+  pinned: { minimum: 7 * 16, workspace: 12 * 16 },
 };
 const clamp = (value, minimum, maximum) => Math.min(Math.max(value, minimum), Math.max(minimum, maximum));
 const updateEditorBounds = () => requestAnimationFrame(() => {
@@ -175,6 +180,15 @@ const setPaneSize = (pane, value) => {
     paneResizers[pane].setAttribute('aria-valuemin', String(limits.minimum));
     paneResizers[pane].setAttribute('aria-valuemax', String(Math.round(maximum)));
     paneResizers[pane].setAttribute('aria-valuenow', String(Math.round(size)));
+    return;
+  }
+  if (pane === 'pinned') {
+    const maximum = workspace.clientHeight - paneLimits.pinned.workspace;
+    const size = clamp(value, paneLimits.pinned.minimum, maximum);
+    shell.style.setProperty('--pinned-pane-height', `${size}px`);
+    paneResizers.pinned.setAttribute('aria-valuemin', String(paneLimits.pinned.minimum));
+    paneResizers.pinned.setAttribute('aria-valuemax', String(Math.round(maximum)));
+    paneResizers.pinned.setAttribute('aria-valuenow', String(Math.round(size)));
     return;
   }
   const maximum = shell.clientHeight - document.querySelector('.app-header').offsetHeight - paneLimits.versions.workspace;
@@ -195,6 +209,7 @@ for (const [pane, resizer] of Object.entries(paneResizers)) {
     const move = (moveEvent) => {
       if (pane === 'navigation') setPaneSize(pane, moveEvent.clientX - body.getBoundingClientRect().left);
       else if (pane === 'chat') setPaneSize(pane, body.getBoundingClientRect().right - moveEvent.clientX);
+      else if (pane === 'pinned') setPaneSize(pane, pinnedPanel.getBoundingClientRect().bottom - moveEvent.clientY);
       else setPaneSize(pane, shell.getBoundingClientRect().bottom - moveEvent.clientY);
     };
     const finish = () => {
@@ -221,7 +236,7 @@ for (const [pane, resizer] of Object.entries(paneResizers)) {
       ? sidebarLeft.getBoundingClientRect().width
       : pane === 'chat'
         ? sidebarRight.getBoundingClientRect().width
-        : document.querySelector('#versions-view').getBoundingClientRect().height;
+        : (pane === 'pinned' ? pinnedPanel : document.querySelector('#versions-view')).getBoundingClientRect().height;
     setPaneSize(pane, current + delta);
     updateEditorBounds();
   });
@@ -521,6 +536,8 @@ const versionsView = document.querySelector('#versions-view');
 const versionList = document.querySelector('[data-version-list]');
 const versionInspector = document.querySelector('[data-version-inspector]');
 const versionGraph = document.querySelector('[data-version-graph]');
+const pinnedCards = document.querySelector('[data-pinned-cards]');
+const pinnedClose = document.querySelector('[data-pinned-close]');
 const versionSearchInput = document.querySelector('[data-version-search]');
 const versionSearchCount = document.querySelector('[data-version-search-count]');
 const textSearchInput = document.querySelector('[data-text-search]');
@@ -567,6 +584,11 @@ let persistAfterCommit = async () => {};
 let revisionsUnsaved = false;
 
 try {
+  const undoStacks = {
+    STORY: new UndoStack(models.STORY),
+    METADATA: new UndoStack(models.METADATA),
+    CHAT: new UndoStack(models.CHAT),
+  };
   const editors = {
     STORY: new EditContextEditor(elements.STORY, models.STORY),
     METADATA: new EditContextEditor(elements.METADATA, models.METADATA),
@@ -1633,11 +1655,12 @@ try {
     const currentHistory = activeHistory();
     const currentController = activeCommitController();
     const current = currentHistory?.revisions.get(currentHistory.currentRevision);
-    undoButton.disabled = !currentController || (!currentController.undoOperations.length && !current?.parents.length);
+    undoButton.disabled = !currentController || (!currentController.pending && !current?.parents.length);
     const children = currentHistory ? childrenOf(currentHistory, currentHistory.currentRevision) : [];
-    redoButton.disabled = !currentController || (!currentController.redoOperations.length && children.length === 0);
-    redoMenuToggle.hidden = children.length < 2;
+    redoButton.disabled = !currentController || children.length === 0;
+    redoMenuToggle.disabled = children.length < 2;
     if (children.length < 2) closeRedoMenu();
+    refreshNavigationButtons();
   };
 
   const attachHistory = (nextHistory) => {
@@ -1649,6 +1672,7 @@ try {
       history,
       model: models.STORY,
       beforeCommit: () => prunePins({ fold: false }),
+      secondaryParents: (base, result) => takeSecondaryParents('STORY', base, result),
       onError: (error) => showStatus(error.message, true),
       onChange: () => {
         recordVisitIfChanged('STORY');
@@ -1676,6 +1700,7 @@ try {
       history: metadataHistory,
       model: models.METADATA,
       beforeCommit: () => prunePins({ fold: true }),
+      secondaryParents: (base, result) => takeSecondaryParents('METADATA', base, result),
       onError: (error) => showStatus(error.message, true),
       onChange: () => {
         recordVisitIfChanged('METADATA');
@@ -1802,16 +1827,55 @@ try {
   let pinnedRevisionIds = [];
   let renderedGraphNodeIds = [];
 
+  // Text copied out of the pinned-versions panel, per root, waiting for the
+  // next recorded revision. When that revision's change contains the copied
+  // text its source becomes a secondary parent; copies that never landed (or
+  // were deleted again before recording) leave no link.
+  const pendingCopies = { STORY: [], METADATA: [] };
+  const takeSecondaryParents = (rootName, base, result) => {
+    const { used, remaining } = resolvePendingCopies(pendingCopies[rootName], base, result);
+    pendingCopies[rootName] = remaining;
+    return used;
+  };
+
   // Visit-time timeline (Shift+Alt+Arrow) — independent of the graph's own
   // parent/child ancestry, one log per root since STORY and METADATA keep
   // separate histories. In-memory only: this is session browsing state, not
   // manuscript content, so it never gets persisted.
   const visitLogs = { STORY: createVisitLog(), METADATA: createVisitLog() };
   const lastVisitedRevisionId = { STORY: null, METADATA: null };
+  // The toolbar's back/forward buttons have no key release to end a step on, so
+  // a burst of clicks walks the log without recording: the visit is recorded
+  // (once, at the landing revision) when the author does anything else: another
+  // click or key, checkout or edit. Recording per click would append each
+  // landing and bounce between the last two entries.
+  let timelineBurst = null; // { root, landingId }
+  let timelineStepping = false;
+  // Stop (section) and timeline (visit-log) buttons are disabled when there is
+  // nowhere to go in that direction.
+  const refreshNavigationButtons = () => {
+    const navigable = ['STORY', 'METADATA'].includes(activeRoot);
+    navStopBackButton.disabled = !navigable || sectionNav.cursor <= 0;
+    navStopForwardButton.disabled = !navigable || sectionNav.cursor >= sectionNav.stack.length - 1;
+    const log = visitLogs[activeRoot === 'METADATA' ? 'METADATA' : 'STORY'];
+    navTimelineBackButton.disabled = !navigable || log.cursor <= 0;
+    navTimelineForwardButton.disabled = !navigable || log.cursor >= log.entries.length - 1;
+  };
+  const endTimelineBurst = () => {
+    if (!timelineBurst) return;
+    const { root, landingId } = timelineBurst;
+    timelineBurst = null;
+    lastVisitedRevisionId[root] = landingId;
+    visitLogs[root] = recordVisit(visitLogs[root], landingId);
+    refreshNavigationButtons();
+  };
   const recordVisitIfChanged = (rootName) => {
     const currentHistory = rootName === 'METADATA' ? metadataHistory : history;
     if (!currentHistory) return;
     const currentId = currentHistory.currentRevision;
+    if (timelineStepping) return;
+    // Any checkout or edit other than a toolbar step closes a burst of steps first.
+    endTimelineBurst();
     if (lastVisitedRevisionId[rootName] === currentId) return;
     lastVisitedRevisionId[rootName] = currentId;
     visitLogs[rootName] = recordVisit(visitLogs[rootName], currentId);
@@ -1837,6 +1901,16 @@ try {
   const AUTO_SECTION_VISIT_DELAY = 800;
   let lastHighlightedSectionPath = null;
   let autoSectionVisitTimer = null;
+  // Leaving a place (a jump or a back/forward step) must record it even if the
+  // settle timer has not fired yet; otherwise moving on cancels the timer and
+  // the place is missing from the stack, so back skips it and forward never
+  // returns to it.
+  const flushPendingSectionVisit = () => {
+    if (!autoSectionVisitTimer) return;
+    clearTimeout(autoSectionVisitTimer);
+    autoSectionVisitTimer = null;
+    visitSection(sectionNav, lastHighlightedSectionPath);
+  };
   const noteHighlightedSection = (rootName, path) => {
     // Keeps the departure position accurate: this runs on every caret move,
     // so by the time the caret leaves a section, that section's last known
@@ -1853,6 +1927,7 @@ try {
     autoSectionVisitTimer = path === null ? null : setTimeout(() => {
       autoSectionVisitTimer = null;
       visitSection(sectionNav, path);
+      refreshNavigationButtons();
     }, AUTO_SECTION_VISIT_DELAY);
   };
 
@@ -1880,30 +1955,50 @@ try {
       section.className = 'pinned-variation';
       const heading = document.createElement('h4');
       heading.textContent = `Revision ${revision.id}`;
-      const details = document.createElement('p');
-      details.textContent = `${revision.origin} · ${revision.timestamp} · ${revision.note ?? '[no note]'}`;
+      const note = document.createElement('span');
+      note.className = 'variation-note';
+      note.textContent = revision.note ?? '[no note]';
+      note.title = `${revision.origin} · ${revision.timestamp}`;
       const actions = document.createElement('div');
-      const pin = document.createElement('button');
-      pin.type = 'button';
+      actions.className = 'variation-actions';
+      const iconButton = (paths, label) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'icon-button';
+        button.title = label;
+        button.setAttribute('aria-label', label);
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.classList.add('icon-svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('aria-hidden', 'true');
+        for (const d of paths) {
+          const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          path.setAttribute('d', d);
+          svg.append(path);
+        }
+        button.append(svg);
+        return button;
+      };
       const isPinned = pinnedRevisionIds.includes(revision.id);
-      pin.textContent = isPinned ? 'Unpin' : 'Pin variation';
+      const pin = iconButton(['M9 4h6l-1 6 3 3H7l3-3z', 'M12 13v7'], isPinned ? 'Unpin' : 'Pin variation');
+      pin.setAttribute('aria-pressed', String(isPinned));
       pin.addEventListener('click', () => togglePinnedRevision(revision.id));
-      const checkout = document.createElement('button');
-      checkout.type = 'button';
       const currentController = activeCommitController();
-      checkout.textContent = revision.id === currentHistory.currentRevision ? 'Current' : 'Checkout';
-      checkout.disabled = revision.id === currentHistory.currentRevision || !currentController;
+      const isCurrent = revision.id === currentHistory.currentRevision;
+      const checkout = iconButton(['M12 3a9 9 0 100 18 9 9 0 000-18z', 'M8 12.5l3 3 5-6'], isCurrent ? 'Current' : 'Checkout');
+      checkout.disabled = isCurrent || !currentController;
       checkout.addEventListener('click', async () => {
         await currentController.checkout(revision.id);
         focusedRevisionId = revision.id;
         renderVersions();
         refreshHistoryControls();
       });
+      actions.append(pin, checkout);
       const payload = document.createElement('pre');
       payload.dataset.payloadType = revision.payloadType;
       payload.textContent = revision.payload;
       actions.append(pin, checkout);
-      section.append(heading, details, actions, payload);
+      section.append(heading, note, actions, payload);
       output.append(section);
     }
     if (pinnedRevisionIds.length > 1) {
@@ -1938,10 +2033,20 @@ try {
     }
   };
 
-  const inspectRevision = (revision) => {
-    if (!revision) return;
-    inspectedRevisionId = revision.id;
-    void renderPinnedVariations();
+  const checkoutAndEdit = async (revisionId) => {
+    const controller = activeCommitController();
+    if (!controller) return;
+    try {
+      await controller.checkout(revisionId);
+    } catch (error) {
+      showStatus(error.message, true);
+      return;
+    }
+    focusedRevisionId = revisionId;
+    inspectedRevisionId = revisionId;
+    renderVersions();
+    refreshHistoryControls();
+    focusPanel('TEXT');
   };
 
   const togglePinnedRevision = (revisionId) => {
@@ -1951,6 +2056,110 @@ try {
     inspectedRevisionId = revisionId;
     renderVersions();
   };
+
+  // The pinned-versions panel under the editor: read-only cards showing only
+  // what each pinned revision added, to copy from. Its presence follows the
+  // pin list, so unpinning everything removes it.
+  let pinnedPanelToken = 0;
+  const renderPinnedPanel = async () => {
+    const currentHistory = activeHistory();
+    const visible = ['STORY', 'METADATA'].includes(activeRoot) && Boolean(currentHistory) && pinnedRevisionIds.length > 0;
+    const wasHidden = pinnedPanel.hidden;
+    pinnedPanel.hidden = !visible;
+    paneResizers.pinned.hidden = !visible;
+    if (wasHidden !== !visible) updateEditorBounds();
+    const token = ++pinnedPanelToken;
+    if (!visible) { pinnedCards.replaceChildren(); return; }
+    const cache = new Map();
+    const cards = [];
+    for (const id of pinnedRevisionIds) {
+      const revision = currentHistory.revisions.get(id);
+      if (!revision) continue;
+      const after = await reconstructRevision(currentHistory, id, cache);
+      const before = revision.parents.length ? await reconstructRevision(currentHistory, revision.parents[0], cache) : '';
+      const card = document.createElement('article');
+      card.className = 'pinned-card';
+      card.tabIndex = 0;
+      card.dataset.revisionId = String(id);
+      card.setAttribute('aria-label', `Revision ${id}${revision.note ? `: ${revision.note}` : ''}`);
+      const heading = document.createElement('h4');
+      heading.textContent = `Revision ${id}`;
+      const detail = document.createElement('span');
+      detail.textContent = revision.note ?? revision.origin;
+      detail.title = revision.note ?? revision.origin;
+      heading.append(detail);
+      card.append(heading);
+      const passages = insertedPassages(before, after);
+      if (passages.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'pinned-empty';
+        empty.textContent = 'This revision only removed text, so it has nothing to copy.';
+        card.append(empty);
+      }
+      for (const passage of passages) {
+        const block = document.createElement('p');
+        block.className = 'pinned-passage';
+        block.textContent = passage;
+        card.append(block);
+      }
+      cards.push(card);
+    }
+    if (token !== pinnedPanelToken) return;
+    const hadFocus = pinnedPanel.contains(document.activeElement);
+    const focusedId = document.activeElement?.closest?.('.pinned-card')?.dataset.revisionId;
+    pinnedCards.replaceChildren(...cards);
+    if (hadFocus) (pinnedCards.querySelector(`[data-revision-id="${focusedId}"]`) ?? pinnedCards.querySelector('.pinned-card') ?? elements[activeRoot]).focus();
+  };
+
+  const closePinnedPanel = () => {
+    const hadFocus = pinnedPanel.contains(document.activeElement);
+    pinnedRevisionIds = [];
+    if (versionsOpen) renderVersions();
+    void renderPinnedPanel();
+    if (hadFocus) focusPanel('TEXT');
+  };
+  pinnedClose.addEventListener('click', closePinnedPanel);
+
+  // Copying from a card records where the text came from. Without a text
+  // selection, Ctrl+C on a focused card copies everything it contributed.
+  pinnedPanel.addEventListener('copy', (event) => {
+    if (!['STORY', 'METADATA'].includes(activeRoot)) return;
+    const selection = window.getSelection();
+    const anchor = selection?.anchorNode;
+    const anchorCard = (anchor?.nodeType === Node.ELEMENT_NODE ? anchor : anchor?.parentElement)?.closest('.pinned-card');
+    const card = selection?.toString() ? anchorCard : event.target.closest?.('.pinned-card');
+    if (!card) return;
+    let text = selection.toString();
+    if (!text) {
+      text = [...card.querySelectorAll('.pinned-passage')].map((node) => node.textContent).join('\n\n');
+      if (!text) return;
+      event.clipboardData.setData('text/plain', text);
+      event.preventDefault();
+    }
+    pendingCopies[activeRoot] = addPendingCopy(pendingCopies[activeRoot], { sourceRevisionId: Number(card.dataset.revisionId), text });
+  });
+
+  // Up/Down step between the pinned versions, Left/Right jump to first/last.
+  pinnedCards.addEventListener('keydown', (event) => {
+    const cards = [...pinnedCards.querySelectorAll('.pinned-card')];
+    const index = cards.indexOf(event.target);
+    if (index === -1 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+    const target = { ArrowUp: cards[Math.max(0, index - 1)], ArrowDown: cards[Math.min(cards.length - 1, index + 1)], ArrowLeft: cards[0], ArrowRight: cards.at(-1) }[event.key];
+    if (!target) return;
+    event.preventDefault();
+    target.focus();
+    target.scrollIntoView({ block: 'nearest' });
+  });
+
+  // With the panel open, Tab from the editor goes to the panel instead of
+  // typing a tab; Escape (handled with the other panels) comes back.
+  workspace.addEventListener('keydown', (event) => {
+    if (event.key !== 'Tab' || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || pinnedPanel.hidden) return;
+    if (!event.target.closest?.('.editor-pane') || pinnedPanel.contains(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    (pinnedCards.querySelector('.pinned-card') ?? pinnedClose).focus();
+  }, true);
 
   const focusGraphOn = (revisionId, { keepSearch = false } = {}) => {
     focusedRevisionId = revisionId;
@@ -1980,6 +2189,28 @@ try {
     if (active === document.body || !active || !versionsView.contains(active)) versionGraph.focus();
   };
 
+  // Holding a node pins/unpins it. Delegated and window-scoped because a
+  // re-render can replace the pressed button mid-hold; the click that ends a
+  // hold is swallowed.
+  let suppressNodeClick = false;
+  let hold = null;
+  const endHold = () => { if (hold) clearTimeout(hold.timer); hold = null; };
+  versionGraph.addEventListener('pointerdown', (event) => {
+    const id = Number(event.target.closest?.('.graph-node')?.dataset.revisionId);
+    if (event.button !== 0 || !Number.isInteger(id)) return;
+    endHold();
+    hold = { x: event.clientX, y: event.clientY, timer: setTimeout(() => {
+      hold = null;
+      suppressNodeClick = true;
+      window.addEventListener('pointerup', () => setTimeout(() => { suppressNodeClick = false; }, 0), { once: true, capture: true });
+      togglePinnedRevision(id);
+    }, 500) };
+  });
+  window.addEventListener('pointerup', endHold, true);
+  window.addEventListener('pointercancel', endHold, true);
+  window.addEventListener('pointermove', (event) => {
+    if (hold && Math.hypot(event.clientX - hold.x, event.clientY - hold.y) > 6) endHold();
+  }, true);
   const renderLocalGraph = () => {
     const currentHistory = activeHistory();
     if (!currentHistory || !versionGraph) return;
@@ -2008,6 +2239,8 @@ try {
         const child = positions.get(node.id);
         if (!parent || !child) continue;
         const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        // Secondary parents supplied copied text but are not the diff base.
+        if (parentId !== node.parents[0]) line.classList.add('secondary');
         line.setAttribute('x1', String(parent.x)); line.setAttribute('y1', String(parent.y));
         line.setAttribute('x2', String(child.x)); line.setAttribute('y2', String(child.y));
         lines.append(line);
@@ -2025,7 +2258,13 @@ try {
       button.textContent = String(node.id);
       button.setAttribute('aria-label', `Revision ${node.id}${pinnedRevisionIds.includes(node.id) ? ', pinned' : ''}`);
       button.title = `Revision ${node.id}: ${node.note ?? node.origin}`;
-      button.addEventListener('click', () => focusGraphOn(node.id));
+      // A real dblclick event never arrives (the first click re-renders the
+      // node), so the second click of a double click is recognised by count.
+      button.addEventListener('click', (event) => {
+        if (suppressNodeClick) return;
+        if (event.detail >= 2) void checkoutAndEdit(node.id);
+        else focusGraphOn(node.id);
+      });
       stage.append(button);
     }
     versionGraph.append(stage);
@@ -2101,19 +2340,12 @@ try {
 
   versionSearchInput.addEventListener('keydown', (event) => {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || (event.key === 'Enter' && !event.isComposing)) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
-      const backwards = event.key === 'ArrowUp' || (event.key === 'Enter' && event.shiftKey);
-      stepVersionSearch(versionSearch.index + (backwards ? -1 : 1));
-    } else if (event.key === 'ArrowRight') {
-      // Go to the node, keep the search so the next hit is one Alt/arrow away.
+      stepVersionSearch(versionSearch.index + (event.key === 'ArrowUp' ? -1 : 1));
+    } else if (event.key === 'Enter' && !event.isComposing) {
+      // Go to the node, keep the search so F3 / Shift+F3 continue from it.
       event.preventDefault();
-      focusVersionGraphKeepingSearch();
-    } else if (event.key === 'ArrowLeft') {
-      // Clear the search but stay on the node it reached.
-      event.preventDefault();
-      clearVersionSearch();
-      renderVersions();
       focusVersionGraphKeepingSearch();
     } else if (event.key === 'Escape') {
       // Clear the search and go back to where the search began.
@@ -2266,22 +2498,12 @@ try {
 
   textSearchInput.addEventListener('keydown', (event) => {
     if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter') {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
-      const backwards = event.key === 'ArrowUp' || (event.key === 'Enter' && event.shiftKey);
-      previewTextMatch(textSearch.index + (backwards ? -1 : 1));
-    } else if (event.key === 'ArrowRight') {
+      previewTextMatch(textSearch.index + (event.key === 'ArrowUp' ? -1 : 1));
+    } else if (event.key === 'Enter') {
       event.preventDefault();
       acceptTextMatch();
-    } else if (event.key === 'ArrowLeft') {
-      event.preventDefault();
-      const match = textSearch.matches[textSearch.index];
-      const { root } = textSearch;
-      endTextSearch({ restore: false });
-      if (match) {
-        editors[root].setSelection(match.from, match.to);
-        requestAnimationFrame(() => editors[root].revealOffset(match.from));
-      }
     } else if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
@@ -2293,6 +2515,7 @@ try {
     if (!activeHistory()) return;
     renderLocalGraph();
     void renderPinnedVariations();
+    void renderPinnedPanel();
   };
 
   // The deepest heading whose range contains offset, or null in the
@@ -2427,6 +2650,7 @@ try {
       pinnedRevisionIds = [];
       refreshHistoryControls();
       if (versionsOpen) renderVersions();
+      void renderPinnedPanel();
     }
     for (const name of ['STORY', 'METADATA']) elements[name].hidden = !['STORY', 'METADATA'].includes(rootName) || name !== rootName;
     compositeView.hidden = rootName !== 'COMPOSITE';
@@ -2572,16 +2796,7 @@ try {
   versionGraph.addEventListener('keydown', (event) => {
     const currentHistory = activeHistory();
     if (!currentHistory) return;
-    // Ctrl+Alt+Arrows belong to the search results while a search is active
-    // (handled at the window level), not to the node-by-node arrow stepping.
-    if (versionSearch.active && event.ctrlKey && event.altKey && !event.shiftKey && event.key.startsWith('Arrow')) return;
-    // Search navigation mode: while a search is active, F3 / Shift+F3 step
-    // through the highlighted nodes and Escape ends the search on the node.
-    if (versionSearch.active && versionSearch.results.length > 0 && event.key === 'F3') {
-      event.preventDefault();
-      stepVersionSearch(versionSearch.index + (event.shiftKey ? -1 : 1));
-      return;
-    }
+    // Search navigation mode: while a search is active, Escape ends it on the node.
     if (versionSearch.active && event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
@@ -2599,7 +2814,7 @@ try {
     if (event.key === ' ' || event.key === 'Enter') {
       event.preventDefault();
       if (event.key === ' ') togglePinnedRevision(currentId);
-      else inspectRevision(revision);
+      else void checkoutAndEdit(currentId);
       return;
     }
     if (nextId !== null) {
@@ -2633,6 +2848,7 @@ try {
         : jumpVisitLog(log, 'last');
       if (result.id == null) return null;
       visitLogs[scrubRoot] = result.log;
+      refreshNavigationButtons();
       return { id: result.id, providerState };
     },
   };
@@ -2663,6 +2879,7 @@ try {
       return;
     }
     if (scrubSession || scrubStarting) return; // a different mode is mid-hold — ignore until it releases
+    endTimelineBurst();
     const currentController = activeCommitController();
     if (!currentController) return;
     const rootName = activeRoot === 'METADATA' ? 'METADATA' : 'STORY';
@@ -2763,14 +2980,20 @@ try {
   // Alt+Arrow only steps through what's already there — see
   // handleLocationScrub below.
   const navigateToSection = (headingPath) => {
-    if (goToSection(headingPath)) visitSection(sectionNav, headingPath);
+    flushPendingSectionVisit();
+    if (goToSection(headingPath)) {
+      visitSection(sectionNav, headingPath);
+      refreshNavigationButtons();
+    }
   };
 
   const runStopStep = (direction) => {
     if (!['STORY', 'METADATA'].includes(activeRoot)) return;
+    flushPendingSectionVisit();
     const targetPath = stepSectionNav(sectionNav, direction);
     if (!targetPath) return;
     goToSection(targetPath);
+    refreshNavigationButtons();
   };
 
   const handleLocationScrub = (event) => {
@@ -2789,12 +3012,19 @@ try {
     if (!['STORY', 'METADATA'].includes(activeRoot)) return;
     const currentController = activeCommitController();
     if (!currentController) return;
-    await currentController.commitPending({ origin: 'user' });
     const rootName = activeRoot === 'METADATA' ? 'METADATA' : 'STORY';
+    if (timelineBurst && timelineBurst.root !== rootName) endTimelineBurst();
+    await currentController.commitPending({ origin: 'user' });
     const result = stepVisitLog(visitLogs[rootName], direction);
     if (result.id == null) return;
     visitLogs[rootName] = result.log;
-    await currentController.checkout(result.id);
+    timelineBurst = { root: rootName, landingId: result.id };
+    timelineStepping = true;
+    try {
+      await currentController.checkout(result.id);
+    } finally {
+      timelineStepping = false;
+    }
     focusedRevisionId = result.id;
     renderVersions();
     refreshHistoryControls();
@@ -2802,6 +3032,16 @@ try {
 
   navTimelineBackButton.addEventListener('click', () => void runTimelineStep(-1));
   navTimelineForwardButton.addEventListener('click', () => void runTimelineStep(1));
+  // A burst lasts while the author keeps using these two buttons. Focus is no
+  // signal: every checkout syncs the DOM selection, which pulls focus into the
+  // editor. Any other pointer or (non-modifier) key action ends it.
+  document.addEventListener('pointerdown', (event) => {
+    if (!navTimelineBackButton.contains(event.target) && !navTimelineForwardButton.contains(event.target)) endTimelineBurst();
+  }, true);
+  document.addEventListener('keydown', (event) => {
+    if (!['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) endTimelineBurst();
+  }, true);
+  window.addEventListener('blur', endTimelineBurst);
 
   for (const [name, element] of Object.entries(elements)) {
     element.addEventListener('editorstatechange', ({ detail }) => {
@@ -3259,24 +3499,21 @@ try {
   };
   for (const container of [sidebarLeft, workspace, sidebarRight, versionsView]) trapTabWithin(container);
 
-  // Ctrl+Alt+Arrows walk the active search's results, like the Shift+Alt
-  // timeline: Left/Right previous/next, Up/Down first/last. Which search it
-  // is depends on the panel; with no search active in that panel the keys
-  // fall through to the structural scrub.
-  const handleSearchResultKeydown = (event) => {
-    const move = { ArrowLeft: (i) => i - 1, ArrowRight: (i) => i + 1, ArrowUp: () => 0, ArrowDown: (n) => n - 1 }[event.key];
-    if (!move) return false;
+  // F3 / Shift+F3 step through the active search's hits from anywhere in the
+  // panel that owns it (the search field has its own Up/Down). Ctrl+Alt is
+  // reserved for version scrubbing.
+  const handleSearchStepKey = (event) => {
+    if (event.key !== 'F3' || event.ctrlKey || event.metaKey || event.altKey) return false;
+    const delta = event.shiftKey ? -1 : 1;
     const panel = event.target === textSearchInput ? 'TEXT' : panelForElement(event.target);
     if (panel === 'TEXT' && textSearch.active && textSearch.matches.length > 0) {
       event.preventDefault();
-      const count = textSearch.matches.length;
-      previewTextMatch(event.key === 'ArrowDown' ? count - 1 : move(textSearch.index));
+      previewTextMatch(textSearch.index + delta);
       return true;
     }
     if (panel === 'VERSIONS' && versionSearch.active && versionSearch.results.length > 0) {
       event.preventDefault();
-      const count = versionSearch.results.length;
-      stepVersionSearch(event.key === 'ArrowDown' ? count - 1 : move(versionSearch.index));
+      stepVersionSearch(versionSearch.index + delta);
       return true;
     }
     return false;
@@ -3288,7 +3525,7 @@ try {
       cancelScrub();
       return;
     }
-    if (event.altKey && event.ctrlKey && !event.shiftKey && !event.metaKey && handleSearchResultKeydown(event)) return;
+    if (handleSearchStepKey(event)) return;
     if (event.altKey && !event.metaKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
       if (event.ctrlKey) { handleScrubKeydown('structural', event); return; }
       if (event.shiftKey) { handleScrubKeydown('visit-time', event); return; }
@@ -3310,7 +3547,7 @@ try {
     // else in Navigation, Chat, or Versions, Escape returns focus to Text.
     if (event.key === 'Escape' && !event.ctrlKey && !event.metaKey && !event.altKey && event.target !== chatPrompt) {
       const panel = panelForElement(event.target);
-      if (panel === 'NAVIGATION' || panel === 'CHAT' || panel === 'VERSIONS') {
+      if (panel === 'NAVIGATION' || panel === 'CHAT' || panel === 'VERSIONS' || pinnedPanel.contains(event.target)) {
         event.preventDefault();
         focusPanel('TEXT');
       }
@@ -3343,12 +3580,17 @@ try {
     }
     if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
     const key = event.key.toLowerCase();
-    if (key === 'z' && !event.shiftKey) {
+    if (key === 'z' || key === 'y') {
+      // The author's own edits: undone and redone in the editor that has
+      // focus, never through the revision graph. Anywhere else (search and
+      // prompt fields) the native field undo is left alone.
+      const root = Object.keys(undoStacks).find((name) => elements[name].contains(event.target));
+      if (!root) return;
       event.preventDefault();
-      void runUndo();
-    } else if (key === 'y' || (key === 'z' && event.shiftKey)) {
-      event.preventDefault();
-      void runRedo();
+      const redo = key === 'y' || event.shiftKey;
+      if (undoStacks[root][redo ? 'redo' : 'undo']()) {
+        requestAnimationFrame(() => editors[root].revealOffset(models[root].selectionStart));
+      }
     } else if (key === 's') {
       event.preventDefault();
       void saveDocument(event.shiftKey);
@@ -3385,6 +3627,7 @@ try {
     editor,
     models: Object.freeze(models),
     editors: Object.freeze(editors),
+    undoStacks: Object.freeze(undoStacks),
     switchView,
     refreshSidebar,
     refreshChatOutline,

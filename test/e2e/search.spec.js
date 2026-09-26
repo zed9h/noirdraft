@@ -6,7 +6,7 @@ const launch = () => electron.launch({
   env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
 });
 
-test('Ctrl+F searches the text: hits replace the outline, arrows navigate, Right/Left/Escape resolve', async () => {
+test('Ctrl+F searches the text: hits replace the outline, arrows navigate, Enter/Escape resolve', async () => {
   const application = await launch();
   try {
     const window = await application.firstWindow();
@@ -51,14 +51,14 @@ test('Ctrl+F searches the text: hits replace the outline, arrows navigate, Right
     await expect(results.nth(1)).toHaveClass(/is-active/);
     await expect(search).toBeFocused();
 
-    // Ctrl+Alt+Arrows: Left/Right previous/next, Up/Down first/last.
-    await window.keyboard.press('Control+Alt+ArrowUp');
+    // ArrowUp/ArrowDown step in the field; F3 / Shift+F3 work there too.
+    await window.keyboard.press('ArrowUp');
     await expect(results.nth(0)).toHaveClass(/is-active/);
-    await window.keyboard.press('Control+Alt+ArrowDown');
+    await window.keyboard.press('F3');
     await expect(results.nth(1)).toHaveClass(/is-active/);
-    await window.keyboard.press('Control+Alt+ArrowLeft');
+    await window.keyboard.press('Shift+F3');
     await expect(results.nth(0)).toHaveClass(/is-active/);
-    await window.keyboard.press('Control+Alt+ArrowRight');
+    await window.keyboard.press('ArrowDown');
     await expect(results.nth(1)).toHaveClass(/is-active/);
 
     // Escape clears the search and puts the caret back where it was.
@@ -67,22 +67,15 @@ test('Ctrl+F searches the text: hits replace the outline, arrows navigate, Right
     await expect(search).toHaveValue('');
     expect(await selection()).toEqual([3, 3]);
 
-    // Right goes to the hit and keeps the search.
+    // Enter goes to the hit and keeps the search.
     await window.keyboard.press('Control+f');
     await window.keyboard.type('lantern');
     await window.keyboard.press('ArrowDown');
-    await window.keyboard.press('ArrowRight');
+    await window.keyboard.press('Enter');
     await expect(results).toHaveCount(2);
     const [start, end] = await selection();
     expect(end - start).toBe('lantern'.length);
     expect(start).toBe(await window.evaluate(() => window.__noirDraftTest.models.STORY.text.lastIndexOf('lantern')));
-
-    // Left clears the search and stays on the hit.
-    await window.keyboard.press('Control+f');
-    await window.keyboard.press('ArrowLeft');
-    await expect(outline).toBeVisible();
-    await expect(search).toHaveValue('');
-    expect((await selection())[0]).toBe(start);
   } finally {
     await application.close();
   }
@@ -117,7 +110,7 @@ test('Alt+Shift+F searches revision notes and change sets from the Versions pane
     await window.keyboard.press('Alt+Shift+F');
     await window.keyboard.type('first pass');
     await expect(count).toHaveText('1 of 1');
-    await window.keyboard.press('ArrowRight');
+    await window.keyboard.press('Enter');
     await expect(window.locator('[data-version-graph]')).toBeFocused();
     await expect(count).toHaveText('1 of 1'); // search kept
 
@@ -133,19 +126,11 @@ test('Alt+Shift+F searches revision notes and change sets from the Versions pane
     await window.keyboard.type('weather');
     await expect(count).toHaveText('1 of 2');
     await expect(window.locator('.graph-node.search-hit')).not.toHaveCount(0);
-    await window.keyboard.press('ArrowRight');
+    await window.keyboard.press('Enter');
     await expect(window.locator('[data-version-graph]')).toBeFocused();
     await window.keyboard.press('F3');
     await expect(count).toHaveText('2 of 2');
     await window.keyboard.press('Shift+F3');
-    await expect(count).toHaveText('1 of 2');
-    await window.keyboard.press('Control+Alt+ArrowDown');
-    await expect(count).toHaveText('2 of 2');
-    await window.keyboard.press('Control+Alt+ArrowUp');
-    await expect(count).toHaveText('1 of 2');
-    await window.keyboard.press('Control+Alt+ArrowRight');
-    await expect(count).toHaveText('2 of 2');
-    await window.keyboard.press('Control+Alt+ArrowLeft');
     await expect(count).toHaveText('1 of 2');
     await window.getByRole('button', { name: 'Next matching revision' }).click();
     await expect(count).toHaveText('2 of 2');

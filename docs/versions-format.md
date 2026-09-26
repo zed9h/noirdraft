@@ -52,7 +52,7 @@ Rules:
 
 - Revision IDs are non-negative decimal integers and are never reused within their `STORY:REV` or `METADATA:REV` group.
 - Each `Current-Revision` explicitly identifies the node represented by its root's checked-out text.
-- `Parents` is `none` for the initial checkpoint or a comma-separated list. Phase 6 writes one parent but the grammar permits more for future compatibility.
+- `Parents` is `none` for the initial checkpoint or a comma-separated list. The first entry is the primary parent: the state the payload is applied to, and the only ancestry undo, redo and passage history follow. Any further entries are secondary parents: revisions whose pinned text was copied into this revision. They are shown as dotted edges and never affect reconstruction.
 - `Origin` initially accepts `user`, `agent`, `import`, `recovery`, or `system`.
 - `Time` is an ISO-8601 timestamp.
 - Hashes are lowercase SHA-256 of canonical UTF-8 visible-root text: LF line endings, no file BOM, normalized Setext editor headings, and outer whitespace trimmed. STORY and METADATA text (non-empty) ends with exactly one line break, the empty last row: added when missing, collapsed when repeated.

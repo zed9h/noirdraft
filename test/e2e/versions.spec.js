@@ -53,7 +53,7 @@ test('the bottom Versions panel renders explorable graph nodes and pinned variat
       story: window.__noirDraftTest.model.text,
       current: window.__noirDraftTest.getHistory().currentRevision,
     }));
-    expect(state).toEqual({ story: `${original.trim()}\nLinear edit.\n`, current: 1 });
+    expect(state).toEqual({ story: `${original}\nLinear edit.\n`, current: 1 });
   } finally {
     await application.close();
   }

@@ -72,7 +72,6 @@ export async function passageHistory(history, revisionId, range, options = {}) {
   for (let hop = 0; hop < maxHops; hop += 1) {
     const revision = history.revisions.get(currentId);
     if (!revision || revision.parents.length === 0) { stoppedReason = 'root'; break; }
-    if (revision.parents.length > 1) { stoppedReason = 'merge'; break; }
     const parentId = revision.parents[0];
     const parentText = await reconstructRevision(history, parentId, cache);
     const mapped = mapRange(currentText, parentText, currentRange);

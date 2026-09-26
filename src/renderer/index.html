@@ -25,11 +25,11 @@
           <button type="button" class="icon-button" data-nav-timeline-forward title="Next visited revision (Shift+Alt+→)" aria-label="Next visited revision"><span class="icon-glyph">fast_forward</span></button>
           <span class="toolbar-divider" aria-hidden="true"></span>
           <div class="split-button" data-undo-group>
-            <button type="button" class="icon-button" data-undo title="Undo (Ctrl+Z)" aria-label="Undo"><span class="icon-glyph">undo</span></button>
+            <button type="button" class="icon-button" data-undo title="Undo — back to the parent revision (Ctrl+Alt+←)" aria-label="Undo"><span class="icon-glyph">undo</span></button>
           </div>
           <div class="split-button" data-redo-group>
-            <button type="button" class="icon-button" data-redo title="Redo (Ctrl+Y)" aria-label="Redo"><span class="icon-glyph">redo</span></button>
-            <button type="button" class="icon-button split-caret" data-redo-menu-toggle hidden aria-haspopup="true" aria-expanded="false" aria-label="Choose redo branch" title="Choose redo branch"><span class="icon-glyph">arrow_drop_down</span></button>
+            <button type="button" class="icon-button" data-redo title="Redo — forward to the child revision (Ctrl+Alt+→)" aria-label="Redo"><span class="icon-glyph">redo</span></button>
+            <button type="button" class="icon-button split-caret" data-redo-menu-toggle aria-haspopup="true" aria-expanded="false" aria-label="Choose redo branch" title="Choose redo branch" disabled><span class="icon-glyph">arrow_drop_down</span></button>
             <div class="dropdown-menu" data-redo-menu hidden aria-label="Redo branches"></div>
           </div>
           <span class="toolbar-divider" aria-hidden="true"></span>
@@ -184,6 +184,15 @@
             ></div>
             <div class="composite-provenance" data-composite-provenance aria-label="Composite provenance"></div>
           </section>
+          <div class="pane-resizer pane-resizer-horizontal pinned-resizer" data-pane-resizer="pinned" role="separator" aria-label="Resize pinned versions pane" aria-orientation="horizontal" tabindex="0" hidden></div>
+          <section class="pinned-panel" data-pinned-panel aria-label="Pinned versions" hidden>
+            <div class="pinned-panel-heading">
+              <p class="eyebrow">Pinned versions</p>
+              <span class="pinned-panel-hint">Read-only · copy into the editor · ↑↓ ←→ move · Esc back</span>
+              <button type="button" class="icon-button" data-pinned-close title="Close and unpin all versions" aria-label="Close pinned versions and unpin all"><span class="icon-glyph">close</span></button>
+            </div>
+            <div class="pinned-cards" data-pinned-cards></div>
+          </section>
         </section>
         <div class="pane-resizer pane-resizer-vertical" data-pane-resizer="chat" data-resizer-for="sidebar-right" role="separator" aria-label="Resize chat pane" aria-orientation="vertical" tabindex="0"></div>
         <aside class="sidebar sidebar-right" data-sidebar-right aria-label="Chat">
@@ -220,7 +229,7 @@
           <div class="version-graph" data-version-graph aria-label="Version graph" tabindex="0"></div>
         </div>
         <aside class="version-inspector" data-version-inspector aria-label="Pinned variations">
-          <p>Explore with arrow keys. Pin revisions to compare their variations.</p>
+          <p>Explore with arrow keys. Space pins or unpins a node, Enter checks it out and returns to the text.</p>
         </aside>
       </section>
     </div>

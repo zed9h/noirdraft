@@ -1,8 +1,8 @@
-import { childrenOf } from './graph.js';
+import { linkedChildrenOf } from './graph.js';
 
 function neighborIds(history, id, direction) {
   if (direction === 'ancestor') return history.revisions.get(id)?.parents ?? [];
-  return childrenOf(history, id).map((revision) => revision.id);
+  return linkedChildrenOf(history, id).map((revision) => revision.id);
 }
 
 function reachableHiddenCount(history, startId, included, direction) {

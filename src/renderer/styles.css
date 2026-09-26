@@ -575,6 +575,7 @@ button { font: inherit; }
 .graph-stage { position: relative; }
 .graph-edges { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .graph-edges line { stroke: #655546; stroke-width: 2; }
+.graph-edges line.secondary { stroke: #8f7a63; stroke-width: 1.5; stroke-dasharray: 4 5; }
 .graph-node {
   position: absolute; left: var(--x); top: var(--y); transform: translate(-50%, -50%);
   width: 2.15rem; height: 2.15rem; padding: 0; border: 2px solid #6b5a49; border-radius: 50%;
@@ -717,3 +718,34 @@ button { font: inherit; }
 .search-field:not(:focus-within) input:placeholder-shown { width: 0; padding: 0; border-width: 0; opacity: 0; }
 .search-field .search-glass { padding: .3rem .4rem; }
 .search-field:focus-within .search-glass, .search-field:has(input:not(:placeholder-shown)) .search-glass { display: none; }
+
+.pinned-resizer { margin: 0; flex: 0 0 auto; }
+.pinned-panel {
+  flex: 0 0 var(--pinned-pane-height, 14rem);
+  min-height: 7rem;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  border-top: 1px solid #2c2722; background: #17140f;
+}
+.pinned-panel[hidden] { display: none; }
+.pinned-panel:focus-within { border-top-color: #6b5a49; }
+.pinned-panel-heading { display: flex; align-items: center; gap: .5rem; padding: .1rem .2rem .1rem .7rem; }
+.pinned-panel-heading .eyebrow { white-space: nowrap; }
+.pinned-panel-hint { flex: 1; overflow: hidden; color: #6f665c; font-size: .7rem; text-overflow: ellipsis; white-space: nowrap; }
+.pinned-panel-heading .icon-button { width: 1.5rem; height: 1.5rem; border: 0; background: none; }
+.pinned-cards { flex: 1; display: flex; flex-direction: column; gap: .15rem; padding: 0 .4rem .4rem; overflow: auto; min-height: 0; }
+.pinned-card { flex: 0 0 auto; display: flex; flex-direction: column; gap: .25rem; padding: .25rem .5rem; border-radius: .2rem; }
+.pinned-card:focus-visible { outline: 0; background: #211d18; box-shadow: inset 2px 0 0 #bd8f61; }
+.pinned-card h4 { display: flex; align-items: baseline; gap: .5rem; min-width: 0; margin: 0; color: #d7c7b5; font-size: .8rem; white-space: nowrap; }
+.pinned-card h4 span { min-width: 0; overflow: hidden; color: #948a7f; font-weight: 400; text-overflow: ellipsis; }
+.pinned-passage { margin: 0; padding: .35rem .45rem; border-left: 2px solid #5f8a4c; color: #cfc6bb; background: rgba(120, 200, 90, .07); font: .85rem/1.5 "Noto Serif", serif; white-space: pre-wrap; user-select: text; }
+.pinned-empty { margin: 0; color: #948a7f; font-size: .78rem; }
+
+.pinned-variation { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: .6rem; }
+.pinned-variation h4 { white-space: nowrap; }
+.variation-note { overflow: hidden; color: #948a7f; font-size: .74rem; text-overflow: ellipsis; white-space: nowrap; }
+.variation-actions { display: flex; gap: .15rem; }
+.variation-actions .icon-button { margin: 0; padding: .1rem; border: 0; background: none; }
+.variation-actions .icon-button[aria-pressed="true"] { color: #b7e0a0; }
+.pinned-variation pre { grid-column: 1 / -1; }
+.pinned-variation pre, .variation-diff { max-height: none; }

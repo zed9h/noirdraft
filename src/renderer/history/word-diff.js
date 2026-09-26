@@ -50,3 +50,42 @@ export function wordDiff(before, after) {
   }
   return merged;
 }
+
+/**
+ * The passages `after` added relative to `before`, in order. Only the span
+ * between the shared prefix and suffix is diffed, so a small edit in a long
+ * text stays cheap; inserted runs separated only by shared whitespace are one
+ * passage. Pure deletions yield an empty list.
+ */
+export function insertedPassages(before, after) {
+  const a = String(before);
+  const b = String(after);
+  const limit = Math.min(a.length, b.length);
+  let prefix = 0;
+  while (prefix < limit && a[prefix] === b[prefix]) prefix += 1;
+  while (prefix > 0 && !/\s/.test(a[prefix - 1])) prefix -= 1;
+  let suffix = 0;
+  while (suffix < limit - prefix && a[a.length - 1 - suffix] === b[b.length - 1 - suffix]) suffix += 1;
+  while (suffix > 0 && !/\s/.test(b[b.length - suffix])) suffix -= 1;
+  const middleBefore = a.slice(prefix, a.length - suffix);
+  const middleAfter = b.slice(prefix, b.length - suffix);
+  if (middleAfter.trim() === '') return [];
+  if (tokenize(middleBefore).length * tokenize(middleAfter).length > 4_000_000) return [middleAfter.trim()];
+  const passages = [];
+  let open = null;
+  let gap = '';
+  for (const op of wordDiff(middleBefore, middleAfter)) {
+    if (op.type === 'insert') {
+      open = open === null ? op.text : `${open}${gap}${op.text}`;
+      gap = '';
+    } else if (op.type === 'equal' && open !== null && op.text.trim() === '') {
+      gap += op.text;
+    } else if (op.type === 'equal') {
+      if (open !== null) passages.push(open.trim());
+      open = null;
+      gap = '';
+    }
+  }
+  if (open !== null) passages.push(open.trim());
+  return passages.filter((passage) => passage !== '');
+}

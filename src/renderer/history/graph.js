@@ -36,7 +36,17 @@ export function nextRevisionId(history) {
   return Math.max(-1, history.retiredRevisionIdFloor ?? -1, ...history.revisions.keys()) + 1;
 }
 
+// Parents are ordered: parents[0] is the primary parent (the state the diff is
+// against, and the only ancestry undo/redo and lineage follow); any further
+// entries are secondary contributors whose text was copied into this revision.
 export function childrenOf(history, revisionId) {
+  return [...history.revisions.values()]
+    .filter(({ parents }) => parents[0] === revisionId)
+    .sort((left, right) => left.id - right.id);
+}
+
+// Every revision that lists revisionId as a parent, primary or secondary.
+export function linkedChildrenOf(history, revisionId) {
   return [...history.revisions.values()]
     .filter(({ parents }) => parents.includes(revisionId))
     .sort((left, right) => left.id - right.id);
@@ -52,12 +62,7 @@ export async function reconstructRevision(history, revisionId, cache = new Map()
   visiting.add(revisionId);
   let story;
   if (revision.payloadType === 'checkpoint') {
-    if (revision.parents.length > 1) {
-      throw new HistoryError(`Checkpoint revision ${revisionId} has too many parents.`, {
-        code: 'INVALID_PARENT_COUNT', revisionId,
-      });
-    }
-    if (revision.parents.length === 1) {
+    if (revision.parents.length >= 1) {
       const parentStory = await reconstructRevision(history, revision.parents[0], cache, visiting);
       if (await hashStory(parentStory) !== revision.baseHash) {
         throw new HistoryError(`Base hash mismatch for checkpoint ${revisionId}.`, {
@@ -67,8 +72,8 @@ export async function reconstructRevision(history, revisionId, cache = new Map()
     }
     story = revision.payload;
   } else {
-    if (revision.parents.length !== 1) {
-      throw new HistoryError(`Patch revision ${revisionId} must have exactly one parent.`, {
+    if (revision.parents.length < 1) {
+      throw new HistoryError(`Patch revision ${revisionId} must have a primary parent.`, {
         code: 'INVALID_PARENT_COUNT', revisionId,
       });
     }
@@ -109,7 +114,7 @@ export async function commitRevision(history, baseStory, resultStory, options = 
   const checkpoint = options.checkpoint ?? (id % history.checkpointInterval === 0);
   const revision = {
     id,
-    parents: [parentId],
+    parents: [parentId, ...new Set((options.secondaryParents ?? []).filter((id) => id !== parentId && history.revisions.has(id)))],
     origin: options.origin ?? 'user',
     timestamp: options.timestamp ?? new Date().toISOString(),
     baseHash: await hashStory(before),

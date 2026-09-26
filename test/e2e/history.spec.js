@@ -1,7 +1,7 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import path from 'node:path';
 
-test('transient undo and branch-aware persistent Redo use one STORY graph', async () => {
+test('header Undo and branch-aware Redo walk one STORY graph', async () => {
   const application = await electron.launch({
     args: [path.resolve('.')],
     env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
@@ -15,9 +15,6 @@ test('transient undo and branch-aware persistent Redo use one STORY graph', asyn
       const { model } = window.__noirDraftTest;
       model.replace(model.text.length, model.text.length, '\nFirst branch.');
     });
-    await window.getByRole('button', { name: 'Undo', exact: true }).click();
-    await expect.poll(() => window.evaluate(() => window.__noirDraftTest.model.text)).toBe(original);
-
     await window.evaluate(async () => {
       const { model, getCommitController } = window.__noirDraftTest;
       model.replace(model.text.length, model.text.length, '\nFirst branch.');

@@ -1,7 +1,7 @@
 import { childrenOf, commitRevision, reconstructRevision } from './graph.js';
 import { normalizeVisibleRootText } from '../project/projection.js';
 
-const ignoredOrigins = new Set(['open', 'checkout', 'agent', 'local-undo', 'local-redo', 'history', 'scrub-preview']);
+const ignoredOrigins = new Set(['open', 'checkout', 'agent', 'history', 'normalize', 'scrub-preview']);
 
 export class CommitController {
   #idleHandle = null;
@@ -17,6 +17,7 @@ export class CommitController {
     onChange = () => {},
     onCommit = () => {},
     beforeCommit = () => {},
+    secondaryParents = () => [],
   }) {
     this.history = history;
     this.model = model;
@@ -27,10 +28,9 @@ export class CommitController {
     this.onChange = onChange;
     this.onCommit = onCommit;
     this.beforeCommit = beforeCommit;
+    this.secondaryParents = secondaryParents;
     this.pending = false;
     this.pendingBase = null;
-    this.undoOperations = [];
-    this.redoOperations = [];
     this.commitInFlight = Promise.resolve(null);
     this.#unsubscribe = model.subscribe((snapshot, change) => this.#modelChanged(snapshot, change));
   }
@@ -46,14 +46,6 @@ export class CommitController {
       this.pending = true;
       this.pendingBase = change.previousText;
     }
-    this.undoOperations.push({
-      from: change.from,
-      removed: change.removed,
-      inserted: change.inserted,
-      beforeSelection: change.previousSelection,
-      afterSelection: [snapshot.selectionStart, snapshot.selectionEnd],
-    });
-    this.redoOperations = [];
     this.#scheduleIdle();
     this.onChange(this.history);
     if (Math.max(change.removed.length, change.inserted.length) >= this.structuralThreshold) {
@@ -89,7 +81,7 @@ export class CommitController {
     const inserted = result.slice(prefix, result.length - suffix);
     const delta = result.length - text.length;
     const map = (offset) => (offset <= prefix ? offset : offset >= oldEnd ? offset + delta : Math.min(prefix + inserted.length, offset));
-    this.model.replace(prefix, oldEnd, inserted, { origin: 'history', selectionStart: map(this.model.selectionStart), selectionEnd: map(this.model.selectionEnd) });
+    this.model.replace(prefix, oldEnd, inserted, { origin: 'normalize', selectionStart: map(this.model.selectionStart), selectionEnd: map(this.model.selectionEnd) });
   }
 
   async commitPending({ origin = 'user', note = null } = {}) {
@@ -108,10 +100,9 @@ export class CommitController {
     this.#applyNormalized(result);
     this.pending = false;
     this.pendingBase = null;
-    this.undoOperations = [];
-    this.redoOperations = [];
+    const secondary = base === result ? [] : this.secondaryParents(base, result);
     const commit = this.commitInFlight
-      .then(() => commitRevision(this.history, base, result, { origin, note }))
+      .then(() => commitRevision(this.history, base, result, { origin, note, secondaryParents: secondary }))
       .then((revision) => {
         if (revision) this.onChange(this.history);
         return revision;
@@ -144,8 +135,6 @@ export class CommitController {
     });
     this.onChange(this.history);
     await this.onCommit(revision, this.history);
-    this.undoOperations = [];
-    this.redoOperations = [];
     return revision;
   }
 
@@ -157,45 +146,16 @@ export class CommitController {
     return this.commitPending({ origin: 'user' });
   }
 
-  undoLocal() {
-    const operation = this.undoOperations.pop();
-    if (!operation) return false;
-    this.model.replace(operation.from, operation.from + operation.inserted.length, operation.removed, {
-      selectionStart: operation.beforeSelection[0],
-      selectionEnd: operation.beforeSelection[1],
-      origin: 'local-undo',
-    });
-    this.redoOperations.push(operation);
-    this.onChange(this.history);
-    return true;
-  }
-
-  redoLocal() {
-    const operation = this.redoOperations.pop();
-    if (!operation) return false;
-    this.model.replace(operation.from, operation.from + operation.removed.length, operation.inserted, {
-      selectionStart: operation.afterSelection[0],
-      selectionEnd: operation.afterSelection[1],
-      origin: 'local-redo',
-    });
-    this.undoOperations.push(operation);
-    this.onChange(this.history);
-    return true;
-  }
-
   async checkout(revisionId) {
     await this.commitPending();
     const story = await reconstructRevision(this.history, revisionId);
     this.history.currentRevision = revisionId;
     this.model.replace(0, this.model.text.length, story, { origin: 'checkout' });
-    this.undoOperations = [];
-    this.redoOperations = [];
     this.onChange(this.history);
     return story;
   }
 
   async undo() {
-    if (this.undoLocal()) return { type: 'local' };
     await this.commitPending();
     const current = this.history.revisions.get(this.history.currentRevision);
     if (!current || current.parents.length === 0) return { type: 'none' };
@@ -205,7 +165,6 @@ export class CommitController {
   }
 
   async redo(revisionId = null) {
-    if (this.redoLocal()) return { type: 'local' };
     await this.commitPending();
     const children = childrenOf(this.history, this.history.currentRevision);
     if (children.length === 0) return { type: 'none' };

@@ -74,19 +74,27 @@ test('commitPending waits for an already in-flight commit instead of returning p
   assert.equal(await reconstructRevision(history, history.currentRevision), model.text);
 });
 
-test('local undo/redo operates before durable graph traversal', async () => {
+test('undo and redo walk the durable graph and commit pending edits first', async () => {
   const { history, model, controller } = await setup();
   model.replace(4, 4, ' one');
   model.replace(8, 8, ' two');
-  assert.deepEqual(await controller.undo(), { type: 'local' });
-  assert.equal(model.text, 'base one');
-  assert.deepEqual(await controller.redo(), { type: 'local' });
-  assert.equal(model.text, 'base one two');
-  await controller.explicitSave();
   const result = await controller.undo();
   assert.deepEqual(result, { type: 'history', revisionId: 0 });
   assert.equal(model.text, 'base\n');
   assert.equal(history.currentRevision, 0);
+  assert.deepEqual(await controller.redo(), { type: 'history', revisionId: 1 });
+  assert.equal(model.text, 'base one two\n');
+});
+
+test('edits made through a local undo are still committed', async () => {
+  const { history, model, controller } = await setup();
+  model.replace(4, 4, ' one');
+  await controller.explicitSave();
+  model.replace(8, 8, ' two', { origin: 'edit-context' });
+  await controller.explicitSave();
+  model.replace(8, 12, '', { origin: 'local-undo' });
+  await controller.explicitSave();
+  assert.equal(await reconstructRevision(history, history.currentRevision), 'base one\n');
 });
 
 test('user→agent and agent→user transitions create distinct ordered revisions', async () => {

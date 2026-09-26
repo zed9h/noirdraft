@@ -9,7 +9,7 @@ NoirDraft is a local-first desktop editor for fiction. A project is one ordinary
 3. Switch the left sidebar to METADATA for characters, world notes, and other reference material. Pin useful headings for AI context.
 4. Save regularly. NoirDraft stores all four views in the same Markdown file and makes timestamped backups before replacing an existing file.
 
-Undo/Redo handles recent local edits first; saved editing intervals appear as a branching graph in **Versions**. Select a STORY passage to inspect its history, compare revisions, or open a composite workbench. Agent rewrites are proposals until you explicitly apply or check them out.
+Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z) undo and redo your own edits in the focused editor and never change revision. The header Undo/Redo buttons move to the parent/child revision instead (like Ctrl+Alt+←/→). Saved editing intervals appear as a branching graph in **Versions**. Select a STORY passage to inspect its history, compare revisions, or open a composite workbench. Agent rewrites are proposals until you explicitly apply or check them out.
 
 ### Optional KoboldCpp
 
