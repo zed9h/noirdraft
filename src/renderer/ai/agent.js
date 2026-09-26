@@ -1,5 +1,5 @@
 import { composeContext, sliceContextRows } from './context.js';
-import { classifyPlacement, renderInline } from './placement.js';
+import { INLINE_WORD_LIMIT, classifyPlacement, renderInline } from './placement.js';
 import { KoboldError } from './kobold.js';
 import { applyOperations, createNotebook, resetNotebook, isEmptyNotebook, markReviewed, notebookText, placeholderIds, renderReview, stateOf, wordCount, OPERATIONS } from './notebook.js';
 import { commitRevision, reconstructRevision } from '../history/graph.js';
@@ -30,7 +30,7 @@ const tool = (name, description, parameters) => ({ type: 'function', function: {
 
 const COMMENT = tool('comment_before_changes', 'Say something to the author before the work starts: what you intend to do, a promise, an introduction to the work ahead, or an early warning about the hard parts or quality risks you expect. Optional, and only before changes begin. It is never your final answer: after the work, finish with send_response.', object({ message: text }, ['message']));
 const RESPONSE = tool('send_response', 'Send your message to the author and end the turn. This is how you answer: questions about the text, craft and style, research on any setting, culture, period or subject, brainstorming, or plain conversation, in as much substance as it deserves. After changes, use it to explain what was done and why it satisfies the request, with any limits or trade-offs. It may also be your first and only call when no edit is needed: to answer a question about the story or its text, to help with research or understanding, to ask about a doubt in the request, to simply chat, or to explain why the request will not be done. NoirDraft saves ready work before sending it.', object({ message: text }, ['message']));
-const SHORT_TOOLS = [
+const INLINE_TOOLS = [
   tool('propose_edits', 'Propose a batch of fresh sibling alternatives for the selection or cursor. On the first call, intent and alternative_count establish the fixed Objective; on later calls they are the next pending batch plan. Its result shows every alternative inside its surrounding text, to review.', object({ intent: { ...text, description: 'What this batch aims for, in plain prose. The author reads it as progress; never name tools or protocol steps.' }, alternative_count: { type: 'integer', minimum: 1 }, proposals: { type: 'array', minItems: 1, items: proposal } }, ['intent', 'alternative_count', 'proposals'])),
   tool('review_edits', 'First diagnose the whole displayed set, then copyedit every alternative in its context. Approval requires sentence integrity, mechanics, clarity, and style all true; approved alternatives are recorded, retracted ones discarded.', object({ set_overview: { ...text, description: 'A brief diagnosis of the set as a whole: its strongest quality and concrete problems to correct.' }, reviews: { type: 'array', items: assessment } }, ['set_overview', 'reviews'])),
 ];
@@ -42,7 +42,7 @@ const BLOCK_TOOLS = [
   tool('clear_notebook', 'Wipe a notebook to start it over. Any revisions it saved are retracted, and its next save starts a new alternative.', object({ notebook: notebookId, restart: { type: 'string', enum: ['blank', 'selection'], description: 'blank (default): empty. selection: back to the originally selected text.' } }, ['notebook'])),
   tool('finish_changes', 'Close the drafting phase. NoirDraft saves notebooks that are ready, and answers with a summary of what was delivered and a reminder of what to tell the author. It takes no parameters.', object()),
 ];
-export const agentTools = (mode) => [COMMENT, ...(mode === 'short' ? SHORT_TOOLS : BLOCK_TOOLS), RESPONSE];
+export const agentTools = (mode) => [COMMENT, ...(mode === 'inline' ? INLINE_TOOLS : BLOCK_TOOLS), RESPONSE];
 
 const EDITORIAL = 'Copyedit every alternative in its complete surrounding passage: first sentence integrity (no duplicated, missing, or stranded words); then mechanics (spelling, grammar, punctuation, capitalization, spacing, and line breaks); then clarity and coherence; then diction, rhythm, concision, tone, and consistency with the manuscript. Retract any alternative that fails a pass.';
 
@@ -67,15 +67,16 @@ function retainBreak(value, target) { const ending = String(target).match(/(?:\r
 function word(value) { return /[\p{L}\p{N}]/u.test(value); }
 function inserted(value, before, after) { let result = String(value); if (word(before) && word(result[0] ?? '')) result = ` ${result}`; if (word(result.at(-1) ?? '') && word(after)) result = `${result} `; return result; }
 
-export async function requestRewrite({ client, history, baseRevisionId, range, mode: forcedMode, root = 'STORY', contextStoryText, request, metadataText = '', pins = [], references = [], chatHistory = [], contextRows = 12, agentProtocol, generationOptions = {}, onProgress, signal }) {
+export async function requestRewrite({ client, history, baseRevisionId, range, mode: forcedMode, inlineWordLimit = INLINE_WORD_LIMIT, root = 'STORY', contextStoryText, request, metadataText = '', pins = [], references = [], chatHistory = [], contextRows = 12, agentProtocol, generationOptions = {}, onProgress, signal }) {
   const base = await reconstructRevision(history, baseRevisionId);
   const [from, to] = range;
   if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to < from || to > base.length) throw new AgentError('The selected range is invalid for its base revision.', { code: 'INVALID_RANGE' });
   const context = sliceContextRows(base, from, to, contextRows);
-  const mode = forcedMode ?? classifyPlacement(base, from, to);
-  const tools = agentTools(mode);
-  const allowed = new Set(tools.map((item) => item.function.name));
-  const composed = composeContext({ mode, storyText: contextStoryText ?? (root === 'STORY' ? base : ''), metadataText, pins, references, before: context.before, target: context.target, after: context.after, request, agentProtocol, chatHistory });
+  let mode = forcedMode ?? classifyPlacement(base, from, to);
+  let tools = agentTools(mode);
+  let allowed = new Set(tools.map((item) => item.function.name));
+  const composeMode = mode;
+  const composed = composeContext({ mode: composeMode, storyText: contextStoryText ?? (root === 'STORY' ? base : ''), metadataText, pins, references, before: context.before, target: context.target, after: context.after, request, agentProtocol, chatHistory });
   const prompt = `${composed.staticPrompt}\n\n${composed.turnPrompt}`;
   const transcript = [{ role: 'system', content: composed.staticPrompt }, { role: 'user', content: composed.turnPrompt }];
   const trace = [];
@@ -95,13 +96,13 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
   await getResponse();
 
   let grandIntent = null; let complete = false; let closed = false; let finishWarned = false; let deadline = null;
-  let objective = null; let batchIntent = null; let batchNumber = 0; let reviewVisible = false;
+  let objective = null; let lastOverview = ''; let batchIntent = null; let batchNumber = 0; let reviewVisible = false;
   const pending = []; const approved = []; const replacements = new Map(); const issues = [];
   const firstMessage = () => segments.find((segment) => segment.say != null)?.say ?? null;
   let notebooks = []; let activeId = null; let roundLimit = CHAT_ROUND_LIMIT;
   const segments = [];
   const texts = new Map(); const cached = new Map([[baseRevisionId, base]]); const snapshots = [];
-  const heads = () => mode === 'short' ? approved.filter((revision) => history.revisions.get(revision.id) === revision) : notebooks.filter((notebook) => notebook.submissions.length && !isEmptyNotebook(notebook)).map((notebook) => history.revisions.get(notebook.submissions.at(-1))).filter(Boolean);
+  const heads = () => mode === 'inline' ? approved.filter((revision) => history.revisions.get(revision.id) === revision) : notebooks.filter((notebook) => notebook.submissions.length && !isEmptyNotebook(notebook)).map((notebook) => history.revisions.get(notebook.submissions.at(-1))).filter(Boolean);
   const link = (revision) => `[#${revision.id}](noirdraft://version/${root}/${revision.id})`;
   // The reply is paragraphs: each message alone, and all change links together.
   const finalChat = () => {
@@ -115,7 +116,14 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
     return paragraphs.join('\n\n');
   };
   const progressLine = () => {
-    if (mode === 'short') return objective ? `Alternatives: ${approved.length} approved of ${objective.alternativeCount} planned${pending.length ? `, ${pending.length} under review` : ''}` : '';
+    if (mode === 'inline') {
+      if (!objective) return '';
+      const states = [...approved.map(() => '✓'), ...pending.map(() => '…')];
+      while (states.length < objective.alternativeCount) states.push('–');
+      const width = String(states.length).length;
+      const rows = states.map((state, index) => `Alternative ${String(index + 1).padStart(width)} ${state}`);
+      return `${rows.join('\n')}${lastOverview ? `\n> ${lastOverview.replace(/\n+/g, '\n> ')}` : ''}`;
+    }
     const status = (notebook) => isEmptyNotebook(notebook) ? '–' : notebook.submissions.length && notebookText(notebook) === notebook.submittedText ? '✓' : '…';
     const delivered = notebooks.map((notebook) => String(wordCount(notebookText(notebook))));
     const planned = notebooks.map((notebook) => String(notebook.targetWords));
@@ -243,7 +251,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
     return null;
   };
   const discard = (revision) => { for (const list of [pending, approved]) { const index = list.indexOf(revision); if (index >= 0) list.splice(index, 1); } remove(revision.id); };
-  const shortSettle = () => {
+  const inlineSettle = () => {
     if (!reviewVisible && !pending.length) return null;
     if (!finishWarned) { finishWarned = true; return ['NOIRDRAFT RESPONSE NOT SENT YET', 'The displayed alternatives have not been reviewed. Call review_edits, or call send_response again to discard them and end the turn.'].join('\n'); }
     for (const revision of [...pending]) discard(revision);
@@ -304,6 +312,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
       if (review.verdict === 'approve' && !Object.values(checklist).every(Boolean)) return reject('Approve only when every copyedit check is true; otherwise retract the revision.');
     }
     issues.push(`review overview: ${setOverview.trim()}`);
+    lastOverview = setOverview.trim();
     for (const revision of candidates) {
       pending.splice(pending.indexOf(revision), 1);
       if (byId.get(revision.id).verdict === 'retract') { issues.push(`#${revision.id} retracted: ${byId.get(revision.id).comment.trim()}`); remove(revision.id); }
@@ -320,11 +329,11 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
       if (typeof args.message !== 'string' || !args.message.trim()) return reject('comment_before_changes requires a nonempty message.');
       if (notebooks.length || batchNumber) return reject('Changes have already started. Use send_response after the work to explain what was done.');
       segments.push({ say: args.message.trim() });
-      return accept(['NOIRDRAFT COMMENT ADDED', 'Your comment was added to the reply. Now start the work, or, if no edit is needed, answer with send_response.', mode === 'short' ? 'Start with propose_edits.' : 'Start with initialize_changes.'].join('\n'));
+      return accept(['NOIRDRAFT COMMENT ADDED', 'Your comment was added to the reply. Now start the work, or, if no edit is needed, answer with send_response.', mode === 'inline' ? 'Start with propose_edits.' : 'Start with initialize_changes.'].join('\n'));
     }
     if (name === 'send_response') {
       if (typeof args.message !== 'string' || !args.message.trim()) return reject('send_response requires a nonempty message.');
-      const bounce = mode === 'short' ? shortSettle() : await blockSettle();
+      const bounce = mode === 'inline' ? inlineSettle() : await blockSettle();
       if (bounce) return accept(bounce);
       segments.push({ say: args.message.trim() });
       complete = true; return accept(receipt('finished'));
@@ -351,6 +360,10 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
       if (bad >= 0) return reject(`Notebook ${bad + 1} needs an intent and a positive target_words; start, if given, is selection or blank.`);
       const leak = leaked(args.intent, 'Your overall intent') ?? specs.map((spec, index) => leaked(spec.intent, `Notebook ${index + 1}'s intent`)).find(Boolean);
       if (leak) return reject(leak);
+      if (specs.every((spec) => spec.target_words < inlineWordLimit)) {
+        mode = 'inline'; tools = agentTools(mode); allowed = new Set(tools.map((item) => item.function.name));
+        return accept(['NOIRDRAFT SWITCHED TO INLINE ALTERNATIVES', `The text you plan is small (under ${inlineWordLimit} words each), so notebooks are not needed. NoirDraft has switched this request to inline alternatives, and no notebook was opened.`, `Now call propose_edits with your intent and alternative_count ${specs.length}, giving the complete text of each alternative.`].join('\n'));
+      }
       grandIntent = args.intent.trim();
       notebooks = specs.map((spec, index) => createNotebook({ id: index + 1, intent: spec.intent.trim(), targetWords: spec.target_words, seed: (spec.start ?? (context.target ? 'selection' : 'blank')) === 'selection' ? context.target : '' }));
       activeId = 1;

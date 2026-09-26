@@ -18,7 +18,7 @@ test('a chat-only turn is one send_response', async () => {
     this.calls += 1;
     return this.calls === 1 ? response([call('send_response', { message: 'Hello.' }, 'say')], 'say') : (() => { throw new Error('turn should have ended'); })();
   } };
-  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 0], request: 'hi', agentProtocol: protocol });
+  const result = await requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [0, 0], request: 'hi', agentProtocol: protocol });
   assert.equal(result.chat, 'Hello.');
   assert.equal(client.calls, 1);
 });
@@ -30,7 +30,7 @@ const finishing = [call('finish_changes', {}, 'finish'), ...closing];
 test('initialize_changes shows the review with intents, read-only context, and numbered paragraphs', async () => {
   const history = await createHistory('Before. Original. After.');
   const client = script([open([{ intent: 'Sharper.', target_words: 20, start: 'selection' }]), edit([{ op: 'replace', paragraph_id: 1, text: 'Sharp.' }]), reviewCall(), submit(), ...finishing]);
-  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [8, 17], mode: 'block', request: 'Sharpen it.', agentProtocol: protocol });
+  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [8, 17], mode: 'block', inlineWordLimit: 0, request: 'Sharpen it.', agentProtocol: protocol });
   const form = client.seen[1];
   assert.match(form, /NOIRDRAFT NOTEBOOK REVIEW/);
   assert.match(form, /Overall intent: Rewrite the passage\./);
@@ -50,7 +50,7 @@ test('alternatives are siblings of the base and a resubmission chains onto its n
     edit([{ op: 'insert_after', paragraph_id: 2, text: 'First, extended.' }], 1, 'e3'), reviewCall('Submit A again.', { notebook: 1 }, 'r3'), submit(1, 's3'),
     ...finishing,
   ]);
-  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 9], request: 'Two takes.', agentProtocol: protocol });
+  const result = await requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [0, 9], request: 'Two takes.', agentProtocol: protocol });
   assert.deepEqual(history.revisions.get(1).parents, [0]);
   assert.deepEqual(history.revisions.get(2).parents, [0]);
   assert.deepEqual(history.revisions.get(3).parents, [1]);
@@ -72,7 +72,7 @@ test('editing twice without a review, or submitting with placeholders, is reject
   ]);
   const corrections = [];
   const wrapped = { async chatCompletion(request) { corrections.push(request.messages.filter((m) => m.content?.includes?.('manager_correction')).map((m) => m.content).join('')); return client.chatCompletion(request); } };
-  await requestRewrite({ client: wrapped, history, baseRevisionId: 0, range: [0, 9], request: 'Write a scene.', agentProtocol: protocol });
+  await requestRewrite({ mode: 'block', inlineWordLimit: 0, client: wrapped, history, baseRevisionId: 0, range: [0, 9], request: 'Write a scene.', agentProtocol: protocol });
   assert.match(corrections.join('\n'), /unreviewed edits/);
   assert.match(corrections.join('\n'), /Placeholder paragraphs remain: ¶2/);
   assert.equal(await reconstructRevision(history, 1), 'The scene, written out.\n');
@@ -81,7 +81,7 @@ test('editing twice without a review, or submitting with placeholders, is reject
 test('a batch error lists every problem and suggests smaller edits', async () => {
   const history = await createHistory('Original.');
   const client = script([open([{ intent: 'A.', target_words: 1, start: 'blank' }]), edit([{ op: 'delete', paragraph_id: 42 }, { op: 'insert_after', paragraph_id: 1, text: '' }]), edit([{ op: 'replace', paragraph_id: 1, text: 'Fine.' }], undefined, 'ok'), reviewCall(), submit(), ...finishing]);
-  await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
+  await requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
   assert.match(client.seen[2], /NOIRDRAFT EDIT ERRORS/);
   assert.match(client.seen[2], /paragraph 42 is not in this notebook/);
   assert.match(client.seen[2], /smaller edits/);
@@ -92,7 +92,7 @@ test('an unchanged notebook gets a puzzled response asking about intent and id',
   const client = script([open([{ intent: 'A.', target_words: 1, start: 'selection' }, { intent: 'B.', target_words: 1, start: 'blank' }]), edit([{ op: 'insert_after', paragraph_id: 1, text: 'Extra.' }], 2, 'wrong'), edit([{ op: 'replace', paragraph_id: 1, text: 'Changed.' }], 2, 'e'), reviewCall('Go.', { notebook: 2 }), submit(1, 'unchanged'), submit(2, 'good'), ...finishing]);
   const corrections = [];
   const wrapped = { async chatCompletion(request) { corrections.push(request.messages.filter((m) => m.content?.includes?.('manager_correction')).map((m) => m.content).join('')); return client.chatCompletion(request); } };
-  await requestRewrite({ client: wrapped, history, baseRevisionId: 0, range: [0, 9], request: 'Two.', agentProtocol: protocol });
+  await requestRewrite({ mode: 'block', inlineWordLimit: 0, client: wrapped, history, baseRevisionId: 0, range: [0, 9], request: 'Two.', agentProtocol: protocol });
   assert.match(corrections.join('\n'), /What did you intend\? You may have edited a different notebook/);
 });
 
@@ -104,7 +104,7 @@ test('finish warns once about blocked work, then leaves it out', async () => {
     edit([{ op: 'replace', paragraph_id: 1, text: 'Loose.' }], 2, 'e2'),
     call('finish_changes', {}, 'f1'), call('finish_changes', {}, 'f2'), ...closing,
   ]);
-  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 9], request: 'Two.', agentProtocol: protocol });
+  const result = await requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [0, 9], request: 'Two.', agentProtocol: protocol });
   assert.match(client.seen.join('\n'), /NOIRDRAFT NOT READY TO FINISH/);
   assert.match(client.seen.join('\n'), /Notebook 2 — Loose\.[\s\S]*not achieved: not delivered/);
   assert.equal(history.revisions.has(2), false);
@@ -118,7 +118,7 @@ test('the hard review ceiling wraps up: clean reviewed notebooks are submitted, 
   for (let round = 0; round < 20; round += 1) steps.push(reviewCall('Keep polishing.', {}, `r${round}`), edit([{ op: 'replace', paragraph_id: id + 1, text: `Version ${round}.` }], undefined, `e${round}`), (id += 1, null));
   const filtered = steps.filter(Boolean);
   const client = script([...filtered, ...closing]);
-  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
+  const result = await requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
   assert.match(client.seen.join('\n'), /review deadline was reached/);
   assert.ok(result.revision);
 });
@@ -133,7 +133,7 @@ test('emptying a submitted notebook retracts its branch and a rewrite starts a f
     reviewCall('Rewrite.', { notebook: 1 }, 'r2'),
     edit([{ op: 'replace', paragraph_id: 3, text: 'Fresh start.' }], 1, 'e3'), reviewCall('Submit.', { notebook: 1 }, 'r3'), submit(1, 's2'), ...finishing,
   ]);
-  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol, onProgress: ({ intent }) => progress.push(intent?.progress) });
+  const result = await requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol, onProgress: ({ intent }) => progress.push(intent?.progress) });
   assert.match(client.seen.join('\n'), /saved revisions were retracted/);
   assert.equal(history.revisions.has(1), false);
   assert.deepEqual(history.revisions.get(2).parents, [0]);
@@ -144,7 +144,7 @@ test('emptying a submitted notebook retracts its branch and a rewrite starts a f
 test('finish submits ready notebooks the model forgot to submit', async () => {
   const history = await createHistory('Original.');
   const client = script([open([{ intent: 'A.', target_words: 1, start: 'blank' }]), edit([{ op: 'replace', paragraph_id: 1, text: 'Ready.' }]), reviewCall('Done.'), ...finishing]);
-  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
+  const result = await requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
   assert.equal(await reconstructRevision(history, 1), 'Ready.\n');
   assert.match(result.chat, /^\[#1\].*Done\.$/s);
 });
@@ -157,7 +157,7 @@ test('chat and change links appear in the order they happen', async () => {
     edit([{ op: 'replace', paragraph_id: 1, text: 'Made.' }]), reviewCall(), submit(),
     call('send_response', { message: 'Here it is.' }, 'after'),
   ]);
-  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
+  const result = await requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
   assert.equal(result.chat, 'I will try.\n\n[#1](noirdraft://version/STORY/1)\n\nHere it is.');
   assert.match(client.seen.filter((text) => /COMMENT ADDED/.test(text)).at(-1), /Start with initialize_changes/);
 });
@@ -165,7 +165,7 @@ test('chat and change links appear in the order they happen', async () => {
 test('a send_response submits ready notebooks first, so their link precedes the message', async () => {
   const history = await createHistory('Original.');
   const client = script([open([{ intent: 'A.', target_words: 1, start: 'blank' }]), edit([{ op: 'replace', paragraph_id: 1, text: 'Made.' }]), reviewCall(), call('send_response', { message: 'Done it.' }, 'end')]);
-  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
+  const result = await requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
   assert.equal(await reconstructRevision(history, 1), 'Made.\n');
   assert.equal(result.chat, '[#1](noirdraft://version/STORY/1)\n\nDone it.');
 });
@@ -173,7 +173,7 @@ test('a send_response submits ready notebooks first, so their link precedes the 
 test('a send_response with a blocked notebook bounces once without sending, then leaves it out', async () => {
   const history = await createHistory('Original.');
   const client = script([open([{ intent: 'A.', target_words: 1, start: 'blank' }]), edit([{ op: 'replace', paragraph_id: 1, text: '[Outline.]' }]), reviewCall(), call('send_response', { message: 'First try.' }, 'end1'), call('send_response', { message: 'Second try.' }, 'end2')]);
-  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
+  const result = await requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
   assert.match(client.seen.join('\n'), /RESPONSE NOT SENT YET/);
   assert.match(client.seen.join('\n'), /Placeholder paragraphs remain: ¶2/);
   assert.equal(result.chat, 'Second try.');
@@ -186,7 +186,7 @@ test('finish_changes cannot repeat, and send_response ends the turn afterwards',
     open([{ intent: 'A.', target_words: 1, start: 'blank' }]), edit([{ op: 'replace', paragraph_id: 1, text: 'Ready.' }]), reviewCall(),
     call('finish_changes', {}, 'f1'), call('finish_changes', {}, 'f2'), ...closing,
   ]);
-  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
+  const result = await requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
   assert.equal(await reconstructRevision(history, 1), 'Ready.\n');
   assert.match(client.seen.join('\n'), /already finished/);
   assert.match(client.seen.join('\n'), /Now use send_response/);
@@ -202,7 +202,7 @@ test('clear_notebook retracts the branch and can restart from the selection or b
     edit([{ op: 'replace', paragraph_id: 3, text: 'Second try.' }], 1, 'e2'), reviewCall('Go.', { notebook: 1 }, 'r2'), submit(1, 's2'),
     call('clear_notebook', { notebook: 1 }, 'blank'), ...finishing.slice(0, 1), call('send_response', { message: 'Nothing kept.' }, 'say'),
   ]);
-  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
+  const result = await requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
   assert.match(client.seen.join('\n'), /back to the selected text\. Its saved revisions were retracted/);
   assert.match(client.seen.join('\n'), /\[¶3\]\nOriginal\./);
   assert.equal(history.revisions.has(1), false);
@@ -220,7 +220,7 @@ test('a single notebook closes on submit and returns the journey summary', async
     edit([{ op: 'replace', paragraph_id: 2, text: 'Tight, then some.' }], undefined, 'e2'), reviewCall('Ready.', {}, 'r2'), submit(),
     call('send_response', { message: 'Tightened it.' }, 'end'),
   ]);
-  const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 9], request: 'Tighten.', agentProtocol: protocol });
+  const result = await requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [0, 9], request: 'Tighten.', agentProtocol: protocol });
   const summary = client.seen.at(-1);
   assert.match(summary, /closed the drafting/);
   assert.match(summary, /Your first message to the author: "Let me tighten this\."/);
@@ -251,14 +251,15 @@ test('a selection inside a paragraph gets the short toolset and shows alternativ
 });
 
 test('a whole-paragraph selection gets the notebook toolset', async () => {
-  const history = await createHistory('Original.');
+  const original = `${'Word '.repeat(40).trim()}.`;
+  const history = await createHistory(original);
   const seenTools = [];
   const client = { async chatCompletion(request) { seenTools.push(request.tools.map((item) => item.function.name)); return response([call('send_response', { message: 'Hi.' }, 'r')]); } };
-  await requestRewrite({ client, history, baseRevisionId: 0, range: [0, 9], request: 'hi', agentProtocol: protocol });
+  await requestRewrite({ client, history, baseRevisionId: 0, range: [0, original.length], request: 'hi', agentProtocol: protocol });
   assert.deepEqual(seenTools[0], ['comment_before_changes', 'initialize_changes', 'edit_notebook', 'review_notebook', 'save_notebook', 'clear_notebook', 'finish_changes', 'send_response']);
 });
 
-test('short mode: retracted alternatives are removed, a fresh batch continues, and links keep their order', async () => {
+test('inline mode: retracted alternatives are removed, a fresh batch continues, and links keep their order', async () => {
   const story = 'A quiet street.';
   const history = await createHistory(story);
   const client = script([
@@ -273,7 +274,7 @@ test('short mode: retracted alternatives are removed, a fresh batch continues, a
   assert.equal(result.chat, 'Trying a few.\n\n[#2](noirdraft://version/STORY/2) [#3](noirdraft://version/STORY/3)\n\nKept two.');
 });
 
-test('short mode: proposals identical to the base or each other are rejected with every error listed', async () => {
+test('inline mode: proposals identical to the base or each other are rejected with every error listed', async () => {
   const story = 'A quiet street.';
   const history = await createHistory(story);
   const client = script([propose(['quiet', 'loud', 'loud', ' ']), propose(['loud'], 'Fixed.', 1, 'p2'), reviewEdits([editReview(1)]), call('send_response', { message: 'Done.' }, 'end')]);
@@ -285,7 +286,7 @@ test('short mode: proposals identical to the base or each other are rejected wit
   assert.match(first, /Proposal 4 has no text/);
 });
 
-test('short mode: send_response with unreviewed alternatives bounces once, then discards them', async () => {
+test('inline mode: send_response with unreviewed alternatives bounces once, then discards them', async () => {
   const story = 'A quiet street.';
   const history = await createHistory(story);
   const client = script([propose(['loud']), call('send_response', { message: 'One.' }, 'e1'), call('send_response', { message: 'Two.' }, 'e2')]);
@@ -317,7 +318,7 @@ test('an intent that names an internal tool is rejected with a plain-prose examp
     submit(), ...closing,
   ]);
   const wrapped = { async chatCompletion(request) { corrections.push(request.messages.filter((m) => m.content?.includes?.('manager_correction')).map((m) => m.content).join('')); return client.chatCompletion(request); } };
-  const result = await requestRewrite({ client: wrapped, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
+  const result = await requestRewrite({ mode: 'block', inlineWordLimit: 0, client: wrapped, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
   assert.match(corrections.join('\n'), /Your next_intent names an internal tool \(save_notebook\)/);
   assert.match(corrections.join('\n'), /in plain prose/);
   assert.match(result.chat, /#1/);
@@ -326,9 +327,9 @@ test('an intent that names an internal tool is rejected with a plain-prose examp
 test('a long next_intent is bounced toward a short working note', async () => {
   const history = await createHistory('Original.');
   const corrections = [];
-  const client = script([open([{ intent: 'A.', target_words: 1, start: 'blank' }]), edit([{ op: 'replace', paragraph_id: 1, text: 'Made.' }]), reviewCall('x'.repeat(250), {}, 'long'), reviewCall('Ready to deliver.', {}, 'short'), submit(), ...closing]);
+  const client = script([open([{ intent: 'A.', target_words: 1, start: 'blank' }]), edit([{ op: 'replace', paragraph_id: 1, text: 'Made.' }]), reviewCall('x'.repeat(250), {}, 'long'), reviewCall('Ready to deliver.', {}, 'inline'), submit(), ...closing]);
   const wrapped = { async chatCompletion(request) { corrections.push(request.messages.filter((m) => m.content?.includes?.('manager_correction')).map((m) => m.content).join('')); return client.chatCompletion(request); } };
-  await requestRewrite({ client: wrapped, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
+  await requestRewrite({ mode: 'block', inlineWordLimit: 0, client: wrapped, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
   assert.match(corrections.join('\n'), /Keep next_intent to one short line/);
 });
 
@@ -336,7 +337,7 @@ test('a cursor on the empty last row inserts on that row, and the range is not l
   const history = await createHistory('Line one.\n');
   assert.equal(await reconstructRevision(history, 0), 'Line one.\n');
   const client = script([open([{ intent: 'Continue.', target_words: 1, start: 'blank' }]), edit([{ op: 'replace', paragraph_id: 1, text: 'Line two.' }]), reviewCall(), submit(), ...closing]);
-  await requestRewrite({ client, history, baseRevisionId: 0, range: [10, 10], request: 'Continue.', agentProtocol: protocol });
+  await requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [10, 10], request: 'Continue.', agentProtocol: protocol });
   assert.equal(await reconstructRevision(history, 1), 'Line one.\nLine two.\n');
 });
 
@@ -349,9 +350,24 @@ test('a notebook well under its target is bounced once toward more writing, then
     submit(undefined, 'early'), submit(undefined, 'again'), ...closing,
   ]);
   const wrapped = { async chatCompletion(request) { corrections.push(request.messages.filter((m) => m.content?.includes?.('manager_correction')).map((m) => m.content).join('')); return client.chatCompletion(request); } };
-  const result = await requestRewrite({ client: wrapped, history, baseRevisionId: 0, range: [0, 9], request: 'Write a long scene.', agentProtocol: protocol });
+  const result = await requestRewrite({ mode: 'block', inlineWordLimit: 0, client: wrapped, history, baseRevisionId: 0, range: [0, 9], request: 'Write a long scene.', agentProtocol: protocol });
   assert.match(corrections.join('\n'), /Just a few|4 words against a target of about 300/);
   assert.match(corrections.join('\n'), /The author asked for more/);
   assert.equal(await reconstructRevision(history, 1), 'Just a few words.\n');
   assert.match(result.chat, /#1/);
+});
+
+test('planning only small notebooks switches the request to the inline flow', async () => {
+  const history = await createHistory('Before.\n\n');
+  const seenTools = [];
+  const client = script([
+    open([{ intent: 'Active.', target_words: 8, start: 'blank' }, { intent: 'Quiet.', target_words: 9, start: 'blank' }]),
+    propose(['It rained on.', 'The rain thinned.']), reviewEdits([editReview(1), editReview(2)]), call('send_response', { message: 'Two options.' }, 'end'),
+  ]);
+  const wrapped = { seen: client.seen, async chatCompletion(request) { seenTools.push(request.tools.map((item) => item.function.name)); return client.chatCompletion(request); } };
+  const result = await requestRewrite({ client: wrapped, mode: 'block', history, baseRevisionId: 0, range: [8, 8], request: 'Write two.', agentProtocol: protocol });
+  assert.match(client.seen[1], /SWITCHED TO INLINE ALTERNATIVES/);
+  assert.match(client.seen[1], /alternative_count 2/);
+  assert.deepEqual(seenTools[2], ['comment_before_changes', 'propose_edits', 'review_edits', 'send_response']);
+  assert.match(result.chat, /\[#1\].*\[#2\]/s);
 });

@@ -2670,7 +2670,7 @@ clear_notebook                 wipe a notebook (blank or back to the selection);
 finish_changes                 optional: close drafting, submit ready notebooks, return the journey summary (first message, overall intent, issues found along the way, achieved / not achieved) and remind the model what to say; with a single notebook, save_notebook does this automatically
 ```
 
-The reply is paragraphs — each message alone, all change links together — `[comment?] [change links] [response]` in the order they happen (a link sits where its notebook was first submitted or its alternative approved, points at the branch's latest submission, and disappears when retracted). Hints, not gates, steer the model. `send_response` submits ready notebooks first; blocked ones (placeholders, unreviewed, failing review) bounce the response once with reasons, then are left out; in the short flow, unreviewed alternatives bounce once, then are discarded. A notebook emptied by edits or cleared has its submitted revisions retracted immediately.
+The reply is paragraphs — each message alone, all change links together — `[comment?] [change links] [response]` in the order they happen (a link sits where its notebook was first submitted or its alternative approved, points at the branch's latest submission, and disappears when retracted). Hints, not gates, steer the model. `send_response` submits ready notebooks first; blocked ones (placeholders, unreviewed, failing review) bounce the response once with reasons, then are left out; in the inline flow, unreviewed alternatives bounce once, then are discarded. A notebook emptied by edits or cleared has its submitted revisions retracted immediately.
 
 Notebook model:
 
@@ -2692,7 +2692,7 @@ Failure: a dropped connection keeps everything already submitted, discards open 
 
 `finish_changes` returns each notebook's state (submitted, dropped empty, dropped open), final length against target, unresolved findings, and the reminders for the final chat reply.
 
-No compatibility layer: the earlier `propose_changes`/`review_changes`/`draft_chat`/`approve_chat` names and prompts are gone (the short flow is their successor under the new names).
+No compatibility layer: the earlier `propose_changes`/`review_changes`/`draft_chat`/`approve_chat` names and prompts are gone (the inline flow is their successor under the new names).
 
 Modules: `src/renderer/ai/placement.js` (mode classifier, inline rendering), `src/renderer/ai/notebook.js` (pure paragraph model, operations, placeholder detection, budget, review-form rendering), `agent.js` (tool schemas and the turn loop), `AGENT_PROTOCOL` in `app.js`, `test/support/fake-kobold-server.js`.
 

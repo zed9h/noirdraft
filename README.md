@@ -15,7 +15,12 @@ Undo/Redo handles recent local edits first; saved editing intervals appear as a 
 
 Start KoboldCpp separately, then set its server URL in the top-bar overflow menu. Use **App info…** there to check connection status, model name, and context length without adding persistent diagnostics to the writing view. The CHAT sidebar is its own Markdown editor. A disconnected model server never prevents ordinary writing or saving.
 
-When you ask for a change inside a paragraph, the model proposes a batch of short alternatives and reviews them inline in their sentence. For whole paragraphs or a blank line it drafts in one or more *notebooks*: numbered-paragraph working drafts that it edits, reviews, and refines over several rounds (using `[bracketed]` paragraphs as placeholders for outlines and deferred work) before submitting. Alternatives are sibling revisions; a notebook submitted again continues its own chain. Text lands only at your selection or cursor, and stays a proposal until you apply it.
+NoirDraft's model has two drafting flows, chosen automatically from what you select:
+
+- **Inline flow** — the model proposes a batch of alternatives and reviews them inside their sentence. It is used for a selection that sits inside a paragraph, a cursor at the start or end of a line, and whole paragraphs shorter than 30 words (`INLINE_WORD_LIMIT` in `src/renderer/ai/placement.js`), which are cheap to redo as alternatives.
+- **Block flow** — the model drafts in one or more *notebooks*: numbered-paragraph working drafts that it edits, reviews, and refines over several rounds (using `[bracketed]` paragraphs as placeholders for outlines and deferred work) before saving. It is used for a blank line, or whole paragraphs of 30 words or more.
+
+Inline alternatives are sibling revisions; a notebook saved again continues its own chain. Text lands only at your selection or cursor, and stays a proposal until you apply it.
 
 ## Project format
 

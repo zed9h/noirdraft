@@ -1078,13 +1078,21 @@ try {
       output.append(intent);
       if (job.currentIntent.progress) {
         const lines = job.currentIntent.progress.split('\n');
-        const table = lines.filter((line) => line.startsWith('Notebook '));
-        const rest = lines.filter((line) => !line.startsWith('Notebook '));
+        const isRow = (line) => line.startsWith('Notebook ') || line.startsWith('Alternative ');
+        const table = lines.filter(isRow);
+        const quote = lines.filter((line) => line.startsWith('> ')).map((line) => line.slice(2));
+        const rest = lines.filter((line) => !isRow(line) && !line.startsWith('> '));
         if (table.length) {
           const block = document.createElement('pre');
           block.className = 'chat-agent-intent chat-agent-progress chat-agent-notebooks';
           block.textContent = table.join('\n');
           output.append(block);
+        }
+        if (quote.length) {
+          const blockquote = document.createElement('blockquote');
+          blockquote.className = 'chat-agent-intent chat-agent-progress chat-agent-quote';
+          blockquote.textContent = quote.join('\n');
+          output.append(blockquote);
         }
         if (rest.length) {
           const progress = document.createElement('div');

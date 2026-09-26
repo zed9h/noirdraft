@@ -262,7 +262,7 @@ Phase 15 evidence (2026-09-19): `serializeHistories`/`parseHistories` create and
 
 - [x] Pure notebook module (`src/renderer/ai/notebook.js`): paragraph parse/serialize, monotonic ids, blank-only-empty rule, replace/delete/insert operations with atomic batch validation, whole-paragraph placeholder detection, soft/hard budget, unit tests.
 - [x] Review-form and receipt renderers: grand/notebook intent, read-only context, other-notebook summaries, automatic checks, escalating budget status, constructive rejections.
-- [x] Tool sets by placement (`placement.js` classifier, unit-tested): short flow `propose_edits`/`review_edits` with inline `⟦ ⟧` context review; block flow `open_notebooks`/`edit_notebook`/`review_notebook`/`submit_notebook`/`clear_notebook`/`finish_changes`; shared `comment_before_changes` (before changes only) and `send_response` (closing, may be the only call).
+- [x] Tool sets by placement (`placement.js` classifier, unit-tested): inline flow `propose_edits`/`review_edits` with inline `⟦ ⟧` context review; block flow `open_notebooks`/`edit_notebook`/`review_notebook`/`submit_notebook`/`clear_notebook`/`finish_changes`; shared `comment_before_changes` (before changes only) and `send_response` (closing, may be the only call).
 - [x] Turn loop: selection/blank seeding, review-before-edit rule, submit gates, sibling-then-chained revisions, hard-ceiling wrap-up, per-round snapshots in job state.
 - [x] Rewrite `AGENT_PROTOCOL` and update `app.js` progress/result handling (chain heads shown, connection-drop message keeps submitted work).
 - [x] Update fake Kobold server and agent unit/E2E specs (`agent-rewrite`, `agent-references`, context inspector, others) to the new flow; run E2E under Xvfb only.

@@ -98,6 +98,8 @@ export function startFakeKoboldServer(options = {}) {
           : calls(call('initialize_changes', { intent: 'Provide each requested replacement as a distinct alternative.', notebooks: replacements.map((_, index) => ({ intent: `Alternative ${index + 1}`, target_words: 1, start: 'blank' })) }))
         : lastTool.includes('NOIRDRAFT WORK SUMMARY')
         ? calls(call('send_response', { message: 'Done.' }))
+        : lastTool.includes('NOIRDRAFT SWITCHED TO INLINE')
+        ? calls(call('propose_edits', { intent: 'Provide each requested replacement as a distinct alternative.', alternative_count: replacements.length, proposals: replacements.map((text) => ({ text })) }))
         : lastTool.includes('NOIRDRAFT EDIT REVIEW') && revisionIds.length
         ? calls(call('review_edits', { set_overview: 'The alternatives are grammatical and appropriate in context.', reviews: revisionIds.map((revision_id) => ({ revision_id, copyedit: { sentence_integrity: true, mechanics: true, clarity: true, style: true }, comment: 'Grammatical and appropriate in context.', verdict: 'approve' })) }))
         : lastTool.includes('NOIRDRAFT NOTEBOOK REVIEW') && lastTool.includes('Next: call review_notebook')
