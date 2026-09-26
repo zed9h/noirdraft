@@ -31,31 +31,42 @@ test('selecting a passage reveals exactly the revisions that changed it', async 
       editors.STORY.setSelection(from, to);
     }, positions);
 
-    const passageHistoryButton = window.getByRole('button', { name: 'Passage history…' });
-    await expect(passageHistoryButton).toBeVisible();
-    await passageHistoryButton.click();
+    await window.getByRole('button', { name: 'Versions', exact: true }).click();
 
-    const list = window.locator('[data-passage-history-list]');
     // Two revisions genuinely touched this exact text: the one that slowed Maria's
     // entrance, and the one that first introduced this passage from the app's
     // unrelated default document (an honest "similarity hint" boundary hop).
-    // The Elias-only revision in between never touched this passage and must be absent.
-    await expect(list.locator('.passage-history-entry')).toHaveCount(2);
-    await expect(list).toContainText('Slowed Maria entrance.');
-    await expect(list).toContainText('Base state');
-    await expect(list).not.toContainText('Expanded Elias.');
+    // The Elias-only revision in between never touched this passage and is dimmed.
+    const graph = window.locator('[data-version-graph]');
+    await expect(graph.locator('.graph-banner')).toContainText('Passage: 2 versions');
+    await expect(graph.locator('.graph-node.passage')).toHaveCount(2);
+    await expect(graph.locator('.graph-node[data-revision-id="1"]')).toHaveClass(/passage/);
+    await expect(graph.locator('.graph-node[data-revision-id="3"]')).toHaveClass(/passage/);
+    await expect(graph.locator('.graph-node[data-revision-id="2"]')).toHaveClass(/dim/);
 
-    // Comparing an older entry against the current text renders a word-level diff.
-    const baseEntry = list.locator('.passage-history-entry', { hasText: 'Base state' });
-    await baseEntry.getByRole('button', { name: 'Compare', exact: true }).click();
-    const diff = baseEntry.locator('.passage-diff');
-    await expect(diff).toBeVisible();
-    await expect(diff.locator('.diff-equal, .diff-delete, .diff-insert').first()).toBeVisible();
+    // One click pins every passage version into the pinned panel.
+    await graph.getByRole('button', { name: 'Pin all passage versions' }).click();
+    await expect(window.locator('[data-pinned-panel] .pinned-card')).toHaveCount(2);
+    await expect(graph.locator('.graph-node.passage.pinned')).toHaveCount(2);
 
-    const targetEntry = list.locator('.passage-history-entry', { hasText: 'Slowed Maria entrance.' });
-    await targetEntry.getByRole('button', { name: 'Checkout' }).click();
+    // Clearing the highlight restores the plain graph.
+    await graph.getByRole('button', { name: 'Clear passage highlight' }).click();
+    await expect(graph.locator('.graph-node.passage')).toHaveCount(0);
+    await expect(graph.locator('.graph-node.dim')).toHaveCount(0);
+
+    // The highlight follows the selection once it settles: collapsing it clears the banner,
+    // selecting again brings the highlight back.
+    await window.evaluate(() => window.__noirDraftTest.editors.STORY.setSelection(0, 0));
+    await expect(graph.locator('.graph-banner')).toBeHidden();
+    await window.evaluate(({ from, to }) => window.__noirDraftTest.editors.STORY.setSelection(from, to), positions);
+    await expect(graph.locator('.graph-node.passage')).toHaveCount(2);
+
+    // The card of a node checks it out.
+    await graph.getByRole('button', { name: /^Revision 2\b/ }).click();
+    await graph.getByRole('button', { name: 'Check out revision' }).click();
     const currentText = await window.evaluate(() => window.__noirDraftTest.model.text);
-    expect(currentText).toContain('Maria walked in slowly.');
+    expect(currentText).toContain('Elias watched silently.');
+    expect(currentText).not.toContain('slowly');
   } finally {
     await application.close();
   }

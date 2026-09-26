@@ -34,12 +34,12 @@ test('including a compared passage as an AI reference shows it as included and s
 
     await window.evaluate((url) => window.__noirDraftTest.connectToKobold(url), server.url);
     await window.evaluate(({ from, to }) => window.__noirDraftTest.editors.STORY.setSelection(from, to), positions);
-    await window.getByRole('button', { name: 'Passage history…' }).click();
+    await window.getByRole('button', { name: 'Versions', exact: true }).click();
 
-    const entry = window.locator('.passage-history-entry', { hasText: 'Base state' });
-    const referenceButton = entry.getByRole('button', { name: 'Include as AI reference' });
-    await referenceButton.click();
-    await expect(entry.getByRole('button', { name: 'Remove from AI reference' })).toBeVisible();
+    await window.locator('[data-version-graph]').getByRole('button', { name: /^Revision 1\b/ }).click();
+    const card = window.locator('.graph-card');
+    await card.getByRole('button', { name: 'Include as AI reference' }).click();
+    await expect(card.getByRole('button', { name: 'Remove from AI reference' })).toBeVisible();
 
     const includedBeforeGenerate = await window.evaluate(() => window.__noirDraftTest.getAgentReferences());
     expect(includedBeforeGenerate).toHaveLength(1);
@@ -64,8 +64,8 @@ test('including a compared passage as an AI reference shows it as included and s
     // Removing it must clear the reference again. The button's accessible name
     // changed after the first click, so re-query it rather than reusing the
     // stale "Include as AI reference" locator.
-    await entry.getByRole('button', { name: 'Remove from AI reference' }).click();
-    await expect(entry.getByRole('button', { name: 'Include as AI reference' })).toBeVisible();
+    await card.getByRole('button', { name: 'Remove from AI reference' }).click();
+    await expect(card.getByRole('button', { name: 'Include as AI reference' })).toBeVisible();
     const includedAfterRemove = await window.evaluate(() => window.__noirDraftTest.getAgentReferences());
     expect(includedAfterRemove).toHaveLength(0);
   } finally {

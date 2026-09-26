@@ -23,43 +23,32 @@ test('the bottom Versions panel renders explorable graph nodes and pinned variat
     const graph = window.locator('[data-version-graph]');
     await expect(graph.locator('.graph-node')).toHaveCount(3);
     await expect(graph.locator('.graph-node.current')).toContainText('2');
-    await expect(graph.locator('.graph-edges line')).toHaveCount(2);
+    await expect(graph.locator('.graph-edges path')).toHaveCount(2);
 
-    await graph.getByRole('button', { name: 'Revision 1' }).click();
-    const inspector = window.getByLabel('Pinned variations');
-    await expect(inspector.getByRole('heading', { name: 'Revision 1' })).toBeVisible();
-    await expect(window.locator('[data-payload-type="patch"]')).toContainText('Linear edit.');
-    await inspector.getByRole('button', { name: 'Pin variation' }).click();
-    // Once something is pinned the inspector lists only pinned revisions, so a
-    // further node is pinned from the graph with Space (Enter just inspects).
-    await graph.getByRole('button', { name: 'Revision 2' }).click();
+    await graph.getByRole('button', { name: /^Revision 1\b/ }).click();
+    const card = graph.locator('.graph-card');
+    await expect(card.getByRole('heading', { name: 'Revision 1' })).toBeVisible();
+    await expect(card).toContainText('Linear note');
+    await card.getByRole('button', { name: 'Pin revision' }).click();
+    await graph.getByRole('button', { name: /^Revision 2\b/ }).click();
     await graph.focus();
     await window.keyboard.press('Space');
-    await expect(inspector.getByRole('heading', { name: 'Automatic comparison' })).toBeVisible();
+    await expect(window.locator('[data-pinned-panel] .pinned-card')).toHaveCount(2);
+    await expect(graph.locator('.graph-node.pinned')).toHaveCount(2);
 
     await graph.focus();
     await window.keyboard.press('ArrowLeft');
     await expect(graph.locator('.graph-node.focused')).toContainText('0');
 
-    await inspector.getByRole('button', { name: 'Checkout' }).first().click();
-    await expect(graph.locator('.graph-node[data-revision-id="1"]')).toHaveClass(/current/);
-    // Checkout re-renders the pane more than once; nothing may be duplicated, and the diff stays a diff.
-    await window.waitForTimeout(300);
-    await expect(inspector.locator('.pinned-variation')).toHaveCount(2);
-    await expect(inspector.locator('.pinned-comparison')).toHaveCount(1);
-    await expect(inspector.locator('.variation-diff')).toHaveCount(1);
-    await expect(inspector.locator('[data-payload-type="patch"]').first()).toContainText('@@');
-    const state = await window.evaluate(() => ({
-      story: window.__noirDraftTest.model.text,
-      current: window.__noirDraftTest.getHistory().currentRevision,
-    }));
-    expect(state).toEqual({ story: `${original}\nLinear edit.\n`, current: 1 });
+    await graph.getByRole('button', { name: 'Check out revision' }).click();
+    await expect(graph.locator('.graph-node[data-revision-id="0"]')).toHaveClass(/current/);
+    await expect(graph.locator('.graph-node.current')).toHaveCount(1);
   } finally {
     await application.close();
   }
 });
 
-test('the local graph collapses distant revisions into a searchable jump, and search can re-center on any revision', async () => {
+test('the graph shows the whole history, zooms and pans with the mouse, and search re-centres on any revision', async () => {
   const application = await electron.launch({
     args: [path.resolve('.')],
     env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
@@ -78,15 +67,19 @@ test('the local graph collapses distant revisions into a searchable jump, and se
 
     await window.getByRole('button', { name: 'Versions', exact: true }).click();
     const graph = window.locator('[data-version-graph]');
-    // Current revision is 6; radius 2 shows 4,5,6 and hides the earlier root revisions.
-    await expect(graph.locator('.graph-node')).toHaveCount(3);
-    const jump = graph.locator('.graph-jump[data-direction="ancestor"]');
-    await expect(jump).toContainText('earlier revision');
-    await jump.click();
-    // One jump re-centers on the nearest hidden node (revision 3); the true
-    // root (revision 0) is still one more hop further back from there.
-    await expect(graph.locator('.graph-node.focused')).toContainText('3');
-    await expect(graph.locator('.graph-jump[data-direction="ancestor"]')).toBeVisible();
+    await expect(graph.locator('.graph-node')).toHaveCount(7);
+    const world = graph.locator('.graph-world');
+    const before = await world.evaluate((element) => element.style.transform);
+    const box = await graph.boundingBox();
+    // Wheel zooms around the pointer; a left-drag on the background pans.
+    await window.mouse.move(box.x + 40, box.y + box.height - 30);
+    await window.mouse.wheel(0, -300);
+    await expect.poll(() => world.evaluate((element) => element.style.transform)).not.toBe(before);
+    const zoomed = await world.evaluate((element) => element.style.transform);
+    await window.mouse.down();
+    await window.mouse.move(box.x + 100, box.y + box.height - 10, { steps: 4 });
+    await window.mouse.up();
+    await expect.poll(() => world.evaluate((element) => element.style.transform)).not.toBe(zoomed);
 
     await window.getByRole('button', { name: 'Open revision search' }).click();
     await window.getByLabel('Search revisions').fill('Edit 5');

@@ -14,7 +14,7 @@ import { KoboldClient } from './ai/kobold.js';
 import { generateNote } from './ai/notes.js';
 import { adoptIntoComposite } from './history/composite.js';
 import { mapRange, passageHistory } from './history/lineage.js';
-import { buildLocalGraph } from './history/local-graph.js';
+import { edgePath, layoutRevisionGraph, secondaryEdgePath } from './history/graph-layout.js';
 import { excerptAround, findTextMatches, paragraphRange, searchHistory } from './search.js';
 import { insertedPassages, wordDiff } from './history/word-diff.js';
 import { extractHeadings, resolveHeadingPath } from './project/headings.js';
@@ -527,14 +527,9 @@ const outlines = {
   STORY: document.querySelector('[data-outline-story]'),
   METADATA: document.querySelector('[data-outline-metadata]'),
 };
-const passageHistoryContainer = document.querySelector('[data-passage-history]');
-const passageHistoryToggle = document.querySelector('[data-passage-history-toggle]');
-const passageHistoryList = document.querySelector('[data-passage-history-list]');
-const passageMultiCompare = document.querySelector('[data-passage-multi-compare]');
 const contextToggle = document.querySelector('[data-context-toggle]');
 const versionsView = document.querySelector('#versions-view');
 const versionList = document.querySelector('[data-version-list]');
-const versionInspector = document.querySelector('[data-version-inspector]');
 const versionGraph = document.querySelector('[data-version-graph]');
 const pinnedCards = document.querySelector('[data-pinned-cards]');
 const pinnedClose = document.querySelector('[data-pinned-close]');
@@ -1405,170 +1400,17 @@ try {
   });
   chatPrompt.addEventListener('input', updateDraftContextSummary);
 
-  const collapsePassageHistory = () => {
-    passageHistoryList.hidden = true;
-    passageHistoryList.replaceChildren();
+  // The passage highlight follows the STORY selection once it settles, so
+  // dragging a selection does not recompute history on every step.
+  let passageRefreshTimer = null;
+  const schedulePassageRefresh = () => {
+    clearTimeout(passageRefreshTimer);
+    passageRefreshTimer = setTimeout(async () => {
+      if (!versionsOpen) return;
+      await loadPassage();
+      renderVersions();
+    }, 300);
   };
-
-  const updatePassageHistoryVisibility = () => {
-    const hasSelection = activeRoot === 'STORY'
-      && Boolean(commitController)
-      && model.selectionStart !== model.selectionEnd;
-    passageHistoryContainer.hidden = !hasSelection;
-    if (!hasSelection) collapsePassageHistory();
-  };
-
-  let selectedForCompare = []; // up to 2 { revisionId, entry } for direct revision-vs-revision comparison
-
-  const renderMultiCompare = async () => {
-    if (selectedForCompare.length < 2) {
-      passageMultiCompare.hidden = true;
-      passageMultiCompare.replaceChildren();
-      return;
-    }
-    const [first, second] = selectedForCompare;
-    const [firstText, secondText] = await Promise.all([
-      reconstructRevision(history, first.entry.revisionId),
-      reconstructRevision(history, second.entry.revisionId),
-    ]);
-    const margin = 60;
-    const firstSpan = [
-      Math.max(0, first.entry.rangeInResult[0] - margin),
-      Math.min(firstText.length, first.entry.rangeInResult[1] + margin),
-    ];
-    const secondSpan = [
-      Math.max(0, second.entry.rangeInResult[0] - margin),
-      Math.min(secondText.length, second.entry.rangeInResult[1] + margin),
-    ];
-    passageMultiCompare.replaceChildren();
-    const heading = document.createElement('h4');
-    heading.textContent = `Comparing revision ${first.entry.revisionId} with revision ${second.entry.revisionId} (with surrounding context)`;
-    passageMultiCompare.append(heading);
-    const diff = document.createElement('div');
-    for (const op of wordDiff(firstText.slice(...firstSpan), secondText.slice(...secondSpan))) {
-      const span = document.createElement('span');
-      span.className = `diff-${op.type}`;
-      span.textContent = op.text;
-      diff.append(span);
-    }
-    passageMultiCompare.append(diff);
-    passageMultiCompare.hidden = false;
-  };
-
-  const renderPassageHistory = async () => {
-    const range = [model.selectionStart, model.selectionEnd];
-    const result = await passageHistory(history, history.currentRevision, range);
-    selectedForCompare = [];
-    passageMultiCompare.hidden = true;
-    const entries = [...result.entries].reverse();
-
-    const renderRows = () => {
-      passageHistoryList.replaceChildren();
-      if (entries.length === 0) {
-        const empty = document.createElement('p');
-        empty.textContent = 'No revision changed exactly this passage.';
-        passageHistoryList.append(empty);
-      }
-      for (const entry of entries) {
-        const row = document.createElement('article');
-        row.className = 'passage-history-entry';
-        row.dataset.revisionId = String(entry.revisionId);
-        const summary = document.createElement('p');
-        summary.textContent = `Revision ${entry.revisionId} · ${entry.origin} · ${entry.timestamp}${entry.approximate ? ' · similarity hint' : ''}`;
-        const note = document.createElement('p');
-        note.textContent = entry.note ?? '[no note]';
-        const checkout = document.createElement('button');
-        checkout.type = 'button';
-        checkout.textContent = 'Checkout';
-        checkout.addEventListener('click', async () => {
-          await commitController.checkout(entry.revisionId);
-          renderVersions();
-          refreshHistoryControls();
-          collapsePassageHistory();
-        });
-        const compare = document.createElement('button');
-        compare.type = 'button';
-        compare.textContent = 'Compare';
-        const diffView = document.createElement('div');
-        diffView.className = 'passage-diff';
-        diffView.hidden = true;
-        compare.addEventListener('click', async () => {
-          if (!diffView.hidden) { diffView.hidden = true; return; }
-          const historicalText = await reconstructRevision(history, entry.revisionId);
-          const historicalPassage = historicalText.slice(...entry.rangeInResult);
-          const currentPassage = model.text.slice(...range);
-          diffView.replaceChildren();
-          for (const op of wordDiff(historicalPassage, currentPassage)) {
-            const span = document.createElement('span');
-            span.className = `diff-${op.type}`;
-            span.textContent = op.text;
-            diffView.append(span);
-          }
-          diffView.hidden = false;
-        });
-        const useVersion = document.createElement('button');
-        useVersion.type = 'button';
-        useVersion.textContent = 'Use this version';
-        useVersion.addEventListener('click', async () => {
-          const historicalText = await reconstructRevision(history, entry.revisionId);
-          const historicalPassage = historicalText.slice(...entry.rangeInResult);
-          // entry.rangeInResult is expressed in that entry's own revision's
-          // coordinates, which only equals the current text's coordinates for
-          // the nearest hop; forward-map it so the initial composite target
-          // range is always correct, however many hops back the entry is.
-          const targetRange = entry.revisionId === history.currentRevision
-            ? entry.rangeInResult
-            : mapRange(historicalText, model.text, entry.rangeInResult).range;
-          await startOrUpdateComposite(entry, historicalPassage, targetRange);
-        });
-        const referenceId = `passage:${entry.revisionId}`;
-        const useAsReference = document.createElement('button');
-        useAsReference.type = 'button';
-        const setReferenceLabel = () => {
-          useAsReference.textContent = agentReferences.some((existing) => existing.id === referenceId)
-            ? 'Remove from AI reference'
-            : 'Include as AI reference';
-        };
-        setReferenceLabel();
-        useAsReference.addEventListener('click', async () => {
-          const historicalText = await reconstructRevision(history, entry.revisionId);
-          const historicalPassage = historicalText.slice(...entry.rangeInResult);
-          toggleAgentReference({
-            id: referenceId,
-            label: `Revision ${entry.revisionId} passage (${entry.origin})`,
-            text: historicalPassage,
-          });
-          updateDraftContextSummary();
-          setReferenceLabel();
-        });
-        const isSelected = selectedForCompare.some((selection) => selection.entry.revisionId === entry.revisionId);
-        row.classList.toggle('selected-for-compare', isSelected);
-        const selectToCompare = document.createElement('button');
-        selectToCompare.type = 'button';
-        selectToCompare.textContent = isSelected ? 'Selected for comparison' : 'Select to compare';
-        selectToCompare.addEventListener('click', async () => {
-          if (isSelected) {
-            selectedForCompare = selectedForCompare.filter((selection) => selection.entry.revisionId !== entry.revisionId);
-          } else {
-            if (selectedForCompare.length >= 2) selectedForCompare = selectedForCompare.slice(1);
-            selectedForCompare = [...selectedForCompare, { entry }];
-          }
-          renderRows();
-          await renderMultiCompare();
-        });
-        row.append(summary, note, checkout, compare, diffView, useVersion, useAsReference, selectToCompare);
-        passageHistoryList.append(row);
-      }
-      passageHistoryList.hidden = false;
-    };
-
-    renderRows();
-  };
-
-  passageHistoryToggle.addEventListener('click', () => {
-    if (!passageHistoryList.hidden) return collapsePassageHistory();
-    void renderPassageHistory();
-  });
 
   let agentReferences = []; // [{ id, label, text }] — explicit references for the next AI pass
 
@@ -1747,17 +1589,6 @@ try {
     else editors.METADATA.replace(0, models.METADATA.text.length, updated, 'pin');
   };
 
-  const revisionDepth = (revisionId, cache = new Map()) => {
-    if (cache.has(revisionId)) return cache.get(revisionId);
-    const currentHistory = activeHistory();
-    const revision = currentHistory?.revisions.get(revisionId);
-    const depth = !revision || revision.parents.length === 0
-      ? 0
-      : 1 + Math.max(...revision.parents.map((parent) => revisionDepth(parent, cache)));
-    cache.set(revisionId, depth);
-    return depth;
-  };
-
   const pendingNotes = new Set();
   const failedNotes = new Set();
   let noteAbortController = null;
@@ -1929,108 +1760,6 @@ try {
       visitSection(sectionNav, path);
       refreshNavigationButtons();
     }, AUTO_SECTION_VISIT_DELAY);
-  };
-
-  // Renders are async and can overlap (Checkout triggers several); each builds
-  // into a fragment and only the latest one is committed, so nothing duplicates.
-  let pinnedRenderToken = 0;
-  const renderPinnedVariations = async () => {
-    const currentHistory = activeHistory();
-    if (!currentHistory) return;
-    const token = ++pinnedRenderToken;
-    const output = document.createDocumentFragment();
-    const ids = pinnedRevisionIds.length ? pinnedRevisionIds : (inspectedRevisionId === null ? [] : [inspectedRevisionId]);
-    if (ids.length === 0) {
-      const hint = document.createElement('p');
-      hint.textContent = 'Select a node with the arrow keys, then pin it to keep its content here. Pinned revisions compare automatically.';
-      output.append(hint);
-      const hadFocus = versionsView.contains(document.activeElement);
-      versionInspector.replaceChildren(output);
-      restoreVersionsFocus(hadFocus);
-      return;
-    }
-    const revisions = ids.map((id) => currentHistory.revisions.get(id)).filter(Boolean);
-    for (const revision of revisions) {
-      const section = document.createElement('section');
-      section.className = 'pinned-variation';
-      const heading = document.createElement('h4');
-      heading.textContent = `Revision ${revision.id}`;
-      const note = document.createElement('span');
-      note.className = 'variation-note';
-      note.textContent = revision.note ?? '[no note]';
-      note.title = `${revision.origin} · ${revision.timestamp}`;
-      const actions = document.createElement('div');
-      actions.className = 'variation-actions';
-      const iconButton = (paths, label) => {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'icon-button';
-        button.title = label;
-        button.setAttribute('aria-label', label);
-        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        svg.classList.add('icon-svg');
-        svg.setAttribute('viewBox', '0 0 24 24');
-        svg.setAttribute('aria-hidden', 'true');
-        for (const d of paths) {
-          const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-          path.setAttribute('d', d);
-          svg.append(path);
-        }
-        button.append(svg);
-        return button;
-      };
-      const isPinned = pinnedRevisionIds.includes(revision.id);
-      const pin = iconButton(['M9 4h6l-1 6 3 3H7l3-3z', 'M12 13v7'], isPinned ? 'Unpin' : 'Pin variation');
-      pin.setAttribute('aria-pressed', String(isPinned));
-      pin.addEventListener('click', () => togglePinnedRevision(revision.id));
-      const currentController = activeCommitController();
-      const isCurrent = revision.id === currentHistory.currentRevision;
-      const checkout = iconButton(['M12 3a9 9 0 100 18 9 9 0 000-18z', 'M8 12.5l3 3 5-6'], isCurrent ? 'Current' : 'Checkout');
-      checkout.disabled = isCurrent || !currentController;
-      checkout.addEventListener('click', async () => {
-        await currentController.checkout(revision.id);
-        focusedRevisionId = revision.id;
-        renderVersions();
-        refreshHistoryControls();
-      });
-      actions.append(pin, checkout);
-      const payload = document.createElement('pre');
-      payload.dataset.payloadType = revision.payloadType;
-      payload.textContent = revision.payload;
-      actions.append(pin, checkout);
-      section.append(heading, note, actions, payload);
-      output.append(section);
-    }
-    if (pinnedRevisionIds.length > 1) {
-      const compare = document.createElement('section');
-      compare.className = 'pinned-comparison';
-      const heading = document.createElement('h4');
-      heading.textContent = 'Automatic comparison';
-      compare.append(heading);
-      const [baseId, ...variationIds] = pinnedRevisionIds;
-      const baseText = await reconstructRevision(currentHistory, baseId);
-      for (const variationId of variationIds) {
-        const row = document.createElement('div');
-        row.className = 'variation-diff';
-        const label = document.createElement('p');
-        label.textContent = `Revision ${baseId} ↔ Revision ${variationId}`;
-        row.append(label);
-        const variationText = await reconstructRevision(currentHistory, variationId);
-        for (const op of wordDiff(baseText, variationText)) {
-          const span = document.createElement('span');
-          span.className = op.type === 'delete' ? 'diff-delete' : op.type === 'insert' ? 'diff-insert' : '';
-          span.textContent = op.text;
-          row.append(span);
-        }
-        compare.append(row);
-      }
-      output.append(compare);
-    }
-    if (token === pinnedRenderToken) {
-      const hadFocus = versionsView.contains(document.activeElement);
-      versionInspector.replaceChildren(output);
-      restoreVersionsFocus(hadFocus);
-    }
   };
 
   const checkoutAndEdit = async (revisionId) => {
@@ -2211,77 +1940,337 @@ try {
   window.addEventListener('pointermove', (event) => {
     if (hold && Math.hypot(event.clientX - hold.x, event.clientY - hold.y) > 6) endHold();
   }, true);
+  // --- Version graph: full-history layout in a pannable, zoomable viewport ---
+  // Only nodes and edges inside the viewport (plus a margin) exist in the DOM,
+  // so any history size loads "as you look". Wheel zooms around the pointer;
+  // the middle button pans from anywhere, the left button from the background.
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const GRAPH_ZOOM_MIN = 0.15;
+  const GRAPH_ZOOM_MAX = 2.5;
+  const graphView = { x: 0, y: 0, k: 1, centered: false, history: null };
+  const graphLayoutCache = { history: null, size: -1, layout: null };
+  const graphNodes = new Map(); // revision id -> node button currently in the DOM
+  const graphElement = (tag, className, parent) => {
+    const element = document.createElement(tag);
+    element.className = className;
+    parent?.append(element);
+    return element;
+  };
+  const graphWorld = graphElement('div', 'graph-world');
+  const graphEdges = document.createElementNS(SVG_NS, 'svg');
+  graphEdges.classList.add('graph-edges');
+  graphEdges.setAttribute('aria-hidden', 'true');
+  graphWorld.append(graphEdges);
+  const graphBanner = graphElement('div', 'graph-banner');
+  graphBanner.hidden = true;
+  const graphCard = graphElement('div', 'graph-card');
+  graphCard.hidden = true;
+  const graphControls = graphElement('div', 'graph-controls');
+  versionGraph.append(graphWorld, graphBanner, graphCard, graphControls);
+
+  const graphButton = (parent, text, label, onClick) => {
+    const button = graphElement('button', '', parent);
+    button.type = 'button';
+    button.textContent = text;
+    if (label) { button.setAttribute('aria-label', label); button.title = label; }
+    button.addEventListener('click', onClick);
+    return button;
+  };
+
+  // Passage history is shown in the graph: the revisions that changed the
+  // selected passage are highlighted, the rest dims, and they pin together.
+  let passage = null; // { entries: Map<revisionId, entry>, baseRevision }
+  let passageToken = 0;
+  const currentPassage = (currentHistory) => (
+    passage && currentHistory === history && passage.baseRevision === history.currentRevision ? passage : null
+  );
+  const loadPassage = async () => {
+    const token = ++passageToken;
+    const hasSelection = activeRoot === 'STORY' && Boolean(commitController) && model.selectionStart !== model.selectionEnd;
+    if (!hasSelection) { passage = null; return; }
+    const baseRevision = history.currentRevision;
+    const result = await passageHistory(history, baseRevision, [model.selectionStart, model.selectionEnd]);
+    if (token !== passageToken) return;
+    passage = { entries: new Map(result.entries.map((entry) => [entry.revisionId, entry])), baseRevision };
+  };
+  const clearPassage = () => { passageToken += 1; passage = null; renderVersions(); };
+
+  const graphLayout = (currentHistory) => {
+    const cache = graphLayoutCache;
+    if (cache.history !== currentHistory || cache.size !== currentHistory.revisions.size) {
+      cache.history = currentHistory;
+      cache.size = currentHistory.revisions.size;
+      cache.layout = layoutRevisionGraph(currentHistory);
+    }
+    return cache.layout;
+  };
+
+  const centerGraphOn = (id, k = graphView.k) => {
+    const point = graphLayoutCache.layout?.positions.get(id);
+    const width = versionGraph.clientWidth;
+    const height = versionGraph.clientHeight;
+    if (!point || !width || !height) return;
+    graphView.k = k;
+    graphView.x = width / 2 - point.x * k;
+    graphView.y = height / 2 - point.y * k;
+    graphView.centered = true;
+  };
+
+  const revealGraphNode = (id) => {
+    const point = graphLayoutCache.layout?.positions.get(id);
+    if (!point) return;
+    const sx = graphView.x + point.x * graphView.k;
+    const sy = graphView.y + point.y * graphView.k;
+    if (sx < 60 || sy < 50 || sx > versionGraph.clientWidth - 60 || sy > versionGraph.clientHeight - 50) centerGraphOn(id);
+  };
+
+  const zoomGraphAt = (px, py, factor) => {
+    const k = Math.min(GRAPH_ZOOM_MAX, Math.max(GRAPH_ZOOM_MIN, graphView.k * factor));
+    const ratio = k / graphView.k;
+    graphView.x = px - (px - graphView.x) * ratio;
+    graphView.y = py - (py - graphView.y) * ratio;
+    graphView.k = k;
+    scheduleGraphDraw();
+  };
+
+  const fitGraph = () => {
+    const layout = graphLayoutCache.layout;
+    const width = versionGraph.clientWidth;
+    const height = versionGraph.clientHeight;
+    if (!layout || !width || !height) return;
+    const { minX, maxX, minY, maxY } = layout.bounds;
+    const pad = 60;
+    const k = Math.min(1.2, Math.max(GRAPH_ZOOM_MIN, Math.min(width / (maxX - minX + 2 * pad), height / (maxY - minY + 2 * pad))));
+    graphView.k = k;
+    graphView.x = width / 2 - ((minX + maxX) / 2) * k;
+    graphView.y = height / 2 - ((minY + maxY) / 2) * k;
+    graphView.centered = true;
+    drawGraph();
+  };
+
+  graphButton(graphControls, '+', 'Zoom in', () => zoomGraphAt(versionGraph.clientWidth / 2, versionGraph.clientHeight / 2, 1.3));
+  graphButton(graphControls, '−', 'Zoom out', () => zoomGraphAt(versionGraph.clientWidth / 2, versionGraph.clientHeight / 2, 1 / 1.3));
+  graphButton(graphControls, '⤢', 'Fit whole graph', fitGraph);
+
+  let graphDrawFrame = 0;
+  function scheduleGraphDraw() {
+    if (graphDrawFrame) return;
+    graphDrawFrame = requestAnimationFrame(() => { graphDrawFrame = 0; drawGraph(); });
+  }
+
+  const createGraphNode = (id) => {
+    const button = graphElement('button', 'graph-node');
+    button.type = 'button';
+    button.dataset.revisionId = String(id);
+    button.textContent = String(id);
+    // A real dblclick event never arrives (the first click re-renders the
+    // node), so the second click of a double click is recognised by count.
+    button.addEventListener('click', (event) => {
+      if (suppressNodeClick) return;
+      if (event.detail >= 2) void checkoutAndEdit(id);
+      else focusGraphOn(id);
+    });
+    return button;
+  };
+
+  function drawGraph() {
+    const currentHistory = activeHistory();
+    const layout = graphLayoutCache.layout;
+    const width = versionGraph.clientWidth;
+    const height = versionGraph.clientHeight;
+    if (!currentHistory || !layout || !width || !height) return;
+    const { x, y, k } = graphView;
+    graphWorld.style.transform = `translate(${x}px, ${y}px) scale(${k})`;
+    const margin = 90;
+    const left = -x / k - margin;
+    const right = (width - x) / k + margin;
+    const top = -y / k - margin;
+    const bottom = (height - y) / k + margin;
+    const passageIds = currentPassage(currentHistory)?.entries ?? null;
+    const centerId = focusedRevisionId ?? currentHistory.currentRevision;
+
+    const edgeFragment = document.createDocumentFragment();
+    const visibleEdges = layout.edges.filter(({ from, to }) => {
+      const a = layout.positions.get(from);
+      const b = layout.positions.get(to);
+      return Math.min(a.x, b.x) <= right && Math.max(a.x, b.x) >= left && Math.min(a.y, b.y) <= bottom && Math.max(a.y, b.y) >= top;
+    });
+    // Secondary (dotted) edges first so the thick primary lines sit on top.
+    for (const edge of [...visibleEdges.filter((e) => e.secondary), ...visibleEdges.filter((e) => !e.secondary)]) {
+      const path = document.createElementNS(SVG_NS, 'path');
+      path.setAttribute('d', (edge.secondary ? secondaryEdgePath : edgePath)(layout.positions.get(edge.from), layout.positions.get(edge.to)));
+      if (edge.secondary) path.classList.add('secondary');
+      if (passageIds && !(passageIds.has(edge.from) && passageIds.has(edge.to))) path.classList.add('dim');
+      edgeFragment.append(path);
+    }
+    graphEdges.replaceChildren(edgeFragment);
+
+    const searchHits = new Set(versionSearch.results.map(({ revision }) => revision.id));
+    const visible = new Set(layout.ids.filter((id) => {
+      const point = layout.positions.get(id);
+      return point.x >= left && point.x <= right && point.y >= top && point.y <= bottom;
+    }));
+    for (const [id, button] of graphNodes) {
+      if (visible.has(id) || button === document.activeElement) continue;
+      button.remove();
+      graphNodes.delete(id);
+    }
+    for (const id of visible) {
+      let button = graphNodes.get(id);
+      if (!button) {
+        button = createGraphNode(id);
+        graphNodes.set(id, button);
+        graphWorld.append(button);
+      }
+      // Layout shifts as the graph grows (parents re-centre over new
+      // children), so every draw re-places the node.
+      const point = layout.positions.get(id);
+      button.style.left = `${point.x}px`;
+      button.style.top = `${point.y}px`;
+      const revision = currentHistory.revisions.get(id);
+      const isPassage = passageIds?.has(id) ?? false;
+      const isCurrent = id === currentHistory.currentRevision;
+      const isPinned = pinnedRevisionIds.includes(id);
+      button.className = ['graph-node', `origin-${revision.origin}`, isCurrent ? 'current' : '', id === centerId ? 'focused' : '',
+        isPinned ? 'pinned' : '', searchHits.has(id) ? 'search-hit' : '', isPassage ? 'passage' : '', passageIds && !isPassage ? 'dim' : '']
+        .filter(Boolean).join(' ');
+      button.setAttribute('aria-label', `Revision ${id}${isCurrent ? ', checked out' : ''}${isPinned ? ', pinned' : ''}${isPassage ? ', changed the selected passage' : ''}`);
+      button.title = `Revision ${id}: ${revision.note ?? revision.origin}`;
+    }
+  }
+
+  const usePassageVersion = async (entry) => {
+    const historicalText = await reconstructRevision(history, entry.revisionId);
+    const historicalPassage = historicalText.slice(...entry.rangeInResult);
+    // entry.rangeInResult is expressed in that entry's own revision's
+    // coordinates, which only equals the current text's coordinates for
+    // the nearest hop; forward-map it so the initial composite target
+    // range is always correct, however many hops back the entry is.
+    const targetRange = entry.revisionId === history.currentRevision
+      ? entry.rangeInResult
+      : mapRange(historicalText, model.text, entry.rangeInResult).range;
+    await startOrUpdateComposite(entry, historicalPassage, targetRange);
+  };
+
+  const togglePassageReference = async (entry) => {
+    const historicalText = await reconstructRevision(history, entry.revisionId);
+    toggleAgentReference({
+      id: `passage:${entry.revisionId}`,
+      label: `Revision ${entry.revisionId} passage (${entry.origin})`,
+      text: historicalText.slice(...entry.rangeInResult),
+    });
+    updateDraftContextSummary();
+    renderVersions();
+  };
+
+  const renderGraphBanner = (currentHistory) => {
+    graphBanner.replaceChildren();
+    const active = currentPassage(currentHistory);
+    graphBanner.hidden = !active;
+    if (!active) return;
+    const ids = [...active.entries.keys()].sort((a, b) => a - b);
+    const label = graphElement('span', 'graph-banner-label', graphBanner);
+    label.textContent = ids.length === 0
+      ? 'No revision changed exactly this passage'
+      : `Passage: ${ids.length} version${ids.length === 1 ? '' : 's'}`;
+    if (ids.length > 0) {
+      const allPinned = ids.every((id) => pinnedRevisionIds.includes(id));
+      graphButton(graphBanner, allPinned ? 'Unpin all' : 'Pin all', allPinned ? 'Unpin all passage versions' : 'Pin all passage versions', () => {
+        pinnedRevisionIds = allPinned
+          ? pinnedRevisionIds.filter((id) => !active.entries.has(id))
+          : [...pinnedRevisionIds, ...ids.filter((id) => !pinnedRevisionIds.includes(id))];
+        renderVersions();
+      });
+    }
+    graphButton(graphBanner, '✕', 'Clear passage highlight', clearPassage);
+  };
+
+  const renderGraphCard = (currentHistory, id) => {
+    graphCard.replaceChildren();
+    const revision = currentHistory.revisions.get(id);
+    graphCard.hidden = !revision;
+    if (!revision) return;
+    graphCard.dataset.revisionId = String(id);
+    const entry = currentPassage(currentHistory)?.entries.get(id);
+    const title = graphElement('h4', 'graph-card-title', graphCard);
+    title.textContent = `Revision ${id}`;
+    const meta = graphElement('p', 'graph-card-meta', graphCard);
+    meta.textContent = `${revision.origin} · ${revision.timestamp}${entry?.approximate ? ' · similarity hint' : ''}`;
+    const note = graphElement('p', 'graph-card-note', graphCard);
+    note.textContent = revision.note ?? '[no note]';
+    const actions = graphElement('div', 'graph-card-actions', graphCard);
+    const isPinned = pinnedRevisionIds.includes(id);
+    const pin = graphButton(actions, isPinned ? 'Unpin' : 'Pin', isPinned ? 'Unpin revision' : 'Pin revision', () => togglePinnedRevision(id));
+    pin.setAttribute('aria-pressed', String(isPinned));
+    const isCurrent = id === currentHistory.currentRevision;
+    const controller = activeCommitController();
+    const checkout = graphButton(actions, isCurrent ? 'Checked out' : 'Checkout', isCurrent ? 'Checked out' : 'Check out revision', async () => {
+      await controller.checkout(id);
+      focusedRevisionId = id;
+      renderVersions();
+      refreshHistoryControls();
+    });
+    checkout.disabled = isCurrent || !controller;
+    if (entry) {
+      graphButton(actions, 'Use passage', 'Use this version of the passage in the composite', () => void usePassageVersion(entry));
+      const isReference = agentReferences.some((existing) => existing.id === `passage:${id}`);
+      graphButton(actions, isReference ? 'Drop AI reference' : 'AI reference', isReference ? 'Remove from AI reference' : 'Include as AI reference', () => void togglePassageReference(entry));
+    }
+  };
+
   const renderLocalGraph = () => {
     const currentHistory = activeHistory();
     if (!currentHistory || !versionGraph) return;
+    const layout = graphLayout(currentHistory);
+    renderedGraphNodeIds = layout.ids;
     const centerId = focusedRevisionId ?? currentHistory.currentRevision;
-    const graph = buildLocalGraph(currentHistory, centerId, { radius: 2 });
-    // Rebuilding the graph destroys the node button that was just clicked;
-    // without this, focus falls to <body> and no pane has focus.
+    // Rebuilding the card destroys the button that was just clicked; without
+    // this, focus falls to <body> and no pane has focus.
     const hadVersionsFocus = versionsView.contains(document.activeElement);
-    versionGraph.replaceChildren();
-    const nodes = [...graph.nodes].sort((left, right) => left.id - right.id);
-    renderedGraphNodeIds = nodes.map(({ id }) => id);
-    const positions = new Map(nodes.map((node, index) => [node.id, {
-      x: 42 + revisionDepth(node.id) * 132,
-      y: 38 + index * 64,
-    }]));
-    const stage = document.createElement('div');
-    stage.className = 'graph-stage';
-    stage.style.minWidth = `${Math.max(360, ...[...positions.values()].map(({ x }) => x + 110))}px`;
-    stage.style.minHeight = `${Math.max(150, nodes.length * 64 + 30)}px`;
-    const lines = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    lines.classList.add('graph-edges');
-    lines.setAttribute('aria-hidden', 'true');
-    for (const node of nodes) {
-      for (const parentId of node.parents) {
-        const parent = positions.get(parentId);
-        const child = positions.get(node.id);
-        if (!parent || !child) continue;
-        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        // Secondary parents supplied copied text but are not the diff base.
-        if (parentId !== node.parents[0]) line.classList.add('secondary');
-        line.setAttribute('x1', String(parent.x)); line.setAttribute('y1', String(parent.y));
-        line.setAttribute('x2', String(child.x)); line.setAttribute('y2', String(child.y));
-        lines.append(line);
-      }
+    if (graphView.history !== currentHistory) {
+      graphView.history = currentHistory;
+      graphView.centered = false;
+      for (const button of graphNodes.values()) button.remove();
+      graphNodes.clear();
     }
-    stage.append(lines);
-    for (const node of nodes) {
-      const point = positions.get(node.id);
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = ['graph-node', node.isCurrent ? 'current' : '', node.id === centerId ? 'focused' : '', pinnedRevisionIds.includes(node.id) ? 'pinned' : '', versionSearch.results.some(({ revision }) => revision.id === node.id) ? 'search-hit' : ''].filter(Boolean).join(' ');
-      button.dataset.revisionId = String(node.id);
-      button.style.setProperty('--x', `${point.x}px`);
-      button.style.setProperty('--y', `${point.y}px`);
-      button.textContent = String(node.id);
-      button.setAttribute('aria-label', `Revision ${node.id}${pinnedRevisionIds.includes(node.id) ? ', pinned' : ''}`);
-      button.title = `Revision ${node.id}: ${node.note ?? node.origin}`;
-      // A real dblclick event never arrives (the first click re-renders the
-      // node), so the second click of a double click is recognised by count.
-      button.addEventListener('click', (event) => {
-        if (suppressNodeClick) return;
-        if (event.detail >= 2) void checkoutAndEdit(node.id);
-        else focusGraphOn(node.id);
-      });
-      stage.append(button);
-    }
-    versionGraph.append(stage);
-    versionGraph.querySelector('.graph-node.focused')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    for (const jump of graph.jumps) {
-      const jumpButton = document.createElement('button');
-      jumpButton.type = 'button';
-      jumpButton.className = 'graph-jump';
-      jumpButton.dataset.direction = jump.direction;
-      jumpButton.textContent = jump.direction === 'ancestor'
-        ? `← ${jump.hiddenCount} earlier revision${jump.hiddenCount === 1 ? '' : 's'}`
-        : `${jump.hiddenCount} later revision${jump.hiddenCount === 1 ? '' : 's'} →`;
-      jumpButton.addEventListener('click', () => focusGraphOn(jump.towardId));
-      versionGraph.append(jumpButton);
-    }
+    renderGraphBanner(currentHistory);
+    renderGraphCard(currentHistory, centerId);
+    if (!graphView.centered) centerGraphOn(centerId);
+    else revealGraphNode(centerId);
+    drawGraph();
     restoreVersionsFocus(hadVersionsFocus);
   };
+
+  let graphPan = null;
+  const isGraphChrome = (target) => Boolean(target.closest?.('.graph-card, .graph-banner, .graph-controls'));
+  versionGraph.addEventListener('pointerdown', (event) => {
+    if (isGraphChrome(event.target)) return;
+    const onNode = Boolean(event.target.closest?.('.graph-node'));
+    if (!(event.button === 1 || (event.button === 0 && !onNode))) return;
+    if (event.button === 1) event.preventDefault();
+    graphPan = { id: event.pointerId, x: event.clientX, y: event.clientY, viewX: graphView.x, viewY: graphView.y };
+    versionGraph.setPointerCapture(event.pointerId);
+    versionGraph.classList.add('panning');
+  });
+  versionGraph.addEventListener('pointermove', (event) => {
+    if (!graphPan || event.pointerId !== graphPan.id) return;
+    graphView.x = graphPan.viewX + event.clientX - graphPan.x;
+    graphView.y = graphPan.viewY + event.clientY - graphPan.y;
+    scheduleGraphDraw();
+  });
+  const endGraphPan = (event) => {
+    if (!graphPan || event.pointerId !== graphPan.id) return;
+    graphPan = null;
+    versionGraph.classList.remove('panning');
+  };
+  versionGraph.addEventListener('pointerup', endGraphPan);
+  versionGraph.addEventListener('pointercancel', endGraphPan);
+  versionGraph.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    const rect = versionGraph.getBoundingClientRect();
+    zoomGraphAt(event.clientX - rect.left, event.clientY - rect.top, Math.exp(-event.deltaY * 0.0015));
+  }, { passive: false });
+  new ResizeObserver(() => { if (versionsOpen) renderLocalGraph(); }).observe(versionGraph);
 
   // Alt+Shift+F search over revision notes and change sets. Results replace
   // nothing: the graph stays visible and steps to each hit as it is browsed.
@@ -2514,7 +2503,6 @@ try {
   const renderVersions = () => {
     if (!activeHistory()) return;
     renderLocalGraph();
-    void renderPinnedVariations();
     void renderPinnedPanel();
   };
 
@@ -2664,7 +2652,7 @@ try {
       updateSelectionStatus(models[rootName].snapshot());
     }
     refreshSidebar();
-    updatePassageHistoryVisibility();
+    schedulePassageRefresh();
     updateDraftContextSummary();
     if (rootName === 'STORY' || rootName === 'METADATA' || rootName === 'COMPOSITE') {
       requestAnimationFrame(() => editors[rootName].updateBounds());
@@ -2682,6 +2670,7 @@ try {
     }
     if (open) {
       renderVersions();
+      void loadPassage().then(() => { if (versionsOpen && currentPassage(activeHistory())) renderVersions(); });
       if (focus) requestAnimationFrame(() => versionGraph.focus());
     }
     updateEditorBounds();
@@ -2795,7 +2784,8 @@ try {
 
   versionGraph.addEventListener('keydown', (event) => {
     const currentHistory = activeHistory();
-    if (!currentHistory) return;
+    // The card, banner and zoom buttons keep their own Space/Enter/arrows.
+    if (!currentHistory || isGraphChrome(event.target)) return;
     // Search navigation mode: while a search is active, Escape ends it on the node.
     if (versionSearch.active && event.key === 'Escape') {
       event.preventDefault();
@@ -3050,7 +3040,7 @@ try {
       else refreshSidebar();
       if (name === 'STORY' || name === 'METADATA') {
         refreshHistoryControls();
-        if (name === 'STORY') updatePassageHistoryVisibility();
+        if (name === 'STORY') schedulePassageRefresh();
         updateDraftContextSummary();
       }
       if (name === 'STORY' || name === 'METADATA' || name === 'CHAT') reportDirtyState();
@@ -3605,7 +3595,7 @@ try {
   attachMetadataHistory(await createHistory(models.METADATA.text));
   refreshSidebar();
   refreshChatOutline();
-  updatePassageHistoryVisibility();
+  schedulePassageRefresh();
   updateDraftContextSummary();
   renderVersions();
   reportDirtyState();
@@ -3631,7 +3621,6 @@ try {
     switchView,
     refreshSidebar,
     refreshChatOutline,
-    renderPassageHistory,
     previewDraftContext,
     getHistory: () => history,
     getMetadataHistory: () => metadataHistory,

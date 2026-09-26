@@ -133,11 +133,6 @@
             </section>
           </div>
           <div class="search-results" data-text-search-results aria-label="Text search results" hidden></div>
-          <div class="passage-history" data-passage-history aria-label="Passage history" hidden>
-            <button type="button" data-passage-history-toggle title="Show how the selected passage has changed across revisions">Passage history…</button>
-            <div class="passage-history-list" data-passage-history-list hidden></div>
-            <div class="passage-multi-compare" data-passage-multi-compare aria-label="Compare two revisions" hidden></div>
-          </div>
           <div class="sidebar-footer">
             <button type="button" class="icon-button versions-reveal" data-toggle-versions aria-label="Versions" aria-expanded="false" title="Versions"><span class="icon-glyph">history</span></button>
             <label class="context-rows-control" title="Rows of document context before and after the cursor or selection">
@@ -228,9 +223,6 @@
           <div class="versions-heading"><p class="eyebrow">Versions</p><div class="search-field" data-search-field><button type="button" class="icon-button search-glass" data-version-search-glass aria-label="Open revision search" title="Search revision notes and changes (Alt+Shift+F). Then ↑/↓, F3 or Ctrl+Alt+←/→ step through matching nodes."><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="M15 15l6 6"/></svg></button><span class="version-search-count" data-version-search-count aria-live="polite" hidden></span><input type="text" data-version-search aria-label="Search revisions" title="Search revision notes and change sets (Alt+Shift+F). Up/Down step through results, Right goes there and keeps the search, Left clears it and stays, Escape clears it and returns to the text." placeholder="Search notes and changes…"><button type="button" class="icon-button" data-version-search-prev disabled title="Previous matching revision (Up, Shift+F3, Ctrl+Alt+←; Ctrl+Alt+↑ for the first)" aria-label="Previous matching revision"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg></button><button type="button" class="icon-button" data-version-search-next disabled title="Next matching revision (Down, F3, Ctrl+Alt+→; Ctrl+Alt+↓ for the last)" aria-label="Next matching revision"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button></div></div>
           <div class="version-graph" data-version-graph aria-label="Version graph" tabindex="0"></div>
         </div>
-        <aside class="version-inspector" data-version-inspector aria-label="Pinned variations">
-          <p>Explore with arrow keys. Space pins or unpins a node, Enter checks it out and returns to the text.</p>
-        </aside>
       </section>
     </div>
     <script type="module" src="./app.js"></script>

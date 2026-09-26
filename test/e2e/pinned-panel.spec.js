@@ -104,7 +104,7 @@ test('pinned versions open a read-only cherry-pick panel; Enter checks out, Tab 
       return history.revisions.get(history.currentRevision).parents;
     });
     expect(parents).toEqual([0, 1]);
-    await expect(graph.locator('.graph-edges line.secondary')).toHaveCount(1);
+    await expect(graph.locator('.graph-edges path.secondary')).toHaveCount(1);
 
     // Closing the panel unpins everything.
     await panel.getByRole('button', { name: /Close pinned versions/ }).click();

@@ -31,10 +31,10 @@ test('adopting a compared passage opens an editable Composite, tracks provenance
     const originalStory = await window.evaluate(() => window.__noirDraftTest.model.text);
 
     await window.evaluate(({ from, to }) => window.__noirDraftTest.editors.STORY.setSelection(from, to), positions);
-    await window.getByRole('button', { name: 'Passage history…' }).click();
+    await window.getByRole('button', { name: 'Versions', exact: true }).click();
 
-    const baseEntry = window.locator('.passage-history-entry', { hasText: 'Base state' });
-    await baseEntry.getByRole('button', { name: 'Use this version' }).click();
+    await window.locator('[data-version-graph]').getByRole('button', { name: /^Revision 1\b/ }).click();
+    await window.getByRole('button', { name: 'Use this version of the passage in the composite' }).click();
 
     // Adopting opens the Composite view; the checked-out STORY must stay untouched.
     const compositeEditor = window.getByRole('textbox', { name: 'Composite source' });
@@ -104,8 +104,9 @@ test('discarding a composite creates no revision and leaves every source revisio
     });
 
     await window.evaluate(({ from, to }) => window.__noirDraftTest.editors.STORY.setSelection(from, to), positions);
-    await window.getByRole('button', { name: 'Passage history…' }).click();
-    await window.locator('.passage-history-entry', { hasText: 'Base state' }).getByRole('button', { name: 'Use this version' }).click();
+    await window.getByRole('button', { name: 'Versions', exact: true }).click();
+    await window.locator('[data-version-graph]').getByRole('button', { name: /^Revision 1\b/ }).click();
+    await window.getByRole('button', { name: 'Use this version of the passage in the composite' }).click();
 
     const revisionCountBefore = await window.evaluate(() => window.__noirDraftTest.getHistory().revisions.size);
     await window.getByRole('button', { name: 'Discard' }).click();
