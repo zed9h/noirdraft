@@ -2662,7 +2662,7 @@ send_response                  the closing message; ends the turn. After changes
 Block-flow tools:
 
 ```text
-initialize_changes               grand intent; per notebook: intent, target length, start = selection | blank
+initialize_changes_once               grand intent; per notebook: intent, target length, start = selection | blank
 edit_notebook                  batched range operations on one notebook's numbered paragraphs
 review_notebook                model's editorial findings + next_intent (no approve/retract verdict)
 save_notebook                record the notebook as a revision; still editable afterwards

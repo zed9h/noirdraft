@@ -7,7 +7,7 @@ const protocol = 'Use NoirDraft native tools.';
 const call = (name, args, id) => ({ id: `call_${id}`, type: 'function', function: { name, arguments: JSON.stringify(args) } });
 const response = (calls, raw = 'response') => ({ message: { role: 'assistant', content: null, tool_calls: calls }, raw });
 const clean = { sentence_integrity: true, mechanics: true, clarity: true, style: true };
-const open = (notebooks, intent = 'Rewrite the passage.') => call('initialize_changes', { intent, notebooks }, 'open');
+const open = (notebooks, intent = 'Rewrite the passage.') => call('initialize_changes_once', { intent, notebooks }, 'open');
 const edit = (operations, notebook, id = 'edit') => call('edit_notebook', { ...(notebook ? { notebook } : {}), operations }, id);
 const reviewCall = (next_intent = 'Submit it.', extra = {}, id = 'review') => call('review_notebook', { copyedit: clean, next_intent, ...extra }, id);
 const submit = (notebook, id = 'submit') => call('save_notebook', notebook ? { notebook } : {}, id);
@@ -27,11 +27,17 @@ const script = (steps) => { let index = 0; const seen = []; return { seen, async
 const closing = [call('send_response', { message: 'Done.' }, 'say-done')];
 const finishing = [call('finish_changes', {}, 'finish'), ...closing];
 
-test('initialize_changes shows the review with intents, read-only context, and numbered paragraphs', async () => {
+test('initialize_changes_once shows the review with intents, read-only context, and numbered paragraphs', async () => {
   const history = await createHistory('Before. Original. After.');
-  const client = script([open([{ intent: 'Sharper.', target_words: 20, start: 'selection' }]), edit([{ op: 'replace', paragraph_id: 1, text: 'Sharp.' }]), reviewCall(), submit(), ...finishing]);
+  const client = script([open([{ intent: 'Sharper.', target_words: 20, start: 'selection' }]), reviewCall('Sharpen the line.', {}, 'first'), edit([{ op: 'replace', paragraph_id: 1, text: 'Sharp.' }]), reviewCall(), submit(), ...finishing]);
   const result = await requestRewrite({ client, history, baseRevisionId: 0, range: [8, 17], mode: 'block', inlineWordLimit: 0, request: 'Sharpen it.', agentProtocol: protocol });
-  const form = client.seen[1];
+  const initialized = client.seen[1];
+  assert.match(initialized, /NOIRDRAFT CHANGES INITIALIZED/);
+  assert.match(initialized, /Setup is done and never repeats/);
+  assert.match(initialized, /Notebook 1: Sharper\. \(about 20 words\)/);
+  assert.match(initialized, /call review_notebook on notebook 1/);
+  assert.doesNotMatch(initialized, /NOTEBOOK REVIEW/);
+  const form = client.seen[2];
   assert.match(form, /NOIRDRAFT NOTEBOOK REVIEW/);
   assert.match(form, /Overall intent: Rewrite the passage\./);
   assert.match(form, /Notebook 1 of 1 — Sharper\./);
@@ -159,7 +165,7 @@ test('chat and change links appear in the order they happen', async () => {
   ]);
   const result = await requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol });
   assert.equal(result.chat, 'I will try.\n\n[#1](noirdraft://version/STORY/1)\n\nHere it is.');
-  assert.match(client.seen.filter((text) => /COMMENT ADDED/.test(text)).at(-1), /Start with initialize_changes/);
+  assert.match(client.seen.filter((text) => /COMMENT ADDED/.test(text)).at(-1), /Start with initialize_changes_once/);
 });
 
 test('a send_response submits ready notebooks first, so their link precedes the message', async () => {
@@ -256,7 +262,7 @@ test('a whole-paragraph selection gets the notebook toolset', async () => {
   const seenTools = [];
   const client = { async chatCompletion(request) { seenTools.push(request.tools.map((item) => item.function.name)); return response([call('send_response', { message: 'Hi.' }, 'r')]); } };
   await requestRewrite({ client, history, baseRevisionId: 0, range: [0, original.length], request: 'hi', agentProtocol: protocol });
-  assert.deepEqual(seenTools[0], ['comment_before_changes', 'initialize_changes', 'edit_notebook', 'review_notebook', 'save_notebook', 'clear_notebook', 'finish_changes', 'send_response']);
+  assert.deepEqual(seenTools[0], ['comment_before_changes', 'initialize_changes_once', 'edit_notebook', 'review_notebook', 'save_notebook', 'clear_notebook', 'finish_changes', 'send_response']);
 });
 
 test('inline mode: retracted alternatives are removed, a fresh batch continues, and links keep their order', async () => {
@@ -300,11 +306,11 @@ test('comment_before_changes is rejected once changes have started, and tools of
   const story = 'A quiet street.';
   const history = await createHistory(story);
   const corrections = [];
-  const client = script([propose(['loud']), call('comment_before_changes', { message: 'Late.' }, 'late'), call('initialize_changes', { intent: 'x', notebooks: [{ intent: 'a', target_words: 5 }] }, 'wrong'), reviewEdits([editReview(1)]), call('send_response', { message: 'Done.' }, 'end')]);
+  const client = script([propose(['loud']), call('comment_before_changes', { message: 'Late.' }, 'late'), call('initialize_changes_once', { intent: 'x', notebooks: [{ intent: 'a', target_words: 5 }] }, 'wrong'), reviewEdits([editReview(1)]), call('send_response', { message: 'Done.' }, 'end')]);
   const wrapped = { async chatCompletion(request) { corrections.push(request.messages.filter((m) => m.content?.includes?.('manager_correction')).map((m) => m.content).join('')); return client.chatCompletion(request); } };
   await requestRewrite({ client: wrapped, history, baseRevisionId: 0, range: shortRange(story, 'quiet'), request: 'Options.', agentProtocol: protocol });
   assert.match(corrections.join('\n'), /Changes have already started/);
-  assert.match(corrections.join('\n'), /"initialize_changes" is not available/);
+  assert.match(corrections.join('\n'), /"initialize_changes_once" is not available/);
 });
 
 test('an intent that names an internal tool is rejected with a plain-prose example, then accepted', async () => {

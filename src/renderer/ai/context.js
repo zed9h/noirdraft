@@ -32,6 +32,8 @@ export function sliceContextRows(source, from, to, rows = 12) {
  * retargeted, and chat history / rejected variants are never pulled in
  * automatically; a caller must pass them explicitly as `references`.
  */
+const RETRY_NOTE = 'The author has asked for this request again because the earlier attempt did not satisfy them. Do not reply that it was already done, and do not repeat or lightly reword the earlier result. They specifically want something different and novel: take a fresh angle, with new wording, imagery and structure.';
+
 export function composeContext({
   storyText,
   metadataText = '',
@@ -44,6 +46,7 @@ export function composeContext({
   agentProtocol = '',
   chatHistory = [],
   mode = null,
+  retry = false,
 }) {
   const documents = { STORY: storyText, METADATA: metadataText };
   const resolvedPins = [];
@@ -99,6 +102,7 @@ export function composeContext({
     '</document_context>',
     mode ? xmlElement('placement', mode === 'inline' ? 'If the request calls for an edit, it goes inside a paragraph: use inline alternatives. If it is a question or conversation, just answer.' : 'If the request calls for an edit, it goes at whole paragraphs or a blank line: draft with notebooks. If it is a question or conversation, just answer.', ` mode="${mode}"`) : '',
     xmlElement('request', request),
+    retry ? xmlElement('retry', RETRY_NOTE) : '',
     '</noirdraft_turn>',
   ].filter(Boolean).join('\n');
   return { components, staticPrompt, turnPrompt, prompt: `${staticPrompt}\n\n${turnPrompt}`, unresolvedPins };

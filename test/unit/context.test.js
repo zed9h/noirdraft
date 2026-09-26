@@ -124,3 +124,11 @@ test('allocateContextBudget works with an async countTokens (e.g. the real serve
   });
   assert.equal(result.total, 4);
 });
+
+test('a retry adds a note asking for something different and novel, and a normal turn does not', () => {
+  const base = { storyText: 'Story.', request: 'Again.', agentProtocol: 'Protocol.' };
+  assert.doesNotMatch(composeContext(base).turnPrompt, /<retry>/);
+  const retried = composeContext({ ...base, retry: true }).turnPrompt;
+  assert.match(retried, /<retry>/);
+  assert.match(retried, /different and novel/);
+});

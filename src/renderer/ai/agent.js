@@ -35,7 +35,7 @@ const INLINE_TOOLS = [
   tool('review_edits', 'First diagnose the whole displayed set, then copyedit every alternative in its context. Approval requires sentence integrity, mechanics, clarity, and style all true; approved alternatives are recorded, retracted ones discarded.', object({ set_overview: { ...text, description: 'A brief diagnosis of the set as a whole: its strongest quality and concrete problems to correct.' }, reviews: { type: 'array', items: assessment } }, ['set_overview', 'reviews'])),
 ];
 const BLOCK_TOOLS = [
-  tool('initialize_changes', 'Initialize the changes, once per request: declare the overall intent and every notebook (one per variation) in this single call. Never call it again to add or open a notebook; use edit_notebook to work on any of them. For a very long text or an unrequested single result, open one notebook; open several only for requested alternatives. Its result is the first notebook review.', object({ intent: { ...text, description: 'What the whole piece of writing is meant to achieve, in plain prose. The author reads it as progress; never name tools or protocol steps.' }, notebooks: { type: 'array', minItems: 1, maxItems: 6, items: notebookSpec } }, ['intent', 'notebooks'])),
+  tool('initialize_changes_once', 'One-time setup: call this exactly once, at the very start of the request, declaring the overall intent and ALL notebooks (one per variation) together. Never call it again; to work on any notebook, use edit_notebook, review_notebook or save_notebook with its number. For a very long text or an unrequested single result, open one notebook; open several only for requested alternatives. Its result asks you to review notebook 1.', object({ intent: { ...text, description: 'What the whole piece of writing is meant to achieve, in plain prose. The author reads it as progress; never name tools or protocol steps.' }, notebooks: { type: 'array', minItems: 1, maxItems: 6, items: notebookSpec } }, ['intent', 'notebooks'])),
   tool('edit_notebook', 'Apply a batch of operations to numbered notebook paragraphs. Only notebook paragraphs can be edited; the surrounding context is read-only. Its result is the updated review.', object({ notebook: notebookId, operations: { type: 'array', minItems: 1, items: operation } }, ['notebook', 'operations'])),
   tool('review_notebook', 'Give your editorial findings on the notebook as displayed in its context, and state what you will do next. This is a critique to guide the next edit, not a verdict.', object({ notebook: notebookId, copyedit, findings: { ...text, description: 'Concise, concrete problems, naming paragraph ids. Required when any check is false.' }, next_intent: { ...text, description: 'A short working note, one line of about a dozen words, in plain prose: what you will do next, or that the draft is finished and ready to be delivered. The author sees it as live progress. Never write tool or function names.' } }, ['notebook', 'copyedit', 'next_intent'])),
   tool('save_notebook', 'Record the notebook as a change to the document. Save only when you consider it good. You may edit and save it again later; each save continues the same chain.', object({ notebook: notebookId, summary: { ...text, description: 'One line, in plain prose, on what this version offers.' } }, ['notebook'])),
@@ -46,7 +46,7 @@ export const agentTools = (mode) => [COMMENT, ...(mode === 'inline' ? INLINE_TOO
 
 const EDITORIAL = 'Copyedit every alternative in its complete surrounding passage: first sentence integrity (no duplicated, missing, or stranded words); then mechanics (spelling, grammar, punctuation, capitalization, spacing, and line breaks); then clarity and coherence; then diction, rhythm, concision, tone, and consistency with the manuscript. Retract any alternative that fails a pass.';
 
-const TOOL_NAME = /\b(?:comment_before_changes|send_response|initialize_changes|edit_notebook|review_notebook|save_notebook|clear_notebook|finish_changes|propose_edits|review_edits)\b/;
+const TOOL_NAME = /\b(?:comment_before_changes|send_response|initialize_changes_once|edit_notebook|review_notebook|save_notebook|clear_notebook|finish_changes|propose_edits|review_edits)\b/;
 // Intents are shown to the author as live progress, so they must read as plain prose.
 const leaked = (value, label) => { const name = String(value ?? '').match(TOOL_NAME)?.[0]; return name ? `${label} names an internal tool (${name}). The author reads it as progress, so say it in plain prose about the writing, for example "the scene is finished and ready to be delivered" or "I will make the ending less abrupt".` : null; };
 
@@ -57,7 +57,7 @@ const CHAT_ROUND_LIMIT = 40;
 function assertComplete({ message, finishReason, raw }) {
   if (finishReason === 'length') throw new AgentError('KoboldCpp stopped before completing the tool response. Increase the output limit and retry.', { code: 'TRUNCATED_TOOL_RESPONSE', rawText: raw });
   const content = String(message?.content ?? '').trim();
-  const names = 'comment_before_changes|send_response|initialize_changes|edit_notebook|review_notebook|save_notebook|propose_edits|review_edits';
+  const names = 'comment_before_changes|send_response|initialize_changes_once|edit_notebook|review_notebook|save_notebook|propose_edits|review_edits';
   const unparsed = /^[\[{]/.test(content) && new RegExp(`"(?:tool_calls|function|${names})"`).test(content) || new RegExp(`<\\|tool_call(?:\\|>|>)|call:(?:${names})\\{|\\b(?:${names})\\s*\\(`).test(content);
   if (!message?.tool_calls?.length && unparsed) throw new AgentError('KoboldCpp returned an unparsed tool call instead of a completed response. Retry the turn.', { code: 'UNPARSED_TOOL_CALL', rawText: raw });
   if (!message?.tool_calls?.length) throw new AgentError('KoboldCpp did not return the required native tool call. Retry the turn.', { code: 'MISSING_REQUIRED_TOOL_CALL', rawText: raw });
@@ -67,7 +67,7 @@ function retainBreak(value, target) { const ending = String(target).match(/(?:\r
 function word(value) { return /[\p{L}\p{N}]/u.test(value); }
 function inserted(value, before, after) { let result = String(value); if (word(before) && word(result[0] ?? '')) result = ` ${result}`; if (word(result.at(-1) ?? '') && word(after)) result = `${result} `; return result; }
 
-export async function requestRewrite({ client, history, baseRevisionId, range, mode: forcedMode, inlineWordLimit = INLINE_WORD_LIMIT, root = 'STORY', contextStoryText, request, metadataText = '', pins = [], references = [], chatHistory = [], contextRows = 12, agentProtocol, generationOptions = {}, onProgress, signal }) {
+export async function requestRewrite({ client, history, baseRevisionId, range, mode: forcedMode, inlineWordLimit = INLINE_WORD_LIMIT, root = 'STORY', contextStoryText, request, metadataText = '', pins = [], references = [], chatHistory = [], retry = false, contextRows = 12, agentProtocol, generationOptions = {}, onProgress, signal }) {
   const base = await reconstructRevision(history, baseRevisionId);
   const [from, to] = range;
   if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to < from || to > base.length) throw new AgentError('The selected range is invalid for its base revision.', { code: 'INVALID_RANGE' });
@@ -76,7 +76,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
   let tools = agentTools(mode);
   let allowed = new Set(tools.map((item) => item.function.name));
   const composeMode = mode;
-  const composed = composeContext({ mode: composeMode, storyText: contextStoryText ?? (root === 'STORY' ? base : ''), metadataText, pins, references, before: context.before, target: context.target, after: context.after, request, agentProtocol, chatHistory });
+  const composed = composeContext({ mode: composeMode, storyText: contextStoryText ?? (root === 'STORY' ? base : ''), metadataText, pins, references, before: context.before, target: context.target, after: context.after, request, agentProtocol, chatHistory, retry });
   const prompt = `${composed.staticPrompt}\n\n${composed.turnPrompt}`;
   const transcript = [{ role: 'system', content: composed.staticPrompt }, { role: 'user', content: composed.turnPrompt }];
   const trace = [];
@@ -329,7 +329,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
       if (typeof args.message !== 'string' || !args.message.trim()) return reject('comment_before_changes requires a nonempty message.');
       if (notebooks.length || batchNumber) return reject('Changes have already started. Use send_response after the work to explain what was done.');
       segments.push({ say: args.message.trim() });
-      return accept(['NOIRDRAFT COMMENT ADDED', 'Your comment was added to the reply. Now start the work, or, if no edit is needed, answer with send_response.', mode === 'inline' ? 'Start with propose_edits.' : 'Start with initialize_changes.'].join('\n'));
+      return accept(['NOIRDRAFT COMMENT ADDED', 'Your comment was added to the reply. Now start the work, or, if no edit is needed, answer with send_response.', mode === 'inline' ? 'Start with propose_edits.' : 'Start with initialize_changes_once.'].join('\n'));
     }
     if (name === 'send_response') {
       if (typeof args.message !== 'string' || !args.message.trim()) return reject('send_response requires a nonempty message.');
@@ -350,11 +350,11 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
       if (!objective) return reject('There is no active objective to review. Call propose_edits first.');
       return assessBatch(args.set_overview, args.reviews);
     }
-    if (name === 'initialize_changes') {
+    if (name === 'initialize_changes_once') {
       if (closed) return reject('Your work is finished. Tell the author what happened with send_response.');
-      if (notebooks.length) return reject('Notebooks are already open. Use edit_notebook on them, or call finish_changes.');
-      if (typeof args.intent !== 'string' || !args.intent.trim()) return reject('initialize_changes requires the overall intent of the writing.');
-      if (!Array.isArray(args.notebooks) || !args.notebooks.length || args.notebooks.length > MAX_NOTEBOOKS) return reject(`initialize_changes requires between 1 and ${MAX_NOTEBOOKS} notebooks.`);
+      if (notebooks.length) return reject(`The changes are already initialized: that setup step happens exactly once and is done. Continue with edit_notebook (notebook: ${activeId}) or review_notebook on the notebook you want to work on next.`);
+      if (typeof args.intent !== 'string' || !args.intent.trim()) return reject('initialize_changes_once requires the overall intent of the writing.');
+      if (!Array.isArray(args.notebooks) || !args.notebooks.length || args.notebooks.length > MAX_NOTEBOOKS) return reject(`initialize_changes_once requires between 1 and ${MAX_NOTEBOOKS} notebooks.`);
       const specs = args.notebooks;
       const bad = specs.findIndex((spec) => typeof spec?.intent !== 'string' || !spec.intent.trim() || !Number.isSafeInteger(spec.target_words) || spec.target_words < 1 || (spec.start != null && !['selection', 'blank'].includes(spec.start)));
       if (bad >= 0) return reject(`Notebook ${bad + 1} needs an intent and a positive target_words; start, if given, is selection or blank.`);
@@ -368,10 +368,10 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
       notebooks = specs.map((spec, index) => createNotebook({ id: index + 1, intent: spec.intent.trim(), targetWords: spec.target_words, seed: (spec.start ?? (context.target ? 'selection' : 'blank')) === 'selection' ? context.target : '' }));
       activeId = 1;
       roundLimit = CHAT_ROUND_LIMIT + 4 * totalHard();
-      return accept(form(notebooks[0]));
+      return accept(['NOIRDRAFT CHANGES INITIALIZED', `Setup is done and never repeats. ${notebooks.length === 1 ? 'Your notebook is' : `Your ${notebooks.length} notebooks are`} open:`, ...notebooks.map((notebook) => `- Notebook ${notebook.id}: ${notebook.intent} (about ${notebook.targetWords} words)`), '', `Next: call review_notebook on notebook 1. It shows the notebook in its context; state what you will do first in next_intent. From here on you only cycle on edit_notebook, review_notebook and save_notebook.`].join('\n'));
     }
     if (['edit_notebook', 'review_notebook', 'save_notebook', 'clear_notebook'].includes(name)) {
-      if (!notebooks.length) return reject('There are no open notebooks. Call initialize_changes first.');
+      if (!notebooks.length) return reject('There are no open notebooks. Call initialize_changes_once first.');
       if (closed) return reject('Your work is finished. Tell the author what happened with send_response.');
     }
     if (name === 'edit_notebook') {
