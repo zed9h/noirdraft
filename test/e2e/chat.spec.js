@@ -347,11 +347,11 @@ test('a failed turn can be retried in place without confirmation', async () => {
     await window.getByLabel('Chat prompt').fill('Try again.');
     await window.getByRole('button', { name: 'Send' }).click();
     const history = window.getByLabel('Chat history');
-    await expect(history).toContainText('KoboldCpp generation failed.');
+    await expect(history).toContainText('The chat request failed');
     await expect(history.getByRole('button', { name: 'Retry call' })).toBeVisible();
     await expect(history.locator('.chat-turn-pending')).toHaveCount(1);
     await history.getByRole('button', { name: 'Retry call' }).click();
-    await expect(history).toContainText('KoboldCpp generation failed.');
+    await expect(history).toContainText('The chat request failed');
     await expect(history.locator('.chat-turn-pending')).toHaveCount(1);
   } finally {
     await application.close();

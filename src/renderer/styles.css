@@ -195,6 +195,10 @@ button { font: inherit; }
 .overflow-menu button[aria-pressed="false"]::before { content: "\2610"; }
 .overflow-menu button[aria-pressed="true"]::before { content: "\2611"; }
 
+.overflow-select { display: flex; align-items: center; gap: .5rem; padding: .3rem .5rem .3rem 2.1rem; color: inherit; }
+.overflow-select[hidden] { display: none; }
+.overflow-select select { flex: 1; min-width: 0; max-width: 18rem; background: #26221d; color: inherit; border: 1px solid #3a342e; border-radius: .2rem; }
+
 .save-note-popover {
   position: absolute;
   top: 2.6rem;

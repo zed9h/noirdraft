@@ -55,12 +55,12 @@ const MAX_NOTEBOOKS = 6;
 const CHAT_ROUND_LIMIT = 40;
 
 function assertComplete({ message, finishReason, raw }) {
-  if (finishReason === 'length') throw new AgentError('KoboldCpp stopped before completing the tool response. Increase the output limit and retry.', { code: 'TRUNCATED_TOOL_RESPONSE', rawText: raw });
+  if (finishReason === 'length') throw new AgentError('The AI stopped before completing the tool response. Increase the output limit and retry.', { code: 'TRUNCATED_TOOL_RESPONSE', rawText: raw });
   const content = String(message?.content ?? '').trim();
   const names = 'comment_before_changes|send_response|initialize_changes_once|edit_notebook|review_notebook|save_notebook|propose_edits|review_edits';
   const unparsed = /^[\[{]/.test(content) && new RegExp(`"(?:tool_calls|function|${names})"`).test(content) || new RegExp(`<\\|tool_call(?:\\|>|>)|call:(?:${names})\\{|\\b(?:${names})\\s*\\(`).test(content);
-  if (!message?.tool_calls?.length && unparsed) throw new AgentError('KoboldCpp returned an unparsed tool call instead of a completed response. Retry the turn.', { code: 'UNPARSED_TOOL_CALL', rawText: raw });
-  if (!message?.tool_calls?.length) throw new AgentError('KoboldCpp did not return the required native tool call. Retry the turn.', { code: 'MISSING_REQUIRED_TOOL_CALL', rawText: raw });
+  if (!message?.tool_calls?.length && unparsed) throw new AgentError('The AI returned an unparsed tool call instead of a completed response. Retry the turn.', { code: 'UNPARSED_TOOL_CALL', rawText: raw });
+  if (!message?.tool_calls?.length) throw new AgentError('The AI did not return the required native tool call. Retry the turn.', { code: 'MISSING_REQUIRED_TOOL_CALL', rawText: raw });
 }
 function receipt(status, reason, extra = {}) { return JSON.stringify({ status, ...(reason ? { reason } : {}), ...extra }); }
 function retainBreak(value, target) { const ending = String(target).match(/(?:\r\n|\n)+$/)?.[0]; return !ending || /(?:\r\n|\n)$/.test(value) ? value : `${value}${ending}`; }
@@ -90,7 +90,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
       message = response.message; calls = message.tool_calls;
     } catch (cause) {
       if (cause?.name === 'AbortError') throw new AgentError('Generation was cancelled.', { code: 'ABORTED', cause, rawText: raw });
-      throw new AgentError(`KoboldCpp generation failed.${cause?.message ? ` ${cause.message}` : ''}`, { code: cause instanceof KoboldError ? cause.code : 'GENERATE_FAILED', cause, rawText: cause?.rawText ?? raw });
+      throw new AgentError(cause instanceof KoboldError ? cause.message : `AI generation failed.${cause?.message ? ` ${cause.message}` : ''}`, { code: cause instanceof KoboldError ? cause.code : 'GENERATE_FAILED', cause, rawText: cause?.rawText ?? raw });
     }
   };
   await getResponse();
@@ -439,7 +439,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
 
   report();
   for (let round = 0; round < roundLimit && !complete; round += 1) {
-    if (!Array.isArray(calls) || !calls.length) throw new AgentError('KoboldCpp did not return a tool call.', { code: 'MISSING_REQUIRED_TOOL_CALL', rawText: raw });
+    if (!Array.isArray(calls) || !calls.length) throw new AgentError('The AI did not return a tool call.', { code: 'MISSING_REQUIRED_TOOL_CALL', rawText: raw });
     const entries = [];
     for (const call of calls) entries.push({ call, ...(await execute(call)) });
     for (const entry of entries) trace.push(`[noirdraft tool result: ${entry.call.id}]\n${entry.content}\n[noirdraft end tool result: ${entry.call.id}]`);
@@ -457,9 +457,9 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
     }
     await getResponse(); report();
   }
-  if (!complete) throw new AgentError('KoboldCpp did not finish the turn. Retry the turn.', { code: 'UNFINISHED_TURN', rawText: raw });
+  if (!complete) throw new AgentError('The AI did not finish the turn. Retry the turn.', { code: 'UNFINISHED_TURN', rawText: raw });
   const chat = finalChat();
-  if (!chat) throw new AgentError('KoboldCpp finished without any reply for the author.', { code: 'EMPTY_RESPONSE', rawText: raw });
+  if (!chat) throw new AgentError('The AI finished without any reply for the author.', { code: 'EMPTY_RESPONSE', rawText: raw });
   const finalHeads = heads();
   return { revision: finalHeads[0] ?? null, revisions: finalHeads, generated: finalHeads[0] ? texts.get(finalHeads[0].id) : undefined, chat, changes: finalHeads.map((revision) => texts.get(revision.id)), snapshots, rawResponse: raw, prompt, unresolvedPins: composed.unresolvedPins, anchor: { root, baseRevisionId, range: [from, to], targetHash: await hashStory(context.target), before: context.before, after: context.after } };
 }

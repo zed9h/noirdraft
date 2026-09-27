@@ -37,10 +37,10 @@ export async function generateNote({ client, origin, parentText, resultText, aff
     for await (const token of client.generateStream({ prompt, max_length: 60 }, { signal })) text += token;
   } catch (cause) {
     if (cause?.name === 'AbortError') throw cause;
-    throw new NoteError('KoboldCpp note generation failed.', { code: cause?.code ?? 'GENERATE_FAILED', cause });
+    throw new NoteError(cause?.message ? `Note generation failed. ${cause.message}` : 'Note generation failed.', { code: cause?.code ?? 'GENERATE_FAILED', cause });
   }
 
   const note = text.trim().split('\n')[0].trim();
-  if (note === '') throw new NoteError('KoboldCpp returned an empty note.', { code: 'EMPTY_NOTE' });
+  if (note === '') throw new NoteError('The AI returned an empty note.', { code: 'EMPTY_NOTE' });
   return note;
 }

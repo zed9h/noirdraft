@@ -1,11 +1,51 @@
 export class KoboldError extends Error {
-  constructor(message, { code, cause, rawText = null } = {}) {
+  constructor(message, { code, cause, rawText = null, status = null } = {}) {
     super(message, { cause });
+    this.status = status;
     this.name = 'KoboldError';
     this.code = code;
     this.rawText = rawText;
   }
 }
+
+const STATUS_HINTS = new Map([
+  [400, 'the server rejected the request as invalid'],
+  [401, 'the API key was missing or rejected; set it under More → OpenAI API…'],
+  [403, 'access was denied; check that the API key is allowed to use this model'],
+  [404, 'the endpoint or model was not found; check the API address and selected model'],
+  [408, 'the server timed out'],
+  [413, 'the request was too large for the server'],
+  [429, 'the server is rate limiting or busy; retry shortly'],
+]);
+
+function serverDetail(raw) {
+  const text = String(raw ?? '').trim();
+  if (!text) return '';
+  try {
+    const body = JSON.parse(text);
+    const found = body?.error?.message ?? body?.error ?? body?.detail ?? body?.message;
+    if (typeof found === 'string') return found.trim();
+    if (found !== undefined) return JSON.stringify(found);
+  } catch {
+    // Not JSON: fall through to the literal text.
+  }
+  return text.length > 300 ? `${text.slice(0, 300)}…` : text;
+}
+
+/** A failed HTTP response, worded by cause (authorization, missing model, server fault…). */
+function httpFailure(what, response, raw, code) {
+  const hint = STATUS_HINTS.get(response.status) ?? (response.status >= 500 ? 'the server reported an internal error' : 'the server refused the request');
+  const detail = serverDetail(raw);
+  return new KoboldError(`${what} failed (HTTP ${response.status}): ${hint}.${detail ? ` Server said: ${detail}` : ''}`, { code, rawText: raw, status: response.status });
+}
+
+/** The server could not be contacted at all: wrong address, server down, or network. */
+function unreachable(what, baseUrl, cause) {
+  const reason = cause?.cause?.code ?? cause?.cause?.message ?? cause?.message;
+  return new KoboldError(`${what} failed: could not connect to the AI server at ${baseUrl}${reason ? ` (${reason})` : ''}. Check that it is running and the address is right.`, { code: 'UNAVAILABLE', cause });
+}
+
+const SUPPORTED_MODEL = /gemma|gemini/i;
 
 function parseStreamRecord(record) {
   const dataLines = record
@@ -30,7 +70,8 @@ function parseStreamRecord(record) {
  * or misbehaving server can never affect the editor itself.
  */
 export class KoboldClient {
-  constructor(baseUrl, { fetch: fetchImpl = globalThis.fetch.bind(globalThis), apiKey = '' } = {}) {
+  constructor(baseUrl, { fetch: fetchImpl = globalThis.fetch.bind(globalThis), apiKey = '', model = '' } = {}) {
+    this.model = String(model ?? '').trim() || 'koboldcpp';
     this.baseUrl = String(baseUrl).replace(/\/+$/, '');
     this.fetch = fetchImpl;
     this.apiKey = String(apiKey ?? '').trim();
@@ -55,17 +96,55 @@ export class KoboldClient {
     }
   }
 
+  /** Model ids offered by the OpenAI-compatible /v1/models listing; [] when unavailable. */
+  async listModels() {
+    try {
+      const response = await this.fetch(`${this.baseUrl}/v1/models`, { headers: this.#headers(), signal: AbortSignal.timeout(4000) });
+      if (!response.ok) return [];
+      const body = await response.json();
+      return (Array.isArray(body?.data) ? body.data : []).map((entry) => entry?.id).filter((id) => typeof id === 'string' && SUPPORTED_MODEL.test(id));
+    } catch {
+      return [];
+    }
+  }
+
+  /** Config files KoboldCpp can switch to; [] unless it runs with --admin and --admindir. */
+  async listAdminConfigs() {
+    try {
+      const response = await this.fetch(`${this.baseUrl}/api/admin/list_options`, { headers: this.#headers(), signal: AbortSignal.timeout(4000) });
+      if (!response.ok) return [];
+      const body = await response.json();
+      return Array.isArray(body) ? body.filter((name) => typeof name === 'string' && SUPPORTED_MODEL.test(name)) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Asks KoboldCpp to restart with another config. The server goes away while
+   * it reloads, so callers watch checkAvailability() to learn when it is back. */
+  async reloadConfig(filename) {
+    let response;
+    try {
+      response = await this.fetch(`${this.baseUrl}/api/admin/reload_config`, {
+        method: 'POST', headers: this.#headers(), body: JSON.stringify({ filename }),
+      });
+    } catch (cause) {
+      throw unreachable('Switching models', this.baseUrl, cause);
+    }
+    if (!response.ok) throw httpFailure('Switching models', response, await response.text().catch(() => ''), 'RELOAD_FAILED');
+  }
+
   async fetchContextLength() {
     let response;
     try {
       response = await this.fetch(`${this.baseUrl}/api/v1/config/max_context_length`, { headers: this.#headers() });
     } catch (cause) {
-      throw new KoboldError('Could not reach KoboldCpp to query the context length.', { code: 'UNAVAILABLE', cause });
+      throw unreachable('Reading the context length', this.baseUrl, cause);
     }
-    if (!response.ok) throw new KoboldError('KoboldCpp rejected the context-length query.', { code: 'CONTEXT_LENGTH_FAILED' });
+    if (!response.ok) throw httpFailure('Reading the context length', response, await response.text().catch(() => ''), 'CONTEXT_LENGTH_FAILED');
     const body = await this.#readJSON(response);
     const value = Number(body.value);
-    if (!Number.isFinite(value)) throw new KoboldError('KoboldCpp returned a malformed context length.', { code: 'MALFORMED_RESPONSE' });
+    if (!Number.isFinite(value)) throw new KoboldError('The AI server returned a malformed context length.', { code: 'MALFORMED_RESPONSE' });
     return value;
   }
 
@@ -78,12 +157,12 @@ export class KoboldClient {
         body: JSON.stringify({ prompt: String(prompt) }),
       });
     } catch (cause) {
-      throw new KoboldError('Could not reach KoboldCpp to count tokens.', { code: 'UNAVAILABLE', cause });
+      throw unreachable('Counting tokens', this.baseUrl, cause);
     }
-    if (!response.ok) throw new KoboldError('KoboldCpp rejected the token-count request.', { code: 'TOKEN_COUNT_FAILED' });
+    if (!response.ok) throw httpFailure('Counting tokens', response, await response.text().catch(() => ''), 'TOKEN_COUNT_FAILED');
     const body = await this.#readJSON(response);
     const value = Number(body.value);
-    if (!Number.isFinite(value)) throw new KoboldError('KoboldCpp returned a malformed token count.', { code: 'MALFORMED_RESPONSE' });
+    if (!Number.isFinite(value)) throw new KoboldError('The AI server returned a malformed token count.', { code: 'MALFORMED_RESPONSE' });
     return value;
   }
 
@@ -103,10 +182,10 @@ export class KoboldClient {
       });
     } catch (cause) {
       if (cause?.name === 'AbortError') throw cause;
-      throw new KoboldError('Could not reach KoboldCpp to start generation.', { code: 'UNAVAILABLE', cause });
+      throw unreachable('Generation', this.baseUrl, cause);
     }
     if (!response.ok || !response.body) {
-      throw new KoboldError('KoboldCpp rejected the generation request.', { code: 'GENERATE_FAILED' });
+      throw httpFailure('Generation', response, await response.text().catch(() => ''), 'GENERATE_FAILED');
     }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -147,7 +226,7 @@ export class KoboldClient {
   async chatCompletion({ messages, tools = [], toolChoice = 'auto', maxTokens = 200, temperature = 0, signal }) {
     let response;
     try {
-      const payload = { model: 'koboldcpp', messages, max_tokens: maxTokens, temperature };
+      const payload = { model: this.model, messages, max_tokens: maxTokens, temperature };
       if (tools.length > 0) {
         payload.tools = tools;
         payload.tool_choice = toolChoice;
@@ -158,24 +237,24 @@ export class KoboldClient {
       });
     } catch (cause) {
       if (cause?.name === 'AbortError') throw cause;
-      throw new KoboldError('Could not reach KoboldCpp chat completions.', { code: 'UNAVAILABLE', cause });
+      throw unreachable('The chat request', this.baseUrl, cause);
     }
     let raw;
     try {
       raw = await response.text();
     } catch (cause) {
-      throw new KoboldError('KoboldCpp returned an unreadable chat response.', { code: 'MALFORMED_RESPONSE', cause });
+      throw new KoboldError('The AI server returned an unreadable chat response.', { code: 'MALFORMED_RESPONSE', cause });
     }
-    if (!response.ok) throw new KoboldError('KoboldCpp rejected the chat completion.', { code: 'CHAT_COMPLETION_FAILED', rawText: raw });
+    if (!response.ok) throw httpFailure('The chat request', response, raw, 'CHAT_COMPLETION_FAILED');
     let body;
     try {
       body = JSON.parse(raw);
     } catch (cause) {
-      throw new KoboldError('KoboldCpp returned a malformed chat response.', { code: 'MALFORMED_RESPONSE', cause, rawText: raw });
+      throw new KoboldError('The AI server returned a malformed chat response.', { code: 'MALFORMED_RESPONSE', cause, rawText: raw });
     }
     const choice = body?.choices?.[0];
     const message = choice?.message;
-    if (!message || !Array.isArray(message.tool_calls ?? [])) throw new KoboldError('KoboldCpp returned a malformed chat response.', { code: 'MALFORMED_RESPONSE', rawText: raw });
+    if (!message || !Array.isArray(message.tool_calls ?? [])) throw new KoboldError('The AI server returned a malformed chat response.', { code: 'MALFORMED_RESPONSE', rawText: raw });
     return { message, finishReason: choice.finish_reason ?? null, raw };
   }
 
@@ -187,24 +266,24 @@ export class KoboldClient {
     try {
       response = await this.fetch(`${this.baseUrl}/v1/chat/completions`, {
         method: 'POST', headers: this.#headers(),
-        body: JSON.stringify({ model: 'koboldcpp', messages, max_tokens: maxTokens, temperature, stream: true }), signal,
+        body: JSON.stringify({ model: this.model, messages, max_tokens: maxTokens, temperature, stream: true }), signal,
       });
     } catch (cause) {
       if (cause?.name === 'AbortError') throw cause;
-      throw new KoboldError('Could not reach KoboldCpp chat completions.', { code: 'UNAVAILABLE', cause });
+      throw unreachable('The chat request', this.baseUrl, cause);
     }
     if (!response.ok) {
       const raw = await response.text().catch(() => '');
-      throw new KoboldError('KoboldCpp rejected the chat completion.', { code: 'CHAT_COMPLETION_FAILED', rawText: raw });
+      throw httpFailure('The chat request', response, raw, 'CHAT_COMPLETION_FAILED');
     }
     const contentType = response.headers.get('content-type') ?? '';
     if (!contentType.includes('text/event-stream') || !response.body) {
       const raw = await response.text();
       let body;
-      try { body = JSON.parse(raw); } catch (cause) { throw new KoboldError('KoboldCpp returned a malformed chat response.', { code: 'MALFORMED_RESPONSE', cause, rawText: raw }); }
+      try { body = JSON.parse(raw); } catch (cause) { throw new KoboldError('The AI server returned a malformed chat response.', { code: 'MALFORMED_RESPONSE', cause, rawText: raw }); }
       const choice = body?.choices?.[0];
       const message = choice?.message;
-      if (!message || typeof message.content !== 'string') throw new KoboldError('KoboldCpp returned a malformed chat response.', { code: 'MALFORMED_RESPONSE', rawText: raw });
+      if (!message || typeof message.content !== 'string') throw new KoboldError('The AI server returned a malformed chat response.', { code: 'MALFORMED_RESPONSE', rawText: raw });
       yield { text: message.content, raw, done: true, finishReason: choice.finish_reason ?? null };
       return;
     }
@@ -247,7 +326,7 @@ export class KoboldClient {
     try {
       return await response.json();
     } catch (cause) {
-      throw new KoboldError('KoboldCpp returned a malformed response.', { code: 'MALFORMED_RESPONSE', cause });
+      throw new KoboldError('The AI server returned a malformed response.', { code: 'MALFORMED_RESPONSE', cause });
     }
   }
 }

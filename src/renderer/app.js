@@ -462,8 +462,75 @@ const startLivenessMonitor = () => {
   }, 5000);
 };
 
+let aiModelChoice = '';
+let aiModelAdmin = false; // options are server config files that need a server reload
+let aiModelSwitching = false;
+const aiModelRow = document.querySelector('[data-ai-model-row]');
+const aiModelSelect = document.querySelector('[data-ai-model]');
+const MODEL_SWITCH_TIMEOUT_MS = 5 * 60 * 1000;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Reloading restarts the server, so chat stays disconnected (state !== 'true')
+// until the server answers again, rather than failing on the first request.
+const switchAdminModel = async (client, filename) => {
+  const previousModel = koboldModel;
+  aiModelSwitching = true;
+  aiModelSelect.disabled = true;
+  setAIStatus(`Switching to ${filename}…`, 'switching');
+  onAIOffline();
+  onConnectionChange();
+  try {
+    await client.reloadConfig(filename);
+    const deadline = Date.now() + MODEL_SWITCH_TIMEOUT_MS;
+    let sawDown = false;
+    while (Date.now() < deadline) {
+      await sleep(1000);
+      if (client !== koboldClient) return;
+      const availability = await client.checkAvailability();
+      if (!availability.available) { sawDown = true; continue; }
+      if (sawDown || availability.model !== previousModel) {
+        aiModelChoice = filename;
+        await preferences?.set({ model: filename });
+        await connectToKobold(client.baseUrl);
+        return;
+      }
+    }
+    throw new Error('timed out');
+  } catch {
+    if (client !== koboldClient) return;
+    showStatus(`Switching to ${filename} did not finish; check the AI server`, true);
+    await connectToKobold(client.baseUrl);
+  } finally {
+    aiModelSwitching = false;
+    aiModelSelect.disabled = false;
+  }
+};
+
+aiModelSelect.addEventListener('change', async () => {
+  const chosen = aiModelSelect.value;
+  if (!koboldClient || aiModelSwitching) return;
+  if (aiModelAdmin) { await switchAdminModel(koboldClient, chosen); return; }
+  aiModelChoice = chosen;
+  koboldClient.model = chosen;
+  await preferences?.set({ model: chosen });
+  showStatus(`Using model ${chosen}`);
+});
+const refreshModelChoices = async (client) => {
+  const configs = await client.listAdminConfigs();
+  const models = configs.length > 0 ? configs : await client.listModels();
+  if (client !== koboldClient) return;
+  aiModelAdmin = configs.length > 0;
+  aiModelRow.hidden = models.length < 2;
+  if (models.length < 2) return;
+  aiModelSelect.replaceChildren(...models.map((id) => Object.assign(document.createElement('option'), { value: id, textContent: id })));
+  const fallback = aiModelAdmin ? '' : (models.includes(koboldModel) ? koboldModel : models[0]);
+  const chosen = models.includes(aiModelChoice) ? aiModelChoice : fallback;
+  aiModelSelect.selectedIndex = chosen ? models.indexOf(chosen) : -1;
+  if (!aiModelAdmin) client.model = chosen;
+};
+
 const connectToKobold = async (baseUrl) => {
-  koboldClient = new KoboldClient(baseUrl, { apiKey: aiApiKey });
+  koboldClient = new KoboldClient(baseUrl, { apiKey: aiApiKey, model: aiModelAdmin ? '' : aiModelChoice });
   livenessMisses = 0;
   koboldContextLength = null;
   koboldModel = null;
@@ -485,6 +552,7 @@ const connectToKobold = async (baseUrl) => {
   koboldModel = availability.model ?? null;
   setAIStatus(`Connected: ${availability.model ?? 'unknown model'}${contextLabel}`, 'true');
   showStatus(`Connected to ${availability.model ?? 'unknown model'} at ${baseUrl}`);
+  await refreshModelChoices(koboldClient);
   onConnectionChange();
   startLivenessMonitor();
 };
@@ -533,6 +601,7 @@ if (preferences) {
       saveOnEveryRevisionEnabled = stored.saveOnEveryRevision === true;
       toggleSaveOnRevisionButton.setAttribute('aria-pressed', String(saveOnEveryRevisionEnabled));
       aiApiKey = typeof stored.apiKey === 'string' ? stored.apiKey : '';
+      aiModelChoice = typeof stored.model === 'string' ? stored.model : '';
       return connectToKobold(stored.koboldUrl);
     })
     .catch(() => setAIStatus('Disconnected', 'error'));
@@ -1324,8 +1393,8 @@ try {
         }
         if (finishReason === 'length' || /\b(?:initialize_changes_once|edit_notebook|review_notebook|save_notebook)\s*\(/i.test(output)) {
           const error = new Error(finishReason === 'length'
-            ? 'KoboldCpp stopped before completing the chat response. Increase the output limit and retry.'
-            : 'KoboldCpp attempted an edit even though no passage was selected. Select text for a change, or retry the chat request.');
+            ? 'The AI stopped before completing the chat response. Increase the output limit and retry.'
+            : 'The AI attempted an edit even though no passage was selected. Select text for a change, or retry the chat request.');
           error.code = finishReason === 'length' ? 'TRUNCATED_CHAT_RESPONSE' : 'UNEXPECTED_TOOL_TEXT';
           error.rawText = rawResponse;
           throw error;
