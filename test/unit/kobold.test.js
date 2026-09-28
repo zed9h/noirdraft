@@ -45,6 +45,37 @@ test('ordinary chat streams OpenAI-compatible reply chunks as they arrive', asyn
   }
 });
 
+test('chatCompletion surfaces prompt/completion token usage when the server reports it', async () => {
+  const server = await startFakeKoboldServer({ tokens: ['A concise reply.'], usage: { prompt_tokens: 120, completion_tokens: 5 } });
+  try {
+    const result = await new KoboldClient(server.url).chatCompletion({ messages: [{ role: 'user', content: 'Hello.' }] });
+    assert.deepEqual(result.usage, { promptTokens: 120, completionTokens: 5 });
+  } finally {
+    await server.close();
+  }
+});
+
+test('chatCompletion omits usage when the server does not report it', async () => {
+  const server = await startFakeKoboldServer({ tokens: ['A concise reply.'] });
+  try {
+    const result = await new KoboldClient(server.url).chatCompletion({ messages: [{ role: 'user', content: 'Hello.' }] });
+    assert.equal(result.usage, undefined);
+  } finally {
+    await server.close();
+  }
+});
+
+test('chatCompletionStream surfaces usage on its final event when the server reports it', async () => {
+  const server = await startFakeKoboldServer({ tokens: ['A ', 'reply.'], tokenDelayMs: 1, usage: { prompt_tokens: 80, completion_tokens: 2 } });
+  try {
+    const events = [];
+    for await (const event of new KoboldClient(server.url).chatCompletionStream({ messages: [{ role: 'user', content: 'Hello.' }] })) events.push(event);
+    assert.deepEqual(events.at(-1).usage, { promptTokens: 80, completionTokens: 2 });
+  } finally {
+    await server.close();
+  }
+});
+
 test('a rejected chat completion retains its literal error body for session inspection', async () => {
   const client = new KoboldClient('http://fake.invalid', { fetch: async () => new Response('{"error":"context exhausted"}', { status: 400 }) });
   await assert.rejects(

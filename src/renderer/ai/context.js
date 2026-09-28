@@ -136,3 +136,42 @@ export async function allocateContextBudget(components, { contextLength, reserve
     overBy: Math.max(0, total - available),
   };
 }
+
+/**
+ * Trims optional, priority-ordered "buckets" (e.g. pinned sections, pinned
+ * changes, chat history) down to what fits alongside a `required` core
+ * (agent protocol, surrounding passage, request) that is never dropped.
+ * `buckets` is ordered highest-priority first; within a bucket, items are
+ * ordered highest-priority first too. Both are dropped from the end (lowest
+ * priority) inward. Throws `ContextBudgetError` (code `BUDGET_INFEASIBLE`)
+ * only when `required` alone does not fit — dropping every optional item
+ * can never make things worse.
+ */
+export async function trimToBudget({ required, buckets = [], contextLength, reservedGeneration = 0, countTokens }) {
+  const requiredBudget = await allocateContextBudget(required, { contextLength, reservedGeneration, countTokens });
+  if (!requiredBudget.fits) {
+    throw new ContextBudgetError('The agent protocol, surrounding passage, and request alone exceed the model\'s context window.', { code: 'BUDGET_INFEASIBLE' });
+  }
+  const kept = [];
+  for (const bucket of buckets) {
+    const items = [];
+    for (const item of bucket.items) items.push({ bucket: bucket.id, item, tokens: await countTokens(item.text) });
+    kept.push(items);
+  }
+  const totalOf = () => requiredBudget.total + kept.reduce((sum, items) => sum + items.reduce((s, { tokens }) => s + tokens, 0), 0);
+  const dropped = [];
+  for (let i = kept.length - 1; i >= 0 && totalOf() > requiredBudget.available; i -= 1) {
+    while (kept[i].length && totalOf() > requiredBudget.available) {
+      const removed = kept[i].pop();
+      dropped.push({ bucket: removed.bucket, id: removed.item.id, label: removed.item.label, tokens: removed.tokens });
+    }
+  }
+  return {
+    components: [...required, ...kept.flatMap((items) => items.map(({ item }) => item))],
+    dropped,
+    total: totalOf(),
+    available: requiredBudget.available,
+    contextLength,
+    reservedGeneration,
+  };
+}

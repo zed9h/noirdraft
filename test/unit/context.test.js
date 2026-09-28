@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { allocateContextBudget, composeContext, ContextBudgetError, sliceContextRows } from '../../src/renderer/ai/context.js';
+import { allocateContextBudget, composeContext, ContextBudgetError, sliceContextRows, trimToBudget } from '../../src/renderer/ai/context.js';
 
 const storyText = '# Chapter\n\nMaria walked in. The room was cold.\n\nShe sat down slowly.\n';
 const metadataText = '# Characters\n\n## Maria\n\nA cautious investigator.\n';
@@ -123,6 +123,40 @@ test('allocateContextBudget works with an async countTokens (e.g. the real serve
     countTokens,
   });
   assert.equal(result.total, 4);
+});
+
+const chars = (text) => text.length;
+
+test('trimToBudget keeps everything when it already fits', async () => {
+  const required = [{ id: 'protocol', label: 'AGENT PROTOCOL', text: 'p'.repeat(2) }, { id: 'request', label: 'REQUEST', text: 'r'.repeat(2) }];
+  const buckets = [{ id: 'sections', items: [{ id: 'a', label: 'A', text: 'x'.repeat(2) }] }];
+  const result = await trimToBudget({ required, buckets, contextLength: 100, reservedGeneration: 0, countTokens: chars });
+  assert.deepEqual(result.dropped, []);
+  assert.equal(result.components.length, 3);
+});
+
+test('trimToBudget drops the lowest-priority bucket\'s lowest-priority item first', async () => {
+  const required = [{ id: 'protocol', label: 'AGENT PROTOCOL', text: 'pp' }];
+  const buckets = [
+    { id: 'sections', items: [{ id: 'sec1', label: 'Sec 1', text: 'x'.repeat(3) }, { id: 'sec2', label: 'Sec 2', text: 'x'.repeat(3) }] },
+    { id: 'chat', items: [{ id: 'turn1', label: 'Turn 1', text: 'x'.repeat(3) }, { id: 'turn2', label: 'Turn 2', text: 'x'.repeat(3) }] },
+  ];
+  const result = await trimToBudget({ required, buckets, contextLength: 2 + 3 + 3 + 2, reservedGeneration: 0, countTokens: chars });
+  assert.deepEqual(result.dropped.map((entry) => entry.id), ['turn2', 'turn1']);
+  assert.deepEqual(result.components.map((component) => component.id), ['protocol', 'sec1', 'sec2']);
+  assert.equal(result.total, 2 + 3 + 3);
+});
+
+test('trimToBudget refuses only when the required core alone does not fit', async () => {
+  const required = [{ id: 'protocol', label: 'AGENT PROTOCOL', text: 'x'.repeat(20) }];
+  await assert.rejects(
+    trimToBudget({ required, buckets: [{ id: 'sections', items: [{ id: 'a', label: 'A', text: 'y' }] }], contextLength: 5, countTokens: chars }),
+    (error) => error instanceof ContextBudgetError,
+  );
+  await assert.rejects(
+    trimToBudget({ required, buckets: [], contextLength: 5, reservedGeneration: 0, countTokens: chars }),
+    (error) => error instanceof ContextBudgetError && error.code === 'BUDGET_INFEASIBLE',
+  );
 });
 
 test('a retry adds a note asking for something different and novel, and a normal turn does not', () => {

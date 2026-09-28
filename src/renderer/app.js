@@ -773,7 +773,6 @@ try {
     const input = chatPrompt.value.trim();
     const hasTarget = ['STORY', 'METADATA'].includes(activeRoot) && models[activeRoot].selectionStart !== models[activeRoot].selectionEnd;
     contextToggle.dataset.targetColor = hasTarget ? String(nextChatJobId % 4) : '';
-    if (!input) { chatContextSummary.textContent = 'Draft content'; return; }
     const turns = parseChatTurns(models.CHAT.text);
     const roughTurn = composeContext({
       storyText: models.STORY.text, metadataText: models.METADATA.text,
@@ -2382,6 +2381,37 @@ try {
     meta.textContent = `${revision.origin} · ${revision.timestamp}${entry?.approximate ? ' · similarity hint' : ''}`;
     const note = graphElement('p', 'version-detail-note', versionDetail);
     note.textContent = revision.note ?? '[no note]';
+    note.title = 'Double-click to edit note';
+    note.addEventListener('dblclick', () => {
+      const input = graphElement('input', 'version-detail-note-edit');
+      input.type = 'text';
+      input.value = revision.note ?? '';
+      input.placeholder = 'No note';
+      note.replaceWith(input);
+      input.focus();
+      input.select();
+      let settled = false;
+      const save = async () => {
+        if (settled) return;
+        settled = true;
+        const value = input.value.trim() || null;
+        if (value !== revision.note) {
+          revision.note = value;
+          await persistAfterCommit();
+        }
+        renderVersions();
+      };
+      const cancel = () => {
+        if (settled) return;
+        settled = true;
+        renderVersions();
+      };
+      input.addEventListener('blur', () => void save());
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') { event.preventDefault(); input.blur(); }
+        else if (event.key === 'Escape') { event.preventDefault(); cancel(); }
+      });
+    });
     const payload = graphElement('pre', 'version-detail-payload', versionDetail);
     payload.dataset.payloadType = revision.payloadType;
     if (revision.payloadType === 'patch') {

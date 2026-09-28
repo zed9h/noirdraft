@@ -13,6 +13,7 @@ export function startFakeKoboldServer(options = {}) {
     malformedStream = false,
     malformedJSON = false,
     toolCalls = null,
+    usage = null,
   } = options;
 
   const abortedKeys = new Set();
@@ -68,6 +69,7 @@ export function startFakeKoboldServer(options = {}) {
         const timer = setInterval(() => {
           if (index >= tokens.length) {
             clearInterval(timer);
+            if (usage) response.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage })}\n\n`);
             response.write('data: [DONE]\n\n');
             response.end();
             return;
@@ -118,6 +120,7 @@ export function startFakeKoboldServer(options = {}) {
         : lastTool.includes('NOIRDRAFT SAVED')
         ? calls(call('finish_changes', {}))
         : calls(call('send_chat_response_and_terminate', { message: 'Done.' }));
+      if (usage) reply.usage = usage;
       if (tokenDelayMs > 0) return setTimeout(() => sendJSON(response, 200, reply), tokenDelayMs);
       return sendJSON(response, 200, reply);
     }

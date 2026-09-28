@@ -47,6 +47,12 @@ function unreachable(what, baseUrl, cause) {
 
 const SUPPORTED_MODEL = /gemma|gemini/i;
 
+/** OpenAI-compatible `usage` (prompt_tokens/completion_tokens), when a server reports it; undefined otherwise. */
+function readUsage(body) {
+  const usage = body?.usage;
+  return Number.isFinite(usage?.prompt_tokens) ? { promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens ?? null } : undefined;
+}
+
 function parseStreamRecord(record) {
   const dataLines = record
     .split('\n')
@@ -255,7 +261,7 @@ export class KoboldClient {
     const choice = body?.choices?.[0];
     const message = choice?.message;
     if (!message || !Array.isArray(message.tool_calls ?? [])) throw new KoboldError('The AI server returned a malformed chat response.', { code: 'MALFORMED_RESPONSE', rawText: raw });
-    return { message, finishReason: choice.finish_reason ?? null, raw };
+    return { message, finishReason: choice.finish_reason ?? null, raw, usage: readUsage(body) };
   }
 
   /** Streams an ordinary OpenAI-compatible chat reply when the server offers
@@ -284,13 +290,14 @@ export class KoboldClient {
       const choice = body?.choices?.[0];
       const message = choice?.message;
       if (!message || typeof message.content !== 'string') throw new KoboldError('The AI server returned a malformed chat response.', { code: 'MALFORMED_RESPONSE', rawText: raw });
-      yield { text: message.content, raw, done: true, finishReason: choice.finish_reason ?? null };
+      yield { text: message.content, raw, done: true, finishReason: choice.finish_reason ?? null, usage: readUsage(body) };
       return;
     }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let raw = '';
+    let usage;
     try {
       while (true) {
         const { value, done } = await reader.read();
@@ -304,12 +311,13 @@ export class KoboldClient {
           buffer = buffer.slice(boundary + 2);
           const data = record.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('');
           if (data === '[DONE]') {
-            yield { text: '', raw, done: true, finishReason: 'stop' };
+            yield { text: '', raw, done: true, finishReason: 'stop', usage };
           } else if (data) {
             try {
               const event = JSON.parse(data);
+              usage = readUsage(event) ?? usage;
               const choice = event?.choices?.[0];
-              yield { text: typeof choice?.delta?.content === 'string' ? choice.delta.content : '', raw, done: Boolean(choice?.finish_reason), finishReason: choice?.finish_reason ?? null };
+              yield { text: typeof choice?.delta?.content === 'string' ? choice.delta.content : '', raw, done: Boolean(choice?.finish_reason), finishReason: choice?.finish_reason ?? null, usage: choice?.finish_reason ? usage : undefined };
             } catch {
               // Ignore malformed individual SSE records; later records may remain valid.
             }
