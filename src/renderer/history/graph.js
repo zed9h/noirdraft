@@ -149,6 +149,6 @@ export async function recordExternalEdit(history, externalStory, options = {}) {
   return commitRevision(history, recordedStory, normalized, {
     origin: options.origin ?? 'recovery',
     timestamp: options.timestamp,
-    note: options.note ?? 'Recorded externally edited STORY.',
+    note: options.note ?? 'Recorded an externally edited root.',
   });
 }

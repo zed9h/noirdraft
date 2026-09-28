@@ -2141,6 +2141,23 @@ try {
   };
   const clearPassage = () => { passageToken += 1; passage = null; renderVersions(); };
 
+  // Revision ids restart at 0 in every freshly attached history, so any
+  // versions-panel state that names a revision by id — focus, inspection,
+  // pins, the passage highlight, and copy/paste provenance — must not
+  // survive a document switch: a stale id can coincidentally resolve
+  // against the new history and silently point at the wrong revision.
+  const resetVersionsPanelState = () => {
+    passageToken += 1;
+    passage = null;
+    focusedRevisionId = null;
+    inspectedRevisionId = null;
+    pinnedRevisionIds = [];
+    pendingCopies.STORY = [];
+    pendingCopies.METADATA = [];
+    explicitSources.STORY = [];
+    explicitSources.METADATA = [];
+  };
+
   const graphLayout = (currentHistory) => {
     const cache = graphLayoutCache;
     if (cache.history !== currentHistory || cache.size !== currentHistory.revisions.size) {
@@ -3212,48 +3229,100 @@ try {
   const loadDocument = async (openedDocument, { statusLabel = 'Saved' } = {}) => {
     const parsed = parseProjectDocument(openedDocument.contents);
     if (!parsed.roots.STORY) throw new Error('This document has no STORY root.');
-    project = parsed;
-    resetOutlineFolds();
     const story = projectRoot(parsed, 'STORY');
     const metadata = projectRoot(parsed, 'METADATA');
     const chat = projectRoot(parsed, 'CHAT');
+    // Every step through the recovery revisions below is async (hashing,
+    // sometimes a disk write), and none of it may touch the live editors or
+    // models yet: the STORY/METADATA/CHAT commit controllers are still bound
+    // to whatever document was open before, so a keystroke landing in that
+    // window — plausible the instant new text appears — would be committed
+    // against the wrong history and silently corrupt it (or, now, at least
+    // fail loudly with a base-hash mismatch on the next commit). Everything
+    // observable to the author happens only in the single synchronous block
+    // at the end, with the old and new histories swapped atomically inside
+    // it, so there's no gap where an edit can be misattributed.
+    const versions = projectRoot(parsed, 'VERSIONS');
+    // The VERSIONS graph is a recorded convenience, not the manuscript: the
+    // STORY/METADATA sections above are the authoritative, independently
+    // readable text. If the graph can't be trusted for any reason — a
+    // corrupted hash, a missing revision, a parse failure, whatever produced
+    // it — that must not block opening the actual content. Fall back to a
+    // single fresh revision seeded from the text on the page, exactly as if
+    // there were no VERSIONS section at all, and say so plainly rather than
+    // refusing to open or (worse) opening with a graph that quietly no
+    // longer matches what's on screen.
+    let parsedHistories;
+    let historyUnreadable = false;
+    try {
+      parsedHistories = versions?.text.trim() ? parseHistories(versions.text) : null;
+    } catch {
+      historyUnreadable = true;
+      parsedHistories = null;
+    }
+    if (!parsedHistories) {
+      parsedHistories = { STORY: await createHistory(story.text), METADATA: await createHistory(metadata?.text ?? '') };
+    }
+    let nextHistory = parsedHistories.STORY;
+    let nextMetadataHistory = parsedHistories.METADATA ?? await createHistory(metadata?.text ?? '');
+    const recoveredRoots = [];
+    if (historyUnreadable) {
+      recoveredRoots.push('STORY', 'METADATA');
+    } else {
+      let storyVerification; let metadataVerification;
+      try {
+        [storyVerification, metadataVerification] = await Promise.all([
+          verifyCurrentStory(nextHistory, story.text),
+          verifyCurrentStory(nextMetadataHistory, metadata?.text ?? ''),
+        ]);
+      } catch {
+        // A revision the current one descends from doesn't reconstruct
+        // cleanly — the graph is corrupt somewhere back in its ancestry,
+        // not just out of date. Same fallback as an unparseable VERSIONS.
+        historyUnreadable = true;
+      }
+      if (historyUnreadable) {
+        nextHistory = await createHistory(story.text);
+        nextMetadataHistory = await createHistory(metadata?.text ?? '');
+        recoveredRoots.push('STORY', 'METADATA');
+      } else {
+        if (!storyVerification.matches) {
+          await recordExternalEdit(nextHistory, story.text, { note: 'Recorded externally edited STORY.' });
+          recoveredRoots.push('STORY');
+        }
+        if (!metadataVerification.matches) {
+          await recordExternalEdit(nextMetadataHistory, metadata?.text ?? '', { note: 'Recorded externally edited METADATA.' });
+          recoveredRoots.push('METADATA');
+        }
+      }
+    }
+
+    // Synchronous from here: swap project/editors/histories in one tick.
+    project = parsed;
+    resetOutlineFolds();
     editors.STORY.replace(0, models.STORY.text.length, story.text, 'open');
     editors.METADATA.replace(0, models.METADATA.text.length, metadata?.text ?? '', 'open');
     editors.CHAT.replace(0, models.CHAT.text.length, chat?.text ?? '', 'open');
-    const versions = projectRoot(parsed, 'VERSIONS');
-    const parsedHistories = versions?.text.trim()
-      ? parseHistories(versions.text)
-      : { STORY: await createHistory(story.text), METADATA: await createHistory(metadata?.text ?? '') };
-    const nextHistory = parsedHistories.STORY;
-    const nextMetadataHistory = parsedHistories.METADATA ?? await createHistory(metadata?.text ?? '');
-    const [storyVerification, metadataVerification] = await Promise.all([
-      verifyCurrentStory(nextHistory, story.text),
-      verifyCurrentStory(nextMetadataHistory, metadata?.text ?? ''),
-    ]);
-    const recoveredRoots = [];
-    if (!storyVerification.matches) {
-      await recordExternalEdit(nextHistory, story.text);
-      recoveredRoots.push('STORY');
-    }
-    if (!metadataVerification.matches) {
-      await recordExternalEdit(nextMetadataHistory, metadata?.text ?? '');
-      recoveredRoots.push('METADATA');
-    }
     attachHistory(nextHistory);
     attachMetadataHistory(nextMetadataHistory);
+    resetVersionsPanelState();
     metadataDirty = false;
     chatDirty = false;
     revisionsUnsaved = false;
     applyProjectOptions(readOptions(models.METADATA.text));
     currentDocument = openedDocument;
     editorTitle.textContent = displayBaseName(openedDocument.filePath, saveTimestampedCopiesEnabled);
-    if (recoveredRoots.length) await persistAfterCommit();
-    showStatus(recoveredRoots.length
-      ? `Recorded external ${recoveredRoots.join(' and ')} edit as a recovery revision.`
-      : statusLabel, recoveredRoots.length ? 'warning' : false);
     refreshSidebar();
     refreshChatOutline();
+    renderVersions();
     reportDirtyState();
+
+    if (recoveredRoots.length) await persistAfterCommit();
+    showStatus(historyUnreadable
+      ? 'The saved revision history could not be read and was reset; the STORY and METADATA text opened unaffected.'
+      : recoveredRoots.length
+        ? `Recorded external ${recoveredRoots.join(' and ')} edit as a recovery revision.`
+        : statusLabel, recoveredRoots.length ? 'warning' : false);
   };
 
   const resetOutlineFolds = () => {
@@ -3306,13 +3375,19 @@ try {
   };
 
   const newDocument = async () => {
+    // See loadDocument's comment: compute both histories (async — hashing)
+    // before touching any editor/model, so there is no gap where a
+    // keystroke could be committed against the outgoing document's history.
+    const nextHistory = await createHistory(initialStory);
+    const nextMetadataHistory = await createHistory('');
     project = parseProjectDocument('STORY\n=====\n\n');
     resetOutlineFolds();
     editors.STORY.replace(0, models.STORY.text.length, initialStory, 'open');
     editors.METADATA.replace(0, models.METADATA.text.length, '', 'open');
     editors.CHAT.replace(0, models.CHAT.text.length, '', 'open');
-    attachHistory(await createHistory(initialStory));
-    attachMetadataHistory(await createHistory(''));
+    attachHistory(nextHistory);
+    attachMetadataHistory(nextMetadataHistory);
+    resetVersionsPanelState();
     metadataDirty = false;
     chatDirty = false;
     currentDocument = null;
@@ -3320,6 +3395,7 @@ try {
     showStatus('New document');
     refreshSidebar();
     refreshChatOutline();
+    renderVersions();
     reportDirtyState();
   };
 
@@ -3349,8 +3425,8 @@ try {
     }
     const externalStory = projectRoot(externalProject, 'STORY')?.text ?? '';
     const externalMetadata = projectRoot(externalProject, 'METADATA')?.text ?? '';
-    await recordExternalEdit(history, externalStory);
-    await recordExternalEdit(metadataHistory, externalMetadata);
+    await recordExternalEdit(history, externalStory, { note: 'Recorded externally edited STORY.' });
+    await recordExternalEdit(metadataHistory, externalMetadata, { note: 'Recorded externally edited METADATA.' });
     await commitRevision(history, externalStory, models.STORY.text, { origin: 'user', note: 'Reconciled after an external change to the file.' });
     await commitRevision(metadataHistory, externalMetadata, models.METADATA.text, { origin: 'user', note: 'Reconciled after an external change to the file.' });
     refreshHistoryControls();
