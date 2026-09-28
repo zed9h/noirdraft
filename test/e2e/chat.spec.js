@@ -289,7 +289,7 @@ test('ordinary chat shows its status and raw response while it is pending', asyn
     await expect(window.getByLabel('Chat history')).toContainText('Thinking…');
     await window.getByRole('button', { name: 'Show raw response for pending turn 1' }).click();
     const pendingRawDialog = window.locator('[data-context-dialog]');
-    await expect(pendingRawDialog.locator('.context-prompt')).toContainText('send_response');
+    await expect(pendingRawDialog.locator('.context-prompt')).toContainText('send_chat_response_and_terminate');
     await pendingRawDialog.getByRole('button', { name: 'Close context' }).click();
     await expect(window.getByLabel('Chat history')).toContainText('Plain chat reply.');
     await window.getByRole('button', { name: 'Show raw response for turn 1' }).click();

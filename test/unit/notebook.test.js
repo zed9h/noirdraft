@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { applyOperations, budgetFor, budgetStatus, createNotebook, isEmptyNotebook, isPlaceholder, MAX_OPERATIONS, notebookText, placeholderIds, renderReview, splitParagraphs, touchedIds, markReviewed } from '../../src/renderer/ai/notebook.js';
+import { applyOperations, budgetFor, cycleStatus, createNotebook, isEmptyNotebook, isPlaceholder, MAX_OPERATIONS, notebookText, placeholderIds, renderView, splitParagraphs } from '../../src/renderer/ai/notebook.js';
 
 const make = (seed = 'One.\n\nTwo.\n\nThree.') => createNotebook({ id: 1, intent: 'Test.', targetWords: 300, seed });
 const ids = (notebook) => notebook.paragraphs.map(({ id }) => id);
@@ -65,42 +65,40 @@ test('placeholders are whole paragraphs wrapped in brackets', () => {
   assert.deepEqual(placeholderIds(result.notebook), [4]);
 });
 
-test('touched paragraphs are those written since the last review', () => {
+test('edits are tracked since the last view, and applying one bumps the count', () => {
   const edited = applyOperations(make(), [{ op: 'replace', paragraph_id: 2, text: 'New.' }]).notebook;
-  assert.deepEqual(touchedIds(edited), [4]);
-  const reviewed = markReviewed(edited, '  Tighten the ending.  ');
-  assert.deepEqual(touchedIds(reviewed), []);
-  assert.equal(reviewed.nextIntent, 'Tighten the ending.');
-  assert.equal(reviewed.reviews, 1);
+  assert.equal(edited.editsSinceView, 1);
+  assert.equal(edited.needsView, true);
+  const twice = applyOperations(edited, [{ op: 'replace', paragraph_id: 4, text: 'Newer.' }]).notebook;
+  assert.equal(twice.editsSinceView, 2);
 });
 
 test('budget grows superlinearly and the hard ceiling is generously larger', () => {
   const small = budgetFor(100); const large = budgetFor(2000);
   assert.ok(small.hard > small.soft * 2);
   assert.ok(large.soft > small.soft * 5);
-  const notebook = { ...make(), reviews: 0 };
-  assert.match(budgetStatus(notebook), /^Review 0 of about/);
-  assert.match(budgetStatus({ ...notebook, reviews: notebook.budget.soft }), /Past the review target/);
-  assert.match(budgetStatus({ ...notebook, reviews: notebook.budget.hard }), /Deadline passed/);
+  const notebook = { ...make(), cycles: 0 };
+  assert.match(cycleStatus(notebook), /^Cycle 0 of about/);
+  assert.match(cycleStatus({ ...notebook, cycles: notebook.budget.soft }), /past the soft target/);
+  assert.match(cycleStatus({ ...notebook, cycles: notebook.budget.hard }), /hard limit .* reached/);
 });
 
-test('the review form shows intents, read-only context, ids, other notebooks, and checks', () => {
+test('the draft view shows intents, read-only context, ids, and checks', () => {
   const first = applyOperations(make(), [{ op: 'replace', paragraph_id: 3, text: '[Write the ending.]' }]).notebook;
   const other = { ...createNotebook({ id: 2, intent: 'A bleaker take.', targetWords: 300, seed: '' }) };
-  const form = renderReview({ grandIntent: 'Three takes on the scene.', notebooks: [first, other], activeId: 1, before: 'Before text.', after: 'After text.', lastEdit: 'Applied 1 operation.' });
+  const form = renderView({ grandIntent: 'Three takes on the scene.', notebooks: [first, other], activeId: 1, before: 'Before text.', after: 'After text.', guidance: 'Manager: keep going.\n\nNext: view Draft 1.' });
   assert.match(form, /Overall intent: Three takes/);
-  assert.match(form, /Notebook 1 of 2 — Test\./);
+  assert.match(form, /Draft 1 of 2 — Test\./);
   assert.match(form, /read-only/);
   assert.match(form, /\[¶4\] \(placeholder\)/);
-  assert.doesNotMatch(form, /Other notebooks|A bleaker take/);
+  assert.doesNotMatch(form, /A bleaker take/);
   assert.match(form, /Placeholders still to write: ¶4/);
-  assert.match(form, /call review_notebook/);
+  assert.match(form, /Next: view Draft 1\./);
 });
 
-test('length nagging is firm when far under target and reminds not to polish when the deadline nears', () => {
+test('length nagging is firm when far under target', () => {
   const notebook = createNotebook({ id: 1, intent: 'x', targetWords: 400, seed: 'Only a few words here.' });
-  assert.match(renderReview({ grandIntent: 'g', notebooks: [notebook], activeId: 1 }), /Well under target: the author wants substantially more/);
+  assert.match(renderView({ grandIntent: 'g', notebooks: [notebook], activeId: 1 }), /Well under target: the author wants substantially more/);
   const mid = createNotebook({ id: 1, intent: 'x', targetWords: 30, seed: 'One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty.' });
-  assert.match(renderReview({ grandIntent: 'g', notebooks: [mid], activeId: 1 }), /Still short of the target: keep writing until it reaches about 30 words/);
-  assert.match(budgetStatus({ ...notebook, reviews: notebook.budget.soft }), /keep writing rather than polishing/);
+  assert.match(renderView({ grandIntent: 'g', notebooks: [mid], activeId: 1 }), /Still short of the target: keep writing until it reaches about 30 words/);
 });

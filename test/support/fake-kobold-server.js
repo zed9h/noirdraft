@@ -85,36 +85,39 @@ export function startFakeKoboldServer(options = {}) {
       const lastTool = toolMessages.at(-1)?.content ?? '';
       const isShort = payload.tools?.some((item) => item.function?.name === 'propose_edits');
       const revisionIds = [...lastTool.matchAll(/----- REVISION #(\d+) -----/g)].map((match) => Number(match[1]));
-      const notebookNumber = Number(lastTool.match(/Notebook (\d+) (?:of \d+|is recorded)/)?.[1] ?? 1);
       const call = (name, argumentsObject, index = 1) => ({ id: `call_${toolMessages.length + 1}_${index}`, type: 'function', function: { name, arguments: JSON.stringify(argumentsObject) } });
       const calls = (...items) => ({ choices: [{ message: { role: 'assistant', content: null, tool_calls: items } }] });
+      const draftInView = Number(lastTool.match(/Draft (\d+) of \d+/)?.[1] ?? 1);
+      const draftUpdated = Number(lastTool.match(/^Draft (\d+) updated\./)?.[1] ?? 0);
+      const draftSaved = Number(lastTool.match(/Draft (\d+) is recorded/)?.[1] ?? 0);
+      const paragraphInView = Number(lastTool.match(/\[¶(\d+)\]/)?.[1] ?? 1);
       const reply = !payload.tools?.length
         ? { choices: [{ message: { role: 'assistant', content: tokens.join(''), tool_calls: [] }, finish_reason: 'stop' }] }
         : toolMessages.length === 0
         ? isGreeting
-          ? calls(call('send_response', { message: tokens.join('') }))
+          ? calls(call('send_chat_response_and_terminate', { message: tokens.join('') }))
           : isShort
           ? calls(call('propose_edits', { intent: 'Provide each requested replacement as a distinct alternative.', alternative_count: replacements.length, proposals: replacements.map((text) => ({ text })) }))
-          : calls(call('initialize_changes_once', { intent: 'Provide each requested replacement as a distinct alternative.', notebooks: replacements.map((_, index) => ({ intent: `Alternative ${index + 1}`, target_words: 1, start: 'blank' })) }))
-        : lastTool.includes('NOIRDRAFT WORK SUMMARY')
-        ? calls(call('send_response', { message: 'Done.' }))
+          : calls(call('initialize_all_drafts_once', { intent: 'Provide each requested replacement as a distinct alternative.', drafts: replacements.map((_, index) => ({ intent: `Alternative ${index + 1}`, target_words: 1, start: 'blank' })) }))
+        : lastTool.includes('NOIRDRAFT CHANGES READY')
+        ? calls(call('send_chat_response_and_terminate', { message: 'Done.' }))
         : lastTool.includes('NOIRDRAFT SWITCHED TO INLINE')
         ? calls(call('propose_edits', { intent: 'Provide each requested replacement as a distinct alternative.', alternative_count: replacements.length, proposals: replacements.map((text) => ({ text })) }))
         : lastTool.includes('NOIRDRAFT EDIT REVIEW') && revisionIds.length
         ? calls(call('review_edits', { set_overview: 'The alternatives are grammatical and appropriate in context.', reviews: revisionIds.map((revision_id) => ({ revision_id, copyedit: { sentence_integrity: true, mechanics: true, clarity: true, style: true }, comment: 'Grammatical and appropriate in context.', verdict: 'approve' })) }))
-        : lastTool.includes('NOIRDRAFT CHANGES INITIALIZED')
-        ? calls(call('review_notebook', { notebook: 1, copyedit: { sentence_integrity: true, mechanics: true, clarity: true, style: true }, next_intent: 'Write the first draft.' }))
-        : lastTool.includes('NOIRDRAFT NOTEBOOK REVIEW') && lastTool.includes('Next: call review_notebook')
-        ? calls(call('review_notebook', { notebook: notebookNumber, copyedit: { sentence_integrity: true, mechanics: true, clarity: true, style: true }, next_intent: 'Save this notebook.' }))
-        : lastTool.includes('NOIRDRAFT NOTEBOOK REVIEW') && lastTool.includes('Your plan from the last review') && toolMessages.some((message) => message.content.includes('Applied'))
-        ? calls(call('save_notebook', { notebook: notebookNumber }))
-        : (lastTool.includes('NOIRDRAFT NOTEBOOK REVIEW') && notebookNumber <= replacements.length) || (lastTool.includes('NOIRDRAFT SAVED') && notebookNumber < replacements.length)
-        ? calls(call('edit_notebook', { notebook: lastTool.includes('NOIRDRAFT SAVED') ? notebookNumber + 1 : notebookNumber, operations: [{ op: 'replace', paragraph_id: 1, text: replacements[lastTool.includes('NOIRDRAFT SAVED') ? notebookNumber : notebookNumber - 1] }] }))
+        : lastTool.includes('NOIRDRAFT DRAFTS INITIALIZED')
+        ? calls(call('view_draft', { draft: 1 }))
+        : draftUpdated
+        ? calls(call('view_draft', { draft: draftUpdated }))
+        : lastTool.includes('NOIRDRAFT DRAFT VIEW') && lastTool.includes(replacements[draftInView - 1] ?? '\0')
+        ? calls(call('save_draft', { draft: draftInView }))
+        : lastTool.includes('NOIRDRAFT DRAFT VIEW')
+        ? calls(call('replace_draft_text', { draft: draftInView, from_paragraph: paragraphInView, text: replacements[draftInView - 1] }))
+        : draftSaved && draftSaved < replacements.length
+        ? calls(call('view_draft', { draft: draftSaved + 1 }))
         : lastTool.includes('NOIRDRAFT SAVED')
         ? calls(call('finish_changes', {}))
-        : lastTool.includes('NOIRDRAFT WORK SUMMARY')
-        ? calls(call('send_response', { message: 'Done.' }))
-        : calls(call('send_response', { message: 'Done.' }));
+        : calls(call('send_chat_response_and_terminate', { message: 'Done.' }));
       if (tokenDelayMs > 0) return setTimeout(() => sendJSON(response, 200, reply), tokenDelayMs);
       return sendJSON(response, 200, reply);
     }

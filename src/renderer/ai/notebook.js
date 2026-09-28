@@ -21,7 +21,7 @@ export function budgetFor(targetWords) {
 export function createNotebook({ id, intent, targetWords, seed = '' }) {
   const blocks = splitParagraphs(seed);
   const paragraphs = (blocks.length ? blocks : ['']).map((text, index) => ({ id: index + 1, text }));
-  const notebook = { id, intent, targetWords, budget: budgetFor(targetWords), paragraphs, nextId: paragraphs.length + 1, reviewedFrom: paragraphs.length + 1, reviews: 0, needsReview: false, nextIntent: null, submissions: [], submittedText: null, journal: [] };
+  const notebook = { id, intent, targetWords, budget: budgetFor(targetWords), paragraphs, nextId: paragraphs.length + 1, cycles: 0, needsView: false, hasViewed: false, editsSinceView: 0, viewedFrom: null, viewedIds: [], submissions: [], submittedText: null, summary: null };
   notebook.baseline = notebookText(notebook);
   return notebook;
 }
@@ -30,15 +30,13 @@ export function resetNotebook(notebook, seed = '') {
   const blocks = splitParagraphs(seed);
   let nextId = notebook.nextId;
   const paragraphs = (blocks.length ? blocks : ['']).map((text) => ({ id: nextId++, text }));
-  const reset = { ...notebook, paragraphs, nextId, reviewedFrom: nextId, needsReview: false, nextIntent: null, lastReviewClean: undefined, submissions: [], submittedText: null, summary: null };
+  const reset = { ...notebook, paragraphs, nextId, cycles: 0, needsView: false, hasViewed: false, editsSinceView: 0, viewedFrom: null, viewedIds: [], submissions: [], submittedText: null, summary: null };
   return { ...reset, baseline: notebookText(reset) };
 }
 
 export function notebookText(notebook) { return notebook.paragraphs.map(({ text }) => text).filter((text) => text.trim()).join('\n\n'); }
 export function isEmptyNotebook(notebook) { return !notebookText(notebook).trim(); }
 export function placeholderIds(notebook) { return notebook.paragraphs.filter(({ text }) => isPlaceholder(text)).map(({ id }) => id); }
-export function touchedIds(notebook) { return notebook.paragraphs.filter(({ id, text }) => id >= notebook.reviewedFrom && text.trim()).map(({ id }) => id); }
-export function markReviewed(notebook, nextIntent) { return { ...notebook, reviewedFrom: notebook.nextId, reviews: notebook.reviews + 1, needsReview: false, nextIntent: nextIntent?.trim() || null }; }
 
 const idList = (ids) => ids.map((id) => `¶${id}`).join(', ');
 
@@ -50,7 +48,7 @@ const idList = (ids) => ids.map((id) => `¶${id}`).join(', ');
  */
 export function applyOperations(notebook, operations) {
   const errors = [];
-  if (!Array.isArray(operations) || !operations.length) return { ok: false, errors: ['edit_notebook needs at least one operation. Pick a paragraph to replace, delete, or add text next to.'] };
+  if (!Array.isArray(operations) || !operations.length) return { ok: false, errors: ['At least one operation is needed. Pick a paragraph to replace, delete, or add text next to.'] };
   if (operations.length > MAX_OPERATIONS) return { ok: false, errors: [`A batch may hold at most ${MAX_OPERATIONS} operations; you sent ${operations.length}. Make smaller edits this round, use whole-paragraph [placeholder notes] for the parts you are deferring, and continue next round.`] };
   const order = new Map(notebook.paragraphs.map(({ id }, index) => [id, index]));
   const claimed = new Map();
@@ -100,7 +98,7 @@ export function applyOperations(notebook, operations) {
   });
   const kept = paragraphs.filter(({ text }) => text.trim());
   const finalParagraphs = kept.length ? kept : [{ id: nextId++, text: '' }];
-  return { ok: true, notebook: { ...notebook, paragraphs: finalParagraphs, nextId, needsReview: true } };
+  return { ok: true, notebook: { ...notebook, paragraphs: finalParagraphs, nextId, needsView: true, editsSinceView: notebook.editsSinceView + 1 } };
 }
 
 export function lengthCheck(notebook) {
@@ -114,15 +112,12 @@ export function lengthCheck(notebook) {
   return `Length: ${words} words against a target of about ${target} (${Math.round(ratio * 100)}%).${verdict}`;
 }
 
-export function budgetStatus(notebook) {
+export function cycleStatus(notebook) {
   const { soft, hard } = notebook.budget;
-  const round = notebook.reviews;
-  const short = notebook.targetWords && wordCount(notebookText(notebook)) < notebook.targetWords * 0.8 ? ' The text is still short of its length, so keep writing rather than polishing.' : '';
-  if (round >= hard) return `Deadline passed (${round} reviews). NoirDraft will wrap this turn up now.`;
-  if (round >= Math.ceil((soft + hard) / 2)) return `Well past the deadline (${round} reviews; target was about ${soft}). Fix only what is listed as failing, then save_notebook or drop this notebook. NoirDraft ends the turn at ${hard} reviews.${short}`;
-  if (round >= soft) return `Past the review target (${round} of about ${soft}). Address the outstanding findings and save soon; the manager is waiting for delivery.${short}`;
-  if (round >= Math.floor(soft * 0.75)) return `Review ${round} of about ${soft}: approaching the review target. Aim to converge.${short}`;
-  return `Review ${round} of about ${soft}.`;
+  const cycles = notebook.cycles;
+  if (cycles >= hard) return `Cycle ${cycles} of about ${soft} (hard limit ${hard} reached).`;
+  if (cycles >= soft) return `Cycle ${cycles} of about ${soft} (past the soft target).`;
+  return `Cycle ${cycles} of about ${soft}.`;
 }
 
 export function renderParagraphs(notebook) {
@@ -134,15 +129,13 @@ export function stateOf(notebook) {
   return isEmptyNotebook(notebook) ? 'empty' : 'open';
 }
 
-/** Review form shown to the model after opening and after every edit. */
-export function renderReview({ grandIntent, notebooks, activeId, before = '', after = '', lastEdit = null }) {
+/** Full working-state view shown only by view_draft. `guidance` is the already-composed Manager:/Next: block. */
+export function renderView({ grandIntent, notebooks, activeId, before = '', after = '', guidance = '' }) {
   const active = notebooks.find(({ id }) => id === activeId);
-  const lines = ['NOIRDRAFT NOTEBOOK REVIEW', `Overall intent: ${grandIntent}`, `Notebook ${active.id} of ${notebooks.length} — ${active.intent}`];
-  if (active.nextIntent) lines.push(`Your plan from the last review: ${active.nextIntent}`);
-  if (lastEdit) lines.push(lastEdit);
-  lines.push('Only notebook paragraphs are editable. The surrounding context is read-only; judge the notebook by how it joins it.', '----- CONTEXT BEFORE (read-only) -----', before, '----- NOTEBOOK (editable) -----', renderParagraphs(active), '----- CONTEXT AFTER (read-only) -----', after, '----- END -----');
-  const placeholders = placeholderIds(active); const touched = touchedIds(active);
-  lines.push('Checks:', `- ${lengthCheck(active)}`, placeholders.length ? `- Placeholders still to write: ${idList(placeholders)}. save_notebook is rejected until they are replaced or deleted.` : '- No placeholders remain.', touched.length ? `- Changed since your last review: ${idList(touched)}. Reread these in context.` : '- Nothing changed since your last review.', `- ${budgetStatus(active)}`);
-  lines.push(active.needsReview ? 'Next: call review_notebook with your editorial findings and next_intent.' : 'Next: edit_notebook to act on your plan, or save_notebook if this notebook is ready, or open another notebook for comparison.');
+  const lines = ['NOIRDRAFT DRAFT VIEW', `Overall intent: ${grandIntent}`, `Draft ${active.id} of ${notebooks.length} — ${active.intent}`];
+  lines.push('Only draft paragraphs are editable. The surrounding context is read-only; judge the draft by how it joins it.', '----- CONTEXT BEFORE (read-only) -----', before, '----- DRAFT (editable) -----', renderParagraphs(active), '----- CONTEXT AFTER (read-only) -----', after, '----- END -----');
+  const placeholders = placeholderIds(active);
+  lines.push('Checks:', `- ${lengthCheck(active)}`, placeholders.length ? `- Placeholders still to write: ${idList(placeholders)}.` : '- No placeholders remain.', `- ${cycleStatus(active)}`, `Available paragraphs: ${active.paragraphs.length ? `¶${active.paragraphs[0].id}–¶${active.paragraphs.at(-1).id}` : 'none'}.`);
+  if (guidance) lines.push('', guidance);
   return lines.join('\n');
 }
