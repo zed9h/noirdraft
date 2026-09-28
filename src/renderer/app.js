@@ -1620,6 +1620,18 @@ try {
   };
   const documentsForPins = () => ({ STORY: models.STORY.text, METADATA: models.METADATA.text });
 
+  // Pin/option toggles rewrite the whole METADATA buffer (the `# Application`
+  // bookkeeping section they touch is usually elsewhere in the document), but
+  // they are not where the author's attention is. Without this, the model's
+  // default "selection follows the edit" placement strands the caret at the
+  // end of the rewritten text — which, for whichever heading happens to sit
+  // last in the document, gets misrecorded as that heading's last-visited
+  // position and makes it un-clickable afterward (see navigateToSection).
+  const replaceMetadataPreservingSelection = (updated, origin) => {
+    const { selectionStart, selectionEnd } = models.METADATA;
+    editors.METADATA.replace(0, models.METADATA.text.length, updated, { origin, selectionStart, selectionEnd });
+  };
+
   // Pins are ephemeral working-set hints: right before a commit (alongside
   // normalization) any pin whose heading no longer exists is dropped from the
   // application context. From the METADATA controller the change is folded
@@ -1632,8 +1644,12 @@ try {
     const kept = pins.filter((path) => resolveHeadingPath(documents, path).status !== 'unresolved');
     if (kept.length === pins.length) return;
     const updated = writePins(models.METADATA.text, kept);
-    if (fold) models.METADATA.replace(0, models.METADATA.text.length, updated, { origin: 'history' });
-    else editors.METADATA.replace(0, models.METADATA.text.length, updated, 'pin');
+    if (fold) {
+      const { selectionStart, selectionEnd } = models.METADATA;
+      models.METADATA.replace(0, models.METADATA.text.length, updated, { origin: 'history', selectionStart, selectionEnd });
+    } else {
+      replaceMetadataPreservingSelection(updated, 'pin');
+    }
   };
 
   const pendingNotes = new Set();
@@ -2736,6 +2752,12 @@ try {
   };
 
   const refreshSidebar = () => {
+    // The outline elements themselves never grow tall enough to scroll (no
+    // max-height of their own) — the pane that actually scrolls is
+    // sidebarLeft, which wraps both outlines plus the rest of Navigation.
+    // Captured before the rebuild below only as a fallback for when there is
+    // no current heading to center on (see the end of this function).
+    const preservedSidebarScrollTop = sidebarLeft.scrollTop;
     const pins = readPins(models.METADATA.text);
     const pinned = new Set(pins);
     for (const rootName of ['STORY', 'METADATA']) {
@@ -2817,11 +2839,28 @@ try {
             ? pins.filter((path) => path !== heading.path)
             : [...pins, heading.path];
           const updated = writePins(models.METADATA.text, next);
-          editors.METADATA.replace(0, models.METADATA.text.length, updated, 'pin');
+          replaceMetadataPreservingSelection(updated, 'pin');
         });
         row.append(toggle);
         outline.append(row);
       }
+    }
+
+    // Keep the current section visible in the middle of the pane rather than
+    // just wherever the previous scroll position happened to leave it: the
+    // point of the outline is to always show where the caret currently is,
+    // even while attention is elsewhere (typing, a dialog, another panel).
+    const currentRow = outlines[activeRoot]?.querySelector('.outline-row.is-current-leaf');
+    if (currentRow) {
+      const paneRect = sidebarLeft.getBoundingClientRect();
+      const rowRect = currentRow.getBoundingClientRect();
+      const rowCenter = (rowRect.top - paneRect.top) + sidebarLeft.scrollTop + rowRect.height / 2;
+      const target = rowCenter - sidebarLeft.clientHeight / 2;
+      sidebarLeft.scrollTop = Math.max(0, Math.min(target, sidebarLeft.scrollHeight - sidebarLeft.clientHeight));
+    } else {
+      // No current heading (caret in a preamble, or nothing loaded yet):
+      // nothing to center on, so don't yank the scroll position around.
+      sidebarLeft.scrollTop = preservedSidebarScrollTop;
     }
 
     updateDraftContextSummary();
@@ -3330,8 +3369,13 @@ try {
     // Synchronous from here: swap project/editors/histories in one tick.
     project = parsed;
     resetOutlineFolds();
-    editors.STORY.replace(0, models.STORY.text.length, story.text, 'open');
-    editors.METADATA.replace(0, models.METADATA.text.length, metadata?.text ?? '', 'open');
+    // Opening a document starts reading from the top, not wherever the
+    // model's default "selection follows the edit" placement would land
+    // (the very end of the freshly loaded text) — which, for whichever
+    // heading happens to sit last, would otherwise get misrecorded as that
+    // heading's last-visited position and make it un-clickable afterward.
+    editors.STORY.replace(0, models.STORY.text.length, story.text, { origin: 'open', selectionStart: 0, selectionEnd: 0 });
+    editors.METADATA.replace(0, models.METADATA.text.length, metadata?.text ?? '', { origin: 'open', selectionStart: 0, selectionEnd: 0 });
     editors.CHAT.replace(0, models.CHAT.text.length, chat?.text ?? '', 'open');
     attachHistory(nextHistory);
     attachMetadataHistory(nextMetadataHistory);
@@ -3412,8 +3456,8 @@ try {
     const nextMetadataHistory = await createHistory('');
     project = parseProjectDocument('STORY\n=====\n\n');
     resetOutlineFolds();
-    editors.STORY.replace(0, models.STORY.text.length, initialStory, 'open');
-    editors.METADATA.replace(0, models.METADATA.text.length, '', 'open');
+    editors.STORY.replace(0, models.STORY.text.length, initialStory, { origin: 'open', selectionStart: 0, selectionEnd: 0 });
+    editors.METADATA.replace(0, models.METADATA.text.length, '', { origin: 'open', selectionStart: 0, selectionEnd: 0 });
     editors.CHAT.replace(0, models.CHAT.text.length, '', 'open');
     attachHistory(nextHistory);
     attachMetadataHistory(nextMetadataHistory);
@@ -3466,7 +3510,7 @@ try {
 
   storeProjectOption = (patch) => {
     const updated = writeOptions(models.METADATA.text, patch);
-    if (updated !== models.METADATA.text) editors.METADATA.replace(0, models.METADATA.text.length, updated, 'option');
+    if (updated !== models.METADATA.text) replaceMetadataPreservingSelection(updated, 'option');
   };
 
   persistAfterCommit = async () => {
@@ -3723,7 +3767,11 @@ try {
     // Ctrl+Tab into Navigation always starts from the section currently
     // highlighted by the caret, not wherever focus was last left in the
     // panel, so the cycle lands where the writer's attention already is.
-    const highlighted = sidebarLeft.querySelector('.outline-row.is-current-leaf .outline-target');
+    // Scoped to the active root's own outline: STORY and METADATA each track
+    // their own last-highlighted heading independently, and a plain
+    // sidebarLeft-wide lookup would happily land on whichever one appears
+    // first in the DOM regardless of which root is actually being edited.
+    const highlighted = outlines[activeRoot]?.querySelector('.outline-row.is-current-leaf .outline-target');
     const remembered = panelLastFocus.NAVIGATION;
     const fallback = sidebarLeft.querySelector(`[data-root-target="${activeRoot}"]`) ?? sidebarLeft.querySelector('button, [tabindex]');
     (isReachable(highlighted) ? highlighted : (isReachable(remembered) ? remembered : fallback))?.focus();

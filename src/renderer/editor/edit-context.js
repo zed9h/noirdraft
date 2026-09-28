@@ -51,9 +51,18 @@ export class EditContextEditor {
     this.element.editContext = null;
   }
 
+  /**
+   * `origin` may be a plain string, or `{ origin, selectionStart, selectionEnd }`
+   * when a caller needs to pin the resulting selection explicitly — e.g. a
+   * structural rewrite (pin/option toggle) that touches the whole buffer but
+   * isn't where the author's attention is, so the model's default "selection
+   * follows the edit" behavior (landing at the end of the replacement) would
+   * otherwise strand the caret wherever the rewrite happened to end.
+   */
   replace(from, to, text, origin = 'command') {
-    const change = this.model.replace(from, to, text, { origin });
-    if (origin !== 'edit-context') {
+    const options = typeof origin === 'string' ? { origin } : origin;
+    const change = this.model.replace(from, to, text, options);
+    if (options.origin !== 'edit-context') {
       this.context.updateText(change.from, change.to, change.inserted);
       this.context.updateSelection(this.model.selectionStart, this.model.selectionEnd);
     }
