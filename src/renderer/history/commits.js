@@ -66,22 +66,57 @@ export class CommitController {
     this.#idleHandle = null;
   }
 
-  // Brings the model to its canonical text with the smallest edit, so a
-  // selection or caret elsewhere in the text is kept (only offsets inside the
-  // changed span are clamped, and later ones shift by the length change).
+  #mapNormalizedOffset(offset, prefix, oldEnd, insertedLength) {
+    const delta = insertedLength - (oldEnd - prefix);
+    return offset <= prefix ? offset : offset >= oldEnd ? offset + delta : Math.min(prefix + insertedLength, offset);
+  }
+
+  // Replaces a single contiguous span (from `prefix` to `oldEnd`) with
+  // `inserted`, keeping a selection or caret elsewhere in the text (only
+  // offsets inside the changed span are clamped, and later ones shift by
+  // the length change).
+  #applyRegion(prefix, oldEnd, inserted) {
+    if (prefix === oldEnd && inserted === '') return;
+    this.model.replace(prefix, oldEnd, inserted, {
+      origin: 'normalize',
+      selectionStart: this.#mapNormalizedOffset(this.model.selectionStart, prefix, oldEnd, inserted.length),
+      selectionEnd: this.#mapNormalizedOffset(this.model.selectionEnd, prefix, oldEnd, inserted.length),
+    });
+  }
+
+  // Brings the model to its canonical text with the smallest edit(s), so a
+  // selection or caret elsewhere in the text is kept.
   #applyNormalized(result) {
     const text = this.model.text;
     if (result === text) return;
-    const limit = Math.min(text.length, result.length);
+    // Normalizing can add or remove a blank row independently at the very
+    // start and the very end in the same pass. A plain start/end-anchored
+    // scan can't represent two edits at once: with both boundaries changed,
+    // the very first and very last characters would each differ, and the
+    // scan would treat the whole text as one replacement, losing the
+    // selection. Fix the leading boundary first, as its own edit; whatever
+    // differs afterward (the trailing boundary, or an interior change) is
+    // then a single contiguous span that the ordinary scan below handles
+    // correctly, exactly as it always has.
+    const isBoundary = (ch) => /\s/.test(ch);
+    let headText = 0;
+    while (headText < text.length && isBoundary(text[headText])) headText += 1;
+    let headResult = 0;
+    while (headResult < result.length && isBoundary(result[headResult])) headResult += 1;
+    if (text.slice(0, headText) !== result.slice(0, headResult)) {
+      this.#applyRegion(0, headText, result.slice(0, headResult));
+    }
+
+    const updated = this.model.text;
+    if (result === updated) return;
+    const limit = Math.min(updated.length, result.length);
     let prefix = 0;
-    while (prefix < limit && text[prefix] === result[prefix]) prefix += 1;
+    while (prefix < limit && updated[prefix] === result[prefix]) prefix += 1;
     let suffix = 0;
-    while (suffix < limit - prefix && text[text.length - 1 - suffix] === result[result.length - 1 - suffix]) suffix += 1;
-    const oldEnd = text.length - suffix;
+    while (suffix < limit - prefix && updated[updated.length - 1 - suffix] === result[result.length - 1 - suffix]) suffix += 1;
+    const oldEnd = updated.length - suffix;
     const inserted = result.slice(prefix, result.length - suffix);
-    const delta = result.length - text.length;
-    const map = (offset) => (offset <= prefix ? offset : offset >= oldEnd ? offset + delta : Math.min(prefix + inserted.length, offset));
-    this.model.replace(prefix, oldEnd, inserted, { origin: 'normalize', selectionStart: map(this.model.selectionStart), selectionEnd: map(this.model.selectionEnd) });
+    this.#applyRegion(prefix, oldEnd, inserted);
   }
 
   async commitPending({ origin = 'user', note = null } = {}) {
