@@ -11,6 +11,11 @@ export const DEFAULT_PREFERENCES = Object.freeze({
   validPatchDiff: false,
   chatHistoryMessages: 6,
   contextRows: 12,
+  // 1 cumulative (cache-friendly, never trims), 2 windowed (FIFO eviction of
+  // tool-call results), 3 compaction (default: also supersedes stale
+  // view/edit/propose-review history), 4 compaction + trimming (also drops
+  // pinned sections/changes/chat, lowest priority first).
+  contextPruneLevel: 3,
   generationDefaults: Object.freeze({
     max_length: 200,
     temperature: 0.7,

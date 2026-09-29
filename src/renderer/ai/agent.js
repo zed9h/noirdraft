@@ -49,6 +49,10 @@ const leaked = (value, label) => { const name = String(value ?? '').match(TOOL_N
 const MIN_TOOL_RESPONSE_TOKENS = 1024;
 const MAX_NOTEBOOKS = 6;
 const CHAT_ROUND_LIMIT = 40;
+const EDIT_TOOL_NAMES = new Set(['replace_draft_text', 'insert_draft_text_before', 'insert_draft_text_after', 'delete_draft_text']);
+const RETRY_CODES = new Set(['TRUNCATED_TOOL_RESPONSE', 'UNPARSED_TOOL_CALL', 'MISSING_REQUIRED_TOOL_CALL', 'GENERATE_FAILED', 'MALFORMED_RESPONSE', 'CHAT_COMPLETION_FAILED']);
+const MAX_GENERATION_RETRIES = 2;
+const RETRY_EXPLANATION = { TRUNCATED_TOOL_RESPONSE: 'the response was cut off before completing a tool call', UNPARSED_TOOL_CALL: 'the response was not a valid native tool call', MISSING_REQUIRED_TOOL_CALL: 'no tool call was made' };
 
 function assertComplete({ message, finishReason, raw }) {
   if (finishReason === 'length') throw new AgentError('The AI stopped before completing the tool response. Increase the output limit and retry.', { code: 'TRUNCATED_TOOL_RESPONSE', rawText: raw });
@@ -65,7 +69,7 @@ function inserted(value, before, after) { let result = String(value); if (word(b
 const idList = (ids) => ids.map((id) => `¶${id}`).join(', ');
 const formatGuidance = ({ manager, next }) => `Manager: ${manager}\n\nNext: ${next}`;
 
-export async function requestRewrite({ client, history, baseRevisionId, range, mode: forcedMode, inlineWordLimit = INLINE_WORD_LIMIT, root = 'STORY', contextStoryText, request, metadataText = '', pins = [], references = [], chatHistory = [], retry = false, contextRows = 12, agentProtocol, generationOptions = {}, onProgress, signal }) {
+export async function requestRewrite({ client, history, baseRevisionId, range, mode: forcedMode, inlineWordLimit = INLINE_WORD_LIMIT, root = 'STORY', contextStoryText, request, metadataText = '', pins = [], references = [], chatHistory = [], retry = false, contextRows = 12, agentProtocol, generationOptions = {}, pruneLevel = 3, contextBudget = null, onProgress, signal }) {
   const base = await reconstructRevision(history, baseRevisionId);
   const [from, to] = range;
   if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to < from || to > base.length) throw new AgentError('The selected range is invalid for its base revision.', { code: 'INVALID_RANGE' });
@@ -77,6 +81,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
   const transcript = [{ role: 'system', content: composed.staticPrompt }, { role: 'user', content: composed.turnPrompt }];
   const trace = [];
   let raw = ''; let message; let calls; let tools = []; let allowed = new Set();
+  let peakPromptTokens = 0; let lastPromptTokens = 0; let collapsedToOneDraft = false;
 
   let grandIntent = null; let complete = false; let closed = false; let finishWarned = false; let deadline = null;
   let objective = null; let lastOverview = ''; let batchIntent = null; let batchNumber = 0; let reviewVisible = false;
@@ -116,7 +121,98 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
     const rows = notebooks.map((notebook, index) => `Draft ${notebook.id === activeId && notebooks.length > 1 ? '▸' : ' '}${String(notebook.id).padStart(idWidth)} ${delivered[index].padStart(deliveredWidth)}/${planned[index].padStart(plannedWidth)}w ${status(notebook)}`);
     return rows.join('\n');
   };
-  const report = () => onProgress?.({ rawResponse: raw, chat: finalChat(), revisions: heads(), intent: grandIntent ?? objective?.text ? { intent: grandIntent ?? objective.text, progress: progressLine() } : null });
+  const report = () => onProgress?.({ rawResponse: raw, chat: finalChat(), revisions: heads(), intent: grandIntent ?? objective?.text ? { intent: grandIntent ?? objective.text, progress: progressLine() } : null, contextUsage: { peakPromptTokens, collapsedToOneDraft } });
+
+  // --- transcript compaction -------------------------------------------
+  // Removes content the tool-call transcript no longer needs to keep the
+  // model on track: a stale view_draft result is superseded by a later one
+  // for the same draft, and edit calls against a draft are folded into
+  // whichever view showed their cumulative effect. Only calls that
+  // explicitly named their draft (the protocol always requires this) are
+  // recognized; a historical call that relied on an implicit active draft is
+  // left alone rather than guessed at.
+  const parseArgs = (call) => { try { return JSON.parse(call?.function?.arguments ?? '{}'); } catch { return {}; } };
+  const compactNotebookHistory = (notebookId) => {
+    const staleViewCalls = [];
+    for (let i = 0; i < transcript.length; i += 1) {
+      const entry = transcript[i];
+      if (entry.role !== 'assistant' || !Array.isArray(entry.tool_calls) || !entry.tool_calls.length) continue;
+      const keepCalls = []; const dropIds = new Set();
+      for (const call of entry.tool_calls) {
+        const name = call.function?.name;
+        const draftId = Number(parseArgs(call).draft);
+        if (name === 'view_draft' && draftId === notebookId) { staleViewCalls.push(call); keepCalls.push(call); continue; }
+        if (EDIT_TOOL_NAMES.has(name) && draftId === notebookId) { dropIds.add(call.id); continue; }
+        keepCalls.push(call);
+      }
+      if (dropIds.size) {
+        entry.tool_calls = keepCalls;
+        for (let j = i + 1; j < transcript.length && transcript[j].role === 'tool';) {
+          if (dropIds.has(transcript[j].tool_call_id)) transcript.splice(j, 1); else j += 1;
+        }
+      }
+    }
+    for (const call of staleViewCalls) {
+      const toolEntry = transcript.find((item) => item.role === 'tool' && item.tool_call_id === call.id);
+      if (toolEntry) toolEntry.content = receipt('superseded', `Draft ${notebookId}'s view was superseded; call view_draft again to see its current state.`);
+    }
+    for (let i = transcript.length - 1; i >= 0; i -= 1) {
+      const entry = transcript[i];
+      if (entry.role === 'assistant' && Array.isArray(entry.tool_calls) && entry.tool_calls.length === 0 && !entry.content) transcript.splice(i, 1);
+    }
+  };
+  // Once review_edits resolves a batch, the propose_edits call's full
+  // alternative texts are dead: retracted ones are gone, approved ones exist
+  // as revisions already reachable through history.
+  const compactBatchHistory = () => {
+    for (let i = transcript.length - 1; i >= 0; i -= 1) {
+      const entry = transcript[i];
+      if (entry.role !== 'assistant' || !Array.isArray(entry.tool_calls)) continue;
+      const proposeCall = entry.tool_calls.find((call) => call.function?.name === 'propose_edits');
+      if (!proposeCall) continue;
+      const toolEntry = transcript.find((item) => item.role === 'tool' && item.tool_call_id === proposeCall.id);
+      if (toolEntry) toolEntry.content = receipt('resolved', 'This batch was reviewed; see the review summary that followed.');
+      return;
+    }
+  };
+  // Appends a corrective note onto the previous transcript entry instead of
+  // growing the transcript by one message per mistake, so a rejected call or
+  // a failed generation never fixates the model on its own bad output.
+  const appendHint = (hint) => {
+    const last = transcript.at(-1);
+    if (last && typeof last.content === 'string') last.content += `\n\n${hint}`;
+    else transcript.push({ role: 'user', content: hint });
+  };
+
+  // --- context-budget escalation -----------------------------------------
+  // Escalation reacts to the *current* round's size, not the session-peak
+  // figure reported for diagnostics — the peak never falls back down once a
+  // spike is compacted away, so using it here would keep evicting forever.
+  const overBudget = () => contextBudget?.contextLength != null && lastPromptTokens > contextBudget.contextLength - (contextBudget.reservedGeneration ?? 0);
+  const collapseToLastEditedDraft = () => {
+    if (collapsedToOneDraft || mode !== 'block' || notebooks.length < 2) return false;
+    const lastEdited = [...snapshots].reverse().find((snapshot) => notebooks.some((notebook) => notebook.id === snapshot.notebook))?.notebook ?? activeId;
+    for (const notebook of notebooks) if (notebook.id !== lastEdited) compactNotebookHistory(notebook.id);
+    collapsedToOneDraft = true;
+    return true;
+  };
+  // A last-resort, dumb FIFO eviction of the oldest whole round (never the
+  // system/initial-turn messages), used once smart compaction is exhausted.
+  const windowOldestRound = () => {
+    let i = 2;
+    while (i < transcript.length && transcript[i].role !== 'assistant') i += 1;
+    if (i >= transcript.length) return false;
+    let end = i + 1;
+    while (end < transcript.length && transcript[end].role === 'tool') end += 1;
+    transcript.splice(i, end - i);
+    return true;
+  };
+  const escalateForBudget = () => {
+    if (!overBudget()) return true;
+    if (pruneLevel >= 3 && collapseToLastEditedDraft()) return true;
+    if (pruneLevel >= 2) { let evicted = false; while (overBudget() && windowOldestRound()) evicted = true; if (evicted) return true; }
+    return false;
+  };
   const reject = (reason) => ({ ok: false, content: receipt('rejected', reason) });
   const accept = (content) => ({ ok: true, content });
   const reasonOf = (result) => { try { return JSON.parse(result.content).reason; } catch { return result.content; } };
@@ -297,6 +393,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
       else { approved.push(revision); segments.push({ revision: revision.id }); }
     }
     reviewVisible = false;
+    if (pruneLevel >= 3) compactBatchHistory();
     return accept(shortProgress());
   };
 
@@ -372,18 +469,35 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
     return list;
   };
 
+  // A recoverable failure (truncated/unparsed/missing tool call, or a server
+  // fault) never fixates the model on the bad attempt: nothing bad is added
+  // to the transcript, a hint rides on the previous entry instead of a new
+  // message, and the retry runs at a bumped temperature so a greedy (temp 0)
+  // retry against near-identical context does not just reproduce the same
+  // failure.
   const getResponse = async () => {
     tools = currentTools();
     allowed = new Set(tools.map((item) => item.function.name));
-    try {
-      const response = await client.chatCompletion({ messages: transcript, tools, toolChoice: 'required', maxTokens: Math.max(MIN_TOOL_RESPONSE_TOKENS, generationOptions.max_length ?? 0), temperature: generationOptions.temperature ?? 0, signal });
-      if (response.raw) trace.push(response.raw);
-      raw = trace.join('\n\n');
-      assertComplete({ message: response.message, finishReason: response.finishReason, raw });
-      message = response.message; calls = message.tool_calls;
-    } catch (cause) {
-      if (cause?.name === 'AbortError') throw new AgentError('Generation was cancelled.', { code: 'ABORTED', cause, rawText: raw });
-      throw new AgentError(cause instanceof KoboldError ? cause.message : `AI generation failed.${cause?.message ? ` ${cause.message}` : ''}`, { code: cause instanceof KoboldError ? cause.code : 'GENERATE_FAILED', cause, rawText: cause?.rawText ?? raw });
+    const baseTemperature = generationOptions.temperature ?? 0;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const response = await client.chatCompletion({ messages: transcript, tools, toolChoice: 'required', maxTokens: Math.max(MIN_TOOL_RESPONSE_TOKENS, generationOptions.max_length ?? 0), temperature: attempt === 0 ? baseTemperature : Math.min(1, baseTemperature + 0.15 * attempt), signal });
+        if (response.raw) trace.push(response.raw);
+        raw = trace.join('\n\n');
+        assertComplete({ message: response.message, finishReason: response.finishReason, raw });
+        message = response.message; calls = message.tool_calls;
+        if (Number.isFinite(response.usage?.promptTokens)) { lastPromptTokens = response.usage.promptTokens; peakPromptTokens = Math.max(peakPromptTokens, lastPromptTokens); }
+        if (contextBudget?.contextLength != null && !escalateForBudget()) throw new AgentError('The conversation no longer fits the model\'s context window even after compaction. Reduce pinned references or chat history, or raise the context length, then retry.', { code: 'CONTEXT_BUDGET_EXCEEDED', rawText: raw });
+        return;
+      } catch (cause) {
+        if (cause?.name === 'AbortError') throw new AgentError('Generation was cancelled.', { code: 'ABORTED', cause, rawText: raw });
+        const code = cause instanceof KoboldError || cause instanceof AgentError ? cause.code : 'GENERATE_FAILED';
+        if (attempt < MAX_GENERATION_RETRIES && RETRY_CODES.has(code)) {
+          appendHint(`<noirdraft_manager_correction><![CDATA[The previous attempt failed: ${RETRY_EXPLANATION[code] ?? 'the AI server could not complete the request'}. Do not repeat that exact output; take a different, more careful approach. ${formatGuidance(currentGuidance())}]]></noirdraft_manager_correction>`);
+          continue;
+        }
+        throw new AgentError(cause instanceof KoboldError ? cause.message : `AI generation failed.${cause?.message ? ` ${cause.message}` : ''}`, { code, cause, rawText: cause?.rawText ?? raw });
+      }
     }
   };
   await getResponse();
@@ -447,6 +561,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
       const changed = notebook.hasViewed && currentText !== notebook.viewedFrom;
       const viewed = replaceNotebook({ ...notebook, hasViewed: true, needsView: false, editsSinceView: 0, viewedFrom: currentText, viewedIds: notebook.paragraphs.map((item) => item.id), cycles: notebook.cycles + (changed ? 1 : 0) });
       if (viewed.cycles >= viewed.budget.hard || totalCycles() >= totalHard()) return wrapUp();
+      if (pruneLevel >= 3) compactNotebookHistory(viewed.id);
       const guidance = formatGuidance(draftGuidance(viewed, { initialView: !wasViewed }));
       return accept(renderView({ grandIntent, notebooks, activeId: viewed.id, before: context.before, after: context.after, guidance }));
     }
@@ -520,7 +635,7 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
     }
     if (rejected.length) {
       const reason = (content) => { try { return JSON.parse(content).reason; } catch { return content; } };
-      transcript.push({ role: 'user', content: `<noirdraft_manager_correction><![CDATA[The rejected tool call${rejected.length === 1 ? '' : 's'} was not applied. ${rejected.map(({ content }) => reason(content)).join(' ')} Use the valid next tool; do not repeat the rejected call.]]></noirdraft_manager_correction>` });
+      appendHint(`<noirdraft_manager_correction><![CDATA[The rejected tool call${rejected.length === 1 ? '' : 's'} was not applied. ${rejected.map(({ content }) => reason(content)).join(' ')} Use the valid next tool; do not repeat the rejected call.]]></noirdraft_manager_correction>`);
     }
     await getResponse(); report();
   }
@@ -528,5 +643,5 @@ export async function requestRewrite({ client, history, baseRevisionId, range, m
   const chat = finalChat();
   if (!chat) throw new AgentError('The AI finished without any reply for the author.', { code: 'EMPTY_RESPONSE', rawText: raw });
   const finalHeads = heads();
-  return { revision: finalHeads[0] ?? null, revisions: finalHeads, generated: finalHeads[0] ? texts.get(finalHeads[0].id) : undefined, chat, changes: finalHeads.map((revision) => texts.get(revision.id)), snapshots, rawResponse: raw, prompt, unresolvedPins: composed.unresolvedPins, anchor: { root, baseRevisionId, range: [from, to], targetHash: await hashStory(context.target), before: context.before, after: context.after } };
+  return { revision: finalHeads[0] ?? null, revisions: finalHeads, generated: finalHeads[0] ? texts.get(finalHeads[0].id) : undefined, chat, changes: finalHeads.map((revision) => texts.get(revision.id)), snapshots, rawResponse: raw, prompt, unresolvedPins: composed.unresolvedPins, contextUsage: { peakPromptTokens, collapsedToOneDraft }, anchor: { root, baseRevisionId, range: [from, to], targetHash: await hashStory(context.target), before: context.before, after: context.after } };
 }

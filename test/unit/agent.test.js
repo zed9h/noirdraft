@@ -26,6 +26,18 @@ test('a chat-only turn is one send_chat_response_and_terminate', async () => {
 });
 
 const script = (steps) => { let index = 0; const seen = []; return { seen, async chatCompletion({ messages, tools }) { seen.push(messages.at(-1).content); this._tools?.push(tools.map((item) => item.function.name)); const step = steps[index]; index += 1; if (!step) throw new Error('script exhausted'); return response(Array.isArray(step) ? step : [step]); } }; };
+// Like script(), but records the full messages array (with tool_calls) for each call, for compaction assertions.
+const recordingScript = (steps, usageByIndex = []) => {
+  let index = 0; const calls = [];
+  return { calls, async chatCompletion({ messages }) {
+    calls.push(messages.map((entry) => ({ role: entry.role, content: entry.content, tool_calls: entry.tool_calls })));
+    const step = steps[index];
+    const usage = usageByIndex[index];
+    index += 1;
+    if (!step) throw new Error('script exhausted');
+    return { ...response(Array.isArray(step) ? step : [step]), ...(usage != null ? { usage: { promptTokens: usage } } : {}) };
+  } };
+};
 const closing = [call('send_chat_response_and_terminate', { message: 'Done.' }, 'say-done')];
 const finishing = [call('finish_changes', {}, 'finish'), ...closing];
 
@@ -430,4 +442,106 @@ test('saving a draft does not close it: it stays editable and can be viewed and 
   assert.equal(history.revisions.get(2).parents[0], 1);
   assert.equal(await reconstructRevision(history, 2), 'Second.\n');
   assert.deepEqual(result.revisions.map(({ id }) => id), [2]);
+});
+
+test('view/edit compaction supersedes an earlier view and folds away edits it already reflects', async () => {
+  const history = await createHistory('Original.');
+  const client = recordingScript([
+    open([{ intent: 'A.', target_words: 500, start: 'blank' }]),
+    view(1, 'v1'),
+    replace(1, 'One.', 1, 'e1'),
+    view(1, 'v2'),
+    call('send_chat_response_and_terminate', { message: 'Done.' }, 'end'),
+  ]);
+  await requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol, pruneLevel: 3 });
+  const lastRequest = client.calls.at(-1);
+  const toolMessages = lastRequest.filter((entry) => entry.role === 'tool');
+  assert.ok(toolMessages.some((entry) => /superseded/.test(entry.content)), 'the first view should be stubbed as superseded');
+  assert.ok(!toolMessages.some((entry) => /^Draft 1 updated\./.test(entry.content)), 'the folded-in edit result should be gone');
+  assert.ok(toolMessages.some((entry) => /NOIRDRAFT DRAFT VIEW/.test(entry.content)), 'the latest view stays intact');
+});
+
+test('view/edit compaction is skipped at a lower prune level', async () => {
+  const history = await createHistory('Original.');
+  const client = recordingScript([
+    open([{ intent: 'A.', target_words: 500, start: 'blank' }]),
+    view(1, 'v1'),
+    replace(1, 'One.', 1, 'e1'),
+    view(1, 'v2'),
+    call('send_chat_response_and_terminate', { message: 'Done.' }, 'end'),
+  ]);
+  await requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol, pruneLevel: 2 });
+  const lastRequest = client.calls.at(-1);
+  const toolMessages = lastRequest.filter((entry) => entry.role === 'tool');
+  assert.ok(!toolMessages.some((entry) => /superseded/.test(entry.content)));
+  assert.ok(toolMessages.some((entry) => /^Draft 1 updated\./.test(entry.content)));
+});
+
+test('propose/review compaction collapses a resolved batch to a compact summary', async () => {
+  const story = 'A quiet street.';
+  const history = await createHistory(story);
+  const client = recordingScript([
+    propose(['loud', 'quiet again']), reviewEdits([editReview(1, 'retract'), editReview(2)]),
+    call('send_chat_response_and_terminate', { message: 'Done.' }, 'end'),
+  ]);
+  await requestRewrite({ client, history, baseRevisionId: 0, range: shortRange(story, 'quiet'), request: 'Options.', agentProtocol: protocol, pruneLevel: 3 });
+  const lastRequest = client.calls.at(-1);
+  const toolMessages = lastRequest.filter((entry) => entry.role === 'tool');
+  assert.ok(toolMessages.some((entry) => /"resolved"/.test(entry.content)));
+  assert.ok(!toolMessages.some((entry) => /NOIRDRAFT EDIT REVIEW/.test(entry.content)));
+});
+
+test('a truncated tool response retries with a hint appended in place, at a bumped temperature, instead of failing the turn', async () => {
+  const history = await createHistory('Original.');
+  const attempts = [];
+  let attempt = 0;
+  const client = {
+    async chatCompletion({ messages, temperature }) {
+      attempts.push({ length: messages.length, lastContent: messages.at(-1).content, temperature });
+      attempt += 1;
+      if (attempt === 1) return { message: { role: 'assistant', content: '', tool_calls: [] }, finishReason: 'length', raw: 'truncated' };
+      return response([call('send_chat_response_and_terminate', { message: 'Recovered.' }, 'r')]);
+    },
+  };
+  const result = await requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [0, 0], request: 'hi', agentProtocol: protocol });
+  assert.equal(attempt, 2);
+  assert.equal(attempts[0].length, attempts[1].length, 'no new message should be added for the failed attempt');
+  assert.notEqual(attempts[0].lastContent, attempts[1].lastContent);
+  assert.match(attempts[1].lastContent, /previous attempt failed/);
+  assert.ok(attempts[1].temperature > attempts[0].temperature);
+  assert.equal(result.chat, 'Recovered.');
+});
+
+test('a persistently truncated response exhausts its retries and fails the turn', async () => {
+  const history = await createHistory('Original.');
+  const client = { async chatCompletion() { return { message: { role: 'assistant', content: '', tool_calls: [] }, finishReason: 'length', raw: 'r' }; } };
+  await assert.rejects(
+    requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [0, 0], request: 'hi', agentProtocol: protocol }),
+    (error) => error.code === 'TRUNCATED_TOOL_RESPONSE',
+  );
+});
+
+test('context-budget pressure collapses to the most recently edited draft and is reported on the result', async () => {
+  const history = await createHistory('Original.');
+  const client = recordingScript([
+    open([{ intent: 'A.', target_words: 1, start: 'blank' }, { intent: 'B.', target_words: 1, start: 'blank' }]),
+    replace(1, 'First.', 1), view(1, 'v1'),
+    replace(1, 'Second.', 2, 'e2'), view(2, 'v2'),
+    call('send_chat_response_and_terminate', { message: 'Done.' }, 'end'),
+  ], [0, 0, 0, 0, 500, 0]);
+  const result = await requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [0, 9], request: 'Two.', agentProtocol: protocol, contextBudget: { contextLength: 100, reservedGeneration: 0 } });
+  assert.equal(result.contextUsage.collapsedToOneDraft, true);
+  assert.equal(result.contextUsage.peakPromptTokens, 500);
+});
+
+test('context-budget pressure fails the turn once nothing more can be pruned at the strictest level', async () => {
+  const history = await createHistory('Original.');
+  const client = recordingScript([
+    open([{ intent: 'A.', target_words: 1, start: 'blank' }]),
+    replace(1, 'First.', 1), view(1, 'v1'),
+  ], [0, 0, 500]);
+  await assert.rejects(
+    requestRewrite({ client, mode: 'block', inlineWordLimit: 0, history, baseRevisionId: 0, range: [0, 9], request: 'Write.', agentProtocol: protocol, pruneLevel: 1, contextBudget: { contextLength: 100, reservedGeneration: 0 } }),
+    (error) => error.code === 'CONTEXT_BUDGET_EXCEEDED',
+  );
 });

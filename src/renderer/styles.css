@@ -195,9 +195,13 @@ button { font: inherit; }
 .overflow-menu button[aria-pressed="false"]::before { content: "\2610"; }
 .overflow-menu button[aria-pressed="true"]::before { content: "\2611"; }
 
-.overflow-select { display: flex; align-items: center; gap: .5rem; padding: .3rem .5rem .3rem 2.1rem; color: inherit; }
+/* Left padding matches where a button's own text starts (its .55rem padding
+   plus the 1.6rem + .3rem checkbox column every .overflow-menu button
+   reserves, even when empty), so this label's text lines up with the rest
+   of the menu instead of sitting slightly left of it. */
+.overflow-select { display: flex; align-items: center; gap: .5rem; padding: .3rem .55rem .3rem 2.45rem; color: inherit; }
 .overflow-select[hidden] { display: none; }
-.overflow-select select { flex: 1; min-width: 0; max-width: 18rem; background: #26221d; color: inherit; border: 1px solid #3a342e; border-radius: .2rem; }
+.overflow-select select { flex: none; max-width: 18rem; background: #26221d; color: inherit; border: 1px solid #3a342e; border-radius: .2rem; }
 
 .save-note-popover {
   position: absolute;
@@ -470,6 +474,8 @@ button { font: inherit; }
 .chat-agent-intent { margin-top: .32rem; padding: .24rem .38rem; border-left: 2px solid #6f5843; color: #a99e91; font: italic .72rem/1.35 "Noto Serif", serif; }
 .chat-message-label { position: relative; display: flex; align-items: center; gap: .35rem; margin-bottom: .08rem; padding: .1rem .35rem; color: #8a8074; background: #302b26; font: 600 .62rem/1 "Noto Sans", sans-serif; letter-spacing: .08em; text-transform: uppercase; }
 .chat-token-count { position: absolute; left: 50%; margin: 0; color: #9d9286; font-weight: 400; letter-spacing: 0; text-transform: none; transform: translateX(-50%); pointer-events: none; }
+.chat-turn-context { margin-left: auto; color: #9d9286; font-weight: 400; letter-spacing: 0; text-transform: none; }
+.chat-turn-warning { margin-left: .3rem; color: #d9a441; font-weight: 400; letter-spacing: 0; text-transform: none; cursor: help; }
 .chat-role-action { padding: 0; border: 0; color: inherit; background: transparent; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
 .chat-role-action:hover { color: #e8ad70; }
 .chat-version-reference { display: inline; margin: 0 .12rem; padding: .04rem .2rem; border: 0; border-radius: .15rem; cursor: pointer; line-height: 1; vertical-align: .08em; }

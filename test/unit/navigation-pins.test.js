@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { extractHeadings, headingTree, resolveHeadingPath } from '../../src/renderer/project/headings.js';
-import { readPins, resolvePins, writePins } from '../../src/renderer/project/pins.js';
+import { readBucketPriority, readChangePins, readChatBucketMarker, readPins, resolvePins, writeChangePins, writeChatBucketMarker, writePins } from '../../src/renderer/project/pins.js';
 
 const story = '# Chapter One\nIntro.\n\n## Arrival\nText.\n\n## Door\nMore.\n\n# Chapter Two\nEnd.\n';
 const metadata = '# Argument\nA premise.\n\n# Characters\n\n## Maria\nDetails.\n\n## Elias\nDetails.\n';
@@ -85,4 +85,26 @@ test('pin then unpin then pin never glues an entry onto the Context heading', ()
   // A heading whose blank line was trimmed away by an earlier edit is repaired.
   assert.equal(writePins('# Application\n\n## Context', ['A']), '# Application\n\n## Context\n\n- A\n');
   assert.equal(writePins('# Application\n\n## Context\n', ['A']), '# Application\n\n## Context\n\n- A\n');
+});
+
+test('changes are pinned under Application/Changes, alongside section pins', () => {
+  const pinned = writeChangePins(metadata, ['STORY/1', 'STORY/2']);
+  assert.match(pinned, /## Changes\n\n- STORY\/1\n- STORY\/2\n/);
+  assert.deepEqual(readChangePins(pinned), ['STORY/1', 'STORY/2']);
+  assert.deepEqual(readPins(pinned), []);
+});
+
+test('the chat bucket holds a single marker, not a list', () => {
+  assert.equal(readChatBucketMarker(metadata), null);
+  const withCount = writeChatBucketMarker(metadata, '12');
+  assert.equal(readChatBucketMarker(withCount), '12');
+  const withTurn = writeChatBucketMarker(withCount, 'turn:7');
+  assert.equal(readChatBucketMarker(withTurn), 'turn:7');
+  assert.equal(readChatBucketMarker(writeChatBucketMarker(withTurn, null)), null);
+});
+
+test('bucket priority follows heading order under Application, defaulting to Context, Changes, Chat', () => {
+  assert.deepEqual(readBucketPriority(metadata), ['Context', 'Changes', 'Chat']);
+  const reordered = '# Application\n\n## Chat\n\n- 12\n\n## Context\n\n- METADATA/Argument\n';
+  assert.deepEqual(readBucketPriority(reordered), ['Chat', 'Context', 'Changes']);
 });

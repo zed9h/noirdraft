@@ -64,6 +64,19 @@ branching, the way the automated tests can't fully substitute for.
 8. **Automatic notes**: with "Automatic revision notes" enabled, make a
    commit and confirm the Versions graph shows "Generating note…" and then
    the real note, without ever creating an extra revision for the note.
+9. **Context budget**: with a real KoboldCpp/Gemma server connected, set a
+   deliberately small context length (or use a long manuscript with many
+   pins/chat history) and try each "Budget" level in the overflow menu.
+   Confirm: level 1 fails a turn cleanly once it no longer fits rather than
+   sending a truncated packet; level 2 keeps going by dropping old tool-call
+   results; level 3 (default) keeps going longer via view/edit/batch
+   compaction, and opening several long drafts at once shows the
+   collapsed-to-one-draft warning on the response label without failing the
+   turn; level 4 additionally trims pinned sections/changes/chat and shows
+   the trimmed-context warning on the request label. Confirm the turn header
+   shows a peak/total token figure that tracks what the raw context preview
+   dialog actually sent, and that none of this — peak figures, warnings, or
+   trimming decisions — appears in the saved `.md` file afterward.
 
 ## 4. Transparency checks
 

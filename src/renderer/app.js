@@ -9,7 +9,7 @@ import { hashStory } from './history/hash.js';
 import { createUnifiedDiff } from './history/diff.js';
 import { parseHistories, serializeHistories } from './history/serialize.js';
 import { requestRewrite } from './ai/agent.js';
-import { composeContext } from './ai/context.js';
+import { composeContext, ContextBudgetError, trimToBudget } from './ai/context.js';
 import { KoboldClient } from './ai/kobold.js';
 import { generateNote } from './ai/notes.js';
 import { mapSelectionToRevision } from './history/passage-map.js';
@@ -23,7 +23,7 @@ import { createVisitLog, jumpVisitLog, recordVisit, stepVisitLog } from './histo
 import { endScrub, startScrub, stepScrub } from './history/scrub-session.js';
 import { createSectionNav, recallPosition, savePosition, stepSectionNav, visitSection } from './editor/section-position.js';
 import { parseProjectDocument } from './project/parse.js';
-import { readPins, writePins } from './project/pins.js';
+import { readBucketPriority, readPins, writePins } from './project/pins.js';
 import { readOptions, writeOptions } from './project/options.js';
 import { normalizeVisibleRootText, projectRoot } from './project/projection.js';
 import { serializeProjectDocument } from './project/serialize.js';
@@ -64,6 +64,7 @@ const chatCancelButton = document.querySelector('[data-chat-cancel]');
 const chatHistoryCount = document.querySelector('[data-chat-history-count]');
 const chatContextSummary = document.querySelector('[data-chat-context-summary]');
 const contextRowsInput = document.querySelector('[data-context-rows]');
+const contextPruneLevelSelect = document.querySelector('[data-context-prune-level]');
 const contextDialog = document.querySelector('[data-context-dialog]');
 const contextDialogTitle = document.querySelector('#context-dialog-title');
 const contextDialogSummary = document.querySelector('[data-context-dialog-summary]');
@@ -581,6 +582,7 @@ aiConnectionInput.addEventListener('keydown', (event) => {
 let generationMaxLength = 200;
 let chatHistoryMessageCount = 6;
 let contextRows = 12;
+let contextPruneLevel = 3;
 if (preferences) {
   preferences.get()
     .then((stored) => {
@@ -593,6 +595,9 @@ if (preferences) {
       const storedContextRows = Number(stored.contextRows);
       if (Number.isFinite(storedContextRows) && storedContextRows >= 1) contextRows = Math.min(200, Math.floor(storedContextRows));
       contextRowsInput.value = String(contextRows);
+      const storedPruneLevel = Number(stored.contextPruneLevel);
+      if ([1, 2, 3, 4].includes(storedPruneLevel)) contextPruneLevel = storedPruneLevel;
+      contextPruneLevelSelect.value = String(contextPruneLevel);
       setValidPatchDiff(stored.validPatchDiff === true);
       autoNotesEnabled = Boolean(stored.autoNotes);
       toggleAutoNotesButton.setAttribute('aria-pressed', String(autoNotesEnabled));
@@ -735,6 +740,48 @@ try {
       marker.title = marker.getAttribute('aria-label');
       marker.disabled = !isStoredTurn;
     }
+  };
+  const countTokensForBudget = async (text) => {
+    if (koboldClient && aiStatus.dataset.connected === 'true') {
+      try { return await koboldClient.countTokens(text); } catch { /* fall through to the rough estimate below */ }
+    }
+    return Math.ceil(String(text).length / 4);
+  };
+  // Only level 4 (compaction + trimming) drops pinned context; lower levels
+  // return the inputs unchanged. Buckets are ordered by whichever heading
+  // order the author gave Sections/Changes/Chat under METADATA's
+  // Application section (project/pins.js); within a bucket the lowest
+  // priority item goes first (document order for pins/changes, oldest first
+  // for chat). Throws ContextBudgetError only when the request cannot fit
+  // even with every optional item dropped.
+  const trimForBudget = async ({ pins, references, chatHistory, before = '', target = '', after = '', request, agentProtocol = AGENT_PROTOCOL }) => {
+    if (contextPruneLevel < 4 || !koboldContextLength) return { pins, references, chatHistory, dropped: [] };
+    const documents = { STORY: models.STORY.text, METADATA: models.METADATA.text };
+    const pinComponents = pins
+      .map((path) => ({ path, resolved: resolveHeadingPath(documents, path) }))
+      .filter(({ resolved }) => resolved.status === 'resolved')
+      .map(({ path, resolved }) => ({ id: `pin:${path}`, label: `Section ${path}`, text: resolved.text, path }));
+    const referenceComponents = references.map((reference, index) => ({ id: reference.id ?? `reference:${index}`, label: `Change ${reference.label ?? reference.id ?? `#${index + 1}`}`, text: reference.text, reference }));
+    const chatComponents = chatHistory.map((turn, index) => ({ id: `chat:${index}`, label: `Chat turn ${index + 1}`, text: `${turn.request}\n${turn.reply}`, turn }));
+    const required = [
+      { id: 'protocol', label: 'AGENT PROTOCOL', text: agentProtocol },
+      { id: 'before', label: 'CONTEXT BEFORE CURSOR', text: before },
+      { id: 'cursor', label: 'CURSOR', text: target },
+      { id: 'after', label: 'CONTEXT AFTER CURSOR', text: after },
+      { id: 'request', label: 'REQUEST', text: request },
+    ].filter((component) => component.text);
+    const bucketsByName = { Context: pinComponents, Changes: referenceComponents, Chat: chatComponents };
+    const result = await trimToBudget({
+      required, buckets: readBucketPriority(models.METADATA.text).map((name) => ({ id: name, items: bucketsByName[name] })),
+      contextLength: koboldContextLength, reservedGeneration: generationMaxLength, countTokens: countTokensForBudget,
+    });
+    const droppedIds = new Set(result.dropped.map((entry) => entry.id));
+    return {
+      pins: pinComponents.filter((component) => !droppedIds.has(component.id)).map((component) => component.path),
+      references: referenceComponents.filter((component) => !droppedIds.has(component.id)).map((component) => component.reference),
+      chatHistory: chatComponents.filter((component) => !droppedIds.has(component.id)).map((component) => component.turn),
+      dropped: result.dropped.map((entry) => ({ bucket: entry.bucket, label: entry.label, tokens: entry.tokens })),
+    };
   };
   const staticChatPreamble = () => composeContext({
     storyText: models.STORY.text, metadataText: models.METADATA.text,
@@ -916,6 +963,28 @@ try {
   // button, or — for a still-processing turn, which has none — its delete
   // button, so every card in the history is reachable by keyboard.
   const chatTurnFocusStop = (card) => card?.querySelector('.chat-context-marker') ?? card?.querySelector('.chat-turn-delete') ?? null;
+  // A small warning badge for a chat message label: session/diagnostic only,
+  // never persisted with the turn.
+  const chatTurnWarning = (title, label = 'warning') => {
+    const warning = document.createElement('span');
+    warning.className = 'chat-turn-warning';
+    warning.textContent = `⚠ ${label}`;
+    warning.title = title;
+    return warning;
+  };
+  // The turn's peak-context-size gauge: how close this turn came to the
+  // model's context window while it was being processed. Diagnostic only,
+  // like the raw request/response — never saved with the document.
+  const chatTurnContextBadge = (job) => {
+    const badge = document.createElement('span');
+    badge.className = 'chat-turn-context';
+    const peak = job?.contextUsage?.peakPromptTokens;
+    if (!peak) { badge.hidden = true; return badge; }
+    const total = job.contextTotal ?? koboldContextLength;
+    badge.textContent = total ? `${peak} / ${total}` : `${peak}`;
+    badge.title = 'Highest context size reached while NoirDraft processed this turn (diagnostic only, not saved with the document).';
+    return badge;
+  };
 
   const renderChatHistory = (pendingTurn = null) => {
     const restorePromptFocus = document.activeElement === chatPrompt;
@@ -981,7 +1050,7 @@ try {
       const actions = document.createElement('div');
       actions.className = 'chat-turn-actions';
       actions.append(deleteTurn);
-      header.append(marker, title, actions);
+      header.append(marker, title, chatTurnContextBadge(job), actions);
       const createMessage = (role, text, call = null) => {
         const message = document.createElement('section');
         message.className = `chat-message chat-${role.toLowerCase()} chat-${role === 'user' ? 'input' : 'output'}`;
@@ -996,21 +1065,18 @@ try {
           labelTitle.title = 'Show this turn’s raw request';
           labelTitle.setAttribute('aria-label', `Show raw request for turn ${index + 1}`);
           labelTitle.addEventListener('click', () => void openContextDialog(turn.input, 'Raw user request'));
-          const tokens = document.createElement('span');
-          tokens.className = 'chat-token-count';
-          tokens.textContent = `~${Math.ceil(turn.input.length / 4)} tokens`;
-          label.append(tokens);
+          // Per-message token estimates moved to the shared peak/total badge
+          // on the turn header; this label instead flags anything the
+          // context budget had to trim to send this request (diagnostic,
+          // session-only, like the raw request/response themselves).
+          if (call?.trimmedBuckets?.length) label.append(chatTurnWarning(`Pinned context did not fit and was trimmed to send this request: ${call.trimmedBuckets.map((entry) => entry.label).join(', ')}.`, 'context trimmed'));
           if (call?.kind === 'rewrite' && call.anchor.target) {
             message.append(label, renderChatSelectionContext(call));
           }
         } else {
           labelTitle.setAttribute('aria-label', `Show raw response for turn ${index + 1}`);
           labelTitle.addEventListener('click', () => void openRawResponseDialog(call ?? { id: null, rawResponse: 'Raw response is available only during this session.' }));
-          const tokens = document.createElement('span');
-          tokens.className = 'chat-token-count';
-          const rawOutput = call?.rawResponse ?? turn.output;
-          tokens.textContent = `~${Math.ceil((turn.input.length + rawOutput.length) / 4)} tokens`;
-          label.append(tokens);
+          if (call?.contextUsage?.collapsedToOneDraft) label.append(chatTurnWarning('Not enough context space remained to keep every draft\'s view at once; only the most recently edited draft stayed visible in context. View the others again to bring them back.', 'one draft shown'));
           if (call) label.append(renderChatCall(call));
         }
         const content = document.createElement('div');
@@ -1091,6 +1157,11 @@ try {
     storeProjectOption({ contextRows });
     updateDraftContextSummary();
   });
+  contextPruneLevelSelect.addEventListener('change', async () => {
+    contextPruneLevel = [1, 2, 3, 4].includes(Number(contextPruneLevelSelect.value)) ? Number(contextPruneLevelSelect.value) : 3;
+    contextPruneLevelSelect.value = String(contextPruneLevel);
+    await preferences?.set({ contextPruneLevel });
+  });
   const setChatSending = () => {
     chatSendButton.hidden = false;
     chatCancelButton.hidden = true;
@@ -1143,7 +1214,7 @@ try {
     const actions = document.createElement('div');
     actions.className = 'chat-turn-actions';
     actions.append(deleteTurn);
-    header.append(title, actions);
+    header.append(title, chatTurnContextBadge(job), actions);
     const input = document.createElement('section');
     input.className = 'chat-message chat-user chat-input';
     const inputLabel = document.createElement('div');
@@ -1154,10 +1225,8 @@ try {
     inputTitle.textContent = 'user';
     inputTitle.setAttribute('aria-label', `Show raw request for pending turn ${index + 1}`);
     inputTitle.addEventListener('click', () => void openContextDialog(job.packet ?? job.input, 'Raw user request'));
-    const inputTokens = document.createElement('span');
-    inputTokens.className = 'chat-token-count';
-    inputTokens.textContent = `~${Math.ceil((job.packet ?? job.input).length / 4)} tokens`;
-    inputLabel.append(inputTitle, inputTokens);
+    inputLabel.append(inputTitle);
+    if (job.trimmedBuckets?.length) inputLabel.append(chatTurnWarning(`Pinned context did not fit and was trimmed to send this request: ${job.trimmedBuckets.map((entry) => entry.label).join(', ')}.`, 'context trimmed'));
     const inputContent = document.createElement('div');
     inputContent.className = 'chat-message-content';
     inputContent.textContent = job.input;
@@ -1176,11 +1245,8 @@ try {
     outputTitle.setAttribute('aria-label', `Show raw response for pending turn ${index + 1}`);
     outputTitle.addEventListener('click', () => void openRawResponseDialog(job));
     outputLabel.append(outputTitle);
-    const totalTokens = Math.ceil(((job.packet ?? job.input).length + (job.rawResponse ?? job.output ?? '').length) / 4);
-    const outputTokens = document.createElement('span');
-    outputTokens.className = 'chat-token-count';
-    outputTokens.textContent = `~${totalTokens} tokens`;
-    outputLabel.append(outputTokens, renderChatCall(job));
+    if (job.contextUsage?.collapsedToOneDraft) outputLabel.append(chatTurnWarning('Not enough context space remained to keep every draft\'s view at once; only the most recently edited draft stayed visible in context. View the others again to bring them back.', 'one draft shown'));
+    outputLabel.append(renderChatCall(job));
     const outputContent = document.createElement('div');
     outputContent.className = 'chat-message-content';
     const isStatus = !job.output || job.state === 'failed';
@@ -1332,6 +1398,7 @@ try {
     job.offline = false;
     job.state = 'generating';
     job.progress = 'Thinking…';
+    job.contextTotal = koboldContextLength;
     job.abortController = new AbortController();
     chatAbortController = job.abortController;
     setChatSending();
@@ -1339,6 +1406,13 @@ try {
     renderChatHistory();
     try {
       if (job.kind === 'rewrite') {
+        const trimmed = await trimForBudget({
+          pins: readPins(models.METADATA.text), references: agentReferences,
+          chatHistory: await chatContextTurns(parseChatTurns(models.CHAT.text)),
+          before: job.anchor?.before ?? '', target: job.anchor?.target ?? '', after: job.anchor?.after ?? '',
+          request: job.input, agentProtocol: AGENT_PROTOCOL,
+        });
+        job.trimmedBuckets = trimmed.dropped;
         const result = await requestRewrite({
           client: koboldClient,
           history: job.history,
@@ -1348,19 +1422,22 @@ try {
           contextStoryText: models.STORY.text,
           request: job.input,
           metadataText: models.METADATA.text,
-          pins: readPins(models.METADATA.text),
-          references: agentReferences,
-          chatHistory: await chatContextTurns(parseChatTurns(models.CHAT.text)),
+          pins: trimmed.pins,
+          references: trimmed.references,
+          chatHistory: trimmed.chatHistory,
           retry: Boolean(job.retry),
           contextRows,
           agentProtocol: AGENT_PROTOCOL,
           generationOptions: { max_length: generationMaxLength },
-          onProgress: ({ chat, rawResponse, revisions, intent }) => {
+          pruneLevel: contextPruneLevel,
+          contextBudget: koboldContextLength ? { contextLength: koboldContextLength, reservedGeneration: generationMaxLength } : null,
+          onProgress: ({ chat, rawResponse, revisions, intent, contextUsage }) => {
             job.output = chat;
             job.rawResponse = rawResponse;
             job.revisionIds = revisions.map(({ id }) => id);
             job.revisionId = revisions[0]?.id ?? null;
             job.currentIntent = intent;
+            job.contextUsage = contextUsage;
             job.progress = intent?.intent ? 'Working…' : 'Thinking…';
             refreshLiveRawResponse(job);
             renderVersions();
@@ -1370,11 +1447,20 @@ try {
         });
         job.revisionId = result.revision?.id ?? null;
         job.revisionIds = result.revisions.map(({ id }) => id);
+        job.contextUsage = result.contextUsage;
         await completeChatJob(job, result.chat, result.rawResponse);
       } else {
         const turns = parseChatTurns(models.CHAT.text);
         const prior = turns.slice(chatContextStart(turns));
-        const prompt = formatChatPacket(prior, job.packet);
+        const trimmed = await trimForBudget({
+          pins: readPins(models.METADATA.text), references: agentReferences,
+          chatHistory: await chatContextTurns(turns), request: job.input, agentProtocol: AGENT_PROTOCOL,
+        });
+        job.trimmedBuckets = trimmed.dropped;
+        const prompt = trimmed.dropped.length
+          ? [composeContext({ storyText: models.STORY.text, metadataText: models.METADATA.text, pins: trimmed.pins, references: trimmed.references, agentProtocol: AGENT_PROTOCOL, request: job.input, chatHistory: trimmed.chatHistory }).prompt]
+            .join('')
+          : formatChatPacket(prior, job.packet);
         let output = '';
         let rawResponse = '';
         let finishReason = null;
@@ -1386,6 +1472,7 @@ try {
           finishReason = event.finishReason ?? finishReason;
           job.output = output;
           job.rawResponse = rawResponse;
+          if (Number.isFinite(event.usage?.promptTokens)) job.contextUsage = { peakPromptTokens: Math.max(job.contextUsage?.peakPromptTokens ?? 0, event.usage.promptTokens) };
           job.progress = output ? 'Writing…' : 'Thinking…';
           refreshLiveRawResponse(job);
           refreshLiveChatTurn(job);

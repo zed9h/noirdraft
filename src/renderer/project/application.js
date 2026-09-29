@@ -17,6 +17,23 @@ export function readApplicationList(metadata, section) {
 }
 
 /**
+ * Priority order of `## <section>` headings under `# Application`, for
+ * sections that decide what gets trimmed first when context doesn't fit
+ * (Context/Changes/Chat). Reordering those headings in METADATA reorders
+ * this list; a `sections` entry with no heading yet falls to the end, in the
+ * order it was given.
+ */
+export function readApplicationOrder(metadata, sections) {
+  const present = extractHeadings(metadata, 'METADATA')
+    .filter((heading) => heading.path.startsWith(`${applicationPath}/`))
+    .map((heading) => heading.path.slice(applicationPath.length + 1));
+  return [...sections].sort((a, b) => {
+    const indexOf = (name) => { const index = present.indexOf(name); return index === -1 ? sections.length + sections.indexOf(name) : index; };
+    return indexOf(a) - indexOf(b);
+  });
+}
+
+/**
  * Replaces the bullet list of `## <section>`, creating the section (and
  * `# Application`) when missing. A blank line always separates the heading
  * from the list, even if an earlier edit trimmed it away.

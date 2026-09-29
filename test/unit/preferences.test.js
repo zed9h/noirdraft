@@ -35,6 +35,10 @@ test('writePreferences persists a deep merge and readPreferences reflects it', a
 
     await writePreferences(filePath, { contextRows: 24 });
     assert.equal((await readPreferences(filePath)).contextRows, 24);
+
+    assert.equal((await readPreferences(filePath)).contextPruneLevel, DEFAULT_PREFERENCES.contextPruneLevel);
+    await writePreferences(filePath, { contextPruneLevel: 4 });
+    assert.equal((await readPreferences(filePath)).contextPruneLevel, 4);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

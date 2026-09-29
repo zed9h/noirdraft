@@ -802,6 +802,45 @@ The author should be able to inspect what will actually be sent to the model.
 
 Context construction should never be mysterious.
 
+### 20.1 Fitting a composed context to the model's window
+
+A composed packet, and — inside a rewrite turn — the growing tool-call
+transcript, can exceed the connected model's context window
+(`contextLength - reservedGeneration`, where `reservedGeneration` is the
+configured output length). NoirDraft handles this with one document-wide
+setting (a 4-level dropdown, "Budget", in the More menu; default level 3):
+
+1. **Cumulative** — never trims, cache-friendly; a turn fails outright as
+   soon as it no longer fits.
+2. **Windowed** — as level 1, but the tool-call transcript evicts its oldest
+   results (dumb FIFO by round) once it no longer fits.
+3. **Compaction** (default) — as level 2, but the tool-call transcript is
+   also compacted losslessly first: a later `view_draft` result supersedes
+   an earlier one for the same draft, edits already reflected in a later
+   view are folded away, and a resolved `propose_edits`/`review_edits`
+   batch collapses to a short summary. If keeping every open draft's latest
+   view still doesn't fit, only the most recently edited draft's view stays
+   resident — the author sees a warning on that turn, but the turn
+   completes.
+4. **Trimming** — as level 3, but when the *composed* packet alone doesn't
+   fit, pinned context is dropped: three priority buckets (pinned sections,
+   pinned changes, chat history), ordered by whichever order their headings
+   appear under `# Application` in METADATA (§18), lowest-priority bucket's
+   lowest-priority item first. Once dropped for a turn, an item is never
+   re-added within that turn even if space frees up. The author sees which
+   buckets were trimmed on that turn's request.
+
+At every level, the floor — the agent protocol, the surrounding passage,
+and the current request — is never dropped; if that floor alone doesn't fit
+the turn fails with an explicit error rather than sending a truncated or
+silently-overflowing packet.
+
+A turn also tracks its peak context size (highest prompt size reached while
+processing it) and shows it once, on that turn's header, against the
+model's total context length. This is diagnostic only, like the raw
+request/response inspection — session-scoped, never written into the
+persisted `CHAT` document.
+
 ---
 
 # 21. KoboldCpp integration

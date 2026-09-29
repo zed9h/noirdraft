@@ -43,6 +43,14 @@
               <button type="button" data-save-note title="Record a revision with an optional note (Shift+Alt+S); Alt+S records one without a note. The file is written only if Save each revision is on.">Record revision…</button>
               <button type="button" data-ai-connection title="Set the OpenAI-compatible API address (and optional API key) used for chat and proposals. Editing and saving work without it.">OpenAI API…</button>
               <label class="overflow-select" data-ai-model-row hidden title="Model sent with chat and proposal requests. Listed by the connected API.">Model <select data-ai-model aria-label="AI model"></select></label>
+              <label class="overflow-select" title="How aggressively NoirDraft trims context that no longer fits the model's context window.">Budget
+                <select data-context-prune-level aria-label="Context budget">
+                  <option value="1" title="Never trims. Cache-friendly, but a turn fails outright once it no longer fits.">Cumulative</option>
+                  <option value="2" title="Drops the oldest tool-call results once they no longer fit, oldest first.">Windowed</option>
+                  <option value="3" selected title="Default. Also folds away superseded steps (old drafts views, resolved batches) before dropping anything.">Compaction</option>
+                  <option value="4" title="Also trims pinned context (sections, changes, chat) when needed, lowest priority first.">Trimming</option>
+                </select>
+              </label>
               <button type="button" data-toggle-auto-notes aria-pressed="false" title="Ask the AI to write a short note for each new revision. Runs while chat is idle. Needs a connected API.">Auto notes</button>
               <button type="button" data-toggle-save-on-revision aria-pressed="false" title="Write the file to disk every time a revision is recorded. When off, the file is written only by Save.">Save each revision</button>
               <button type="button" data-toggle-valid-patch aria-pressed="false" title="Show revision diffs as the stored patch, keeping the + / - / space prefix on every row. When off, rows are shown without prefixes.">Patch prefixes</button>
