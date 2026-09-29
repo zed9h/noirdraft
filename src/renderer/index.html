@@ -11,6 +11,7 @@
       <header class="app-header">
         <div class="header-left">
           <button type="button" class="icon-button" data-toggle-left title="Toggle navigation sidebar" aria-label="Toggle navigation sidebar" aria-expanded="true"><span class="icon-glyph">menu</span></button>
+          <button type="button" class="icon-button" data-toggle-versions aria-label="Versions" aria-expanded="false" title="Versions"><span class="icon-glyph">history</span></button>
           <span class="app-title">NoirDraft</span>
           <h2 id="editor-title" class="doc-name">Untitled story</h2>
           <span class="status" data-document-status>No document open</span>
@@ -143,13 +144,6 @@
             </section>
           </div>
           <div class="search-results" data-text-search-results aria-label="Text search results" hidden></div>
-          <div class="sidebar-footer">
-            <button type="button" class="icon-button versions-reveal" data-toggle-versions aria-label="Versions" aria-expanded="false" title="Versions"><span class="icon-glyph">history</span></button>
-            <label class="context-rows-control" title="Rows of document context before and after the cursor or selection">
-              Context
-              <input type="number" data-context-rows min="1" max="200" step="1" value="12" aria-label="Context rows around cursor or selection">
-            </label>
-          </div>
         </nav>
         <div class="pane-resizer pane-resizer-vertical" data-pane-resizer="navigation" data-resizer-for="sidebar-left" role="separator" aria-label="Resize navigation pane" aria-orientation="vertical" tabindex="0"></div>
         <section class="workspace" aria-labelledby="editor-title">
@@ -193,7 +187,8 @@
             </div>
             <textarea rows="3" data-chat-prompt aria-label="Chat prompt" placeholder="Message the agent…"></textarea>
             <div class="chat-composer-actions">
-              <label class="chat-context-controls" title="Number of prior chat turns to include as context">Context <input type="number" min="0" step="1" value="6" data-chat-history-count aria-label="Context"></label>
+              <label class="context-rows-control" title="Rows of document context around the cursor or selection to send with each message">Context <input type="number" data-context-rows min="1" max="200" step="1" value="12" aria-label="Rows of document context around cursor or selection"></label>
+              <label class="chat-context-controls" title="Number of prior chat turns to send as context">History <input type="number" min="0" step="1" value="6" data-chat-history-count aria-label="Number of prior chat turns to include as context"></label>
               <button type="button" data-chat-cancel hidden title="Stop the AI's current response">Cancel generation</button>
               <button type="button" data-chat-send title="Enter sends. Shift+Enter or Ctrl+Enter adds a line break.">Send</button>
             </div>

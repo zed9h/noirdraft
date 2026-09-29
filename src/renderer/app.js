@@ -2480,9 +2480,10 @@ try {
       refreshHistoryControls();
     });
     checkout.disabled = isCurrent || !controller;
-    const meta = graphElement('p', 'version-detail-meta', versionDetail);
+    const body = graphElement('div', 'version-detail-body', versionDetail);
+    const meta = graphElement('p', 'version-detail-meta', body);
     meta.textContent = `${revision.origin} · ${revision.timestamp}${entry?.approximate ? ' · similarity hint' : ''}`;
-    const note = graphElement('p', 'version-detail-note', versionDetail);
+    const note = graphElement('p', 'version-detail-note', body);
     note.textContent = revision.note ?? '[no note]';
     note.title = 'Double-click to edit note';
     note.addEventListener('dblclick', () => {
@@ -2515,7 +2516,7 @@ try {
         else if (event.key === 'Escape') { event.preventDefault(); cancel(); }
       });
     });
-    const payload = graphElement('pre', 'version-detail-payload', versionDetail);
+    const payload = graphElement('pre', 'version-detail-payload', body);
     payload.dataset.payloadType = revision.payloadType;
     if (revision.payloadType === 'patch') {
       for (const row of classifyPatch(revision.payload)) {
