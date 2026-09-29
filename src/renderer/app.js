@@ -2198,6 +2198,16 @@ try {
   // detail pane docks to the right of the graph; both are in the page markup.
   const graphBanner = document.querySelector('[data-passage-banner]');
   const versionDetail = document.querySelector('[data-version-detail]');
+  // Hand-selecting an excerpt in the detail pane and copying it records where
+  // it came from, same as copying from a pinned card.
+  versionDetail.addEventListener('copy', (event) => {
+    if (!['STORY', 'METADATA'].includes(activeRoot)) return;
+    const id = Number(versionDetail.dataset.revisionId);
+    if (!Number.isFinite(id)) return;
+    const text = window.getSelection()?.toString();
+    if (!text) return;
+    pendingCopies[activeRoot] = addPendingCopy(pendingCopies[activeRoot], { sourceRevisionId: id, text });
+  });
   // Zoom controls live in the Versions header, right of the search field.
   const graphControls = graphElement('div', 'graph-controls', document.querySelector('.versions-heading'));
   versionGraph.append(graphWorld);
@@ -2455,6 +2465,18 @@ try {
     graphIconButton(graphBanner, ['M6 6l12 12', 'M18 6L6 18'], 'Clear passage highlight', clearPassage);
   };
 
+  const copyVersionDetailAddition = async (currentHistory, revision, id) => {
+    if (!['STORY', 'METADATA'].includes(activeRoot)) return;
+    const cache = new Map();
+    const after = await reconstructRevision(currentHistory, id, cache);
+    const before = revision.parents.length ? await reconstructRevision(currentHistory, revision.parents[0], cache) : '';
+    const text = insertedPassages(before, after).join('\n\n');
+    if (!text) return;
+    const root = activeRoot;
+    await navigator.clipboard.writeText(text);
+    pendingCopies[root] = addPendingCopy(pendingCopies[root], { sourceRevisionId: id, text });
+  };
+
   const renderVersionDetail = (currentHistory, id) => {
     versionDetail.replaceChildren();
     const revision = id === null ? null : currentHistory.revisions.get(id);
@@ -2478,6 +2500,8 @@ try {
     const isPinned = pinnedRevisionIds.includes(id);
     const pin = graphIconButton(actions, ['M9 4h6l-1 6 3 3H7l3-3z', 'M12 13v7'], isPinned ? 'Unpin revision' : 'Pin revision', () => togglePinnedRevision(id));
     pin.setAttribute('aria-pressed', String(isPinned));
+    const copyAdded = graphIconButton(actions, ['M9 4h9v9', 'M6 8h9v12H6z'], 'Copy everything this revision added', () => void copyVersionDetailAddition(currentHistory, revision, id));
+    copyAdded.disabled = !['STORY', 'METADATA'].includes(activeRoot);
     const isCurrent = id === currentHistory.currentRevision;
     const controller = activeCommitController();
     const checkout = graphIconButton(actions, ['M12 3a9 9 0 100 18 9 9 0 000-18z', 'M8 12.5l3 3 5-6'], isCurrent ? 'Checked out' : 'Check out revision', async () => {
