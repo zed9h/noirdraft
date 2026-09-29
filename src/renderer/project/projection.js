@@ -44,13 +44,15 @@ export function normalizeVisibleRootText(source) {
 }
 
 /**
- * Trims surrounding whitespace and ends non-empty text with exactly one line
- * break: the empty last row an author writes on or expands from. Added when
- * missing, collapsed when repeated; empty text stays empty.
+ * Trims surrounding whitespace and, for non-empty text, adds one empty row
+ * at the top and one at the bottom: blank first and last lines an author can
+ * write on or expand from, and that the agent relies on to recognize the
+ * document's open ends. Added when missing, collapsed when repeated; empty
+ * text stays empty.
  */
 export function endWithEmptyRow(text) {
   const body = String(text).trim();
-  return body ? `${body}\n` : '';
+  return body ? `\n${body}\n` : '';
 }
 
 export function splitRootSeparator(content, lineEnding = '\n') {

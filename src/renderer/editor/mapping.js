@@ -94,17 +94,27 @@ export class OffsetMapping {
   }
 
   #elementRect({ node, offset }) {
-    const element = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
-    if (!element || !this.container.contains(element)) return null;
-    // getBoundingClientRect() would return the union of every wrapped
-    // fragment (e.g. both the row before and the row after an internal hard
-    // break), which is too tall. getClientRects() gives one box per visual
-    // line instead; pick the first fragment for a leading offset and the
-    // last for a trailing one, matching which row the collapsed caret is on.
-    const rects = [...element.getClientRects()];
-    const rect = offset === 0 ? rects[0] : rects.at(-1);
-    if (!rect || (rect.width === 0 && rect.height === 0)) return null;
-    return new DOMRect(rect.left, rect.top, 0, rect.height);
+    let element = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+    // An empty document's sole block has no text content anywhere in it, so
+    // its innermost source-run span (an empty inline element) generates no
+    // box at all and reports zero client rects. Climb to the nearest
+    // ancestor that does report real geometry — the enclosing
+    // .markdown-block.is-empty-block reserves a full line via CSS
+    // (min-height: 1lh) specifically so this fallback has somewhere to land.
+    while (element && element !== this.container && this.container.contains(element)) {
+      // getBoundingClientRect() would return the union of every wrapped
+      // fragment (e.g. both the row before and the row after an internal hard
+      // break), which is too tall. getClientRects() gives one box per visual
+      // line instead; pick the first fragment for a leading offset and the
+      // last for a trailing one, matching which row the collapsed caret is on.
+      const rects = [...element.getClientRects()];
+      const rect = offset === 0 ? rects[0] : rects.at(-1);
+      if (rect && (rect.width !== 0 || rect.height !== 0)) {
+        return new DOMRect(rect.left, rect.top, 0, rect.height);
+      }
+      element = element.parentElement;
+    }
+    return null;
   }
 
   characterRects(from, to) {

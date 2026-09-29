@@ -47,9 +47,9 @@ test('secondary parents are recorded, serialized, and never alter ancestry or re
   assert.deepEqual(two.parents, [0, 1]);
   assert.deepEqual(childrenOf(history, 1), []);
   assert.deepEqual(linkedChildrenOf(history, 1).map(({ id }) => id), [2]);
-  assert.equal(await reconstructRevision(history, two.id), 'a\nc\nb\n');
+  assert.equal(await reconstructRevision(history, two.id), '\na\nc\nb\n');
   const parsed = await parseHistory(serializeHistory(history));
   assert.deepEqual(parsed.revisions.get(2).parents, [0, 1]);
-  assert.equal(await reconstructRevision(parsed, 2), 'a\nc\nb\n');
+  assert.equal(await reconstructRevision(parsed, 2), '\na\nc\nb\n');
   assert.equal(one.id, 1);
 });

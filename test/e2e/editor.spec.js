@@ -343,6 +343,31 @@ test('block boundaries have one caret transition and edit on the first keypress'
   }
 });
 
+test('an empty document still shows a visible caret with real height', async () => {
+  const { application, window } = await launch();
+  try {
+    const editor = window.getByRole('textbox', { name: 'Story source' });
+    await editor.focus();
+    const info = await window.evaluate(() => {
+      const { editor: instance, model } = window.__noirDraftTest;
+      instance.replace(0, model.text.length, '');
+      instance.setSelection(0, 0);
+      const rect = instance.mapping.rangeRect(0);
+      const painted = getComputedStyle(instance.element, '::after');
+      return {
+        text: model.text,
+        rectHeight: rect.height,
+        visualCaret: instance.element.classList.contains('has-visual-caret') && Number.parseFloat(painted.height) > 0,
+      };
+    });
+    expect(info.text).toBe('');
+    expect(info.rectHeight).toBeGreaterThan(0);
+    expect(info.visualCaret).toBe(true);
+  } finally {
+    await application.close();
+  }
+});
+
 test('composition lifecycle and requested character bounds remain wired', async () => {
   const { application, window } = await launch();
   try {

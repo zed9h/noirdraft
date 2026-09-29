@@ -57,7 +57,7 @@ test('STORY projection normalizes LF, boundary whitespace, and Setext headings',
   const story = projectRoot(project, 'STORY');
   assert.equal(story.separator, '\n');
   // A blank line before the end is content: the last empty row is kept.
-  assert.equal(story.text, '## Chapter\n```md\n## literal\n```\n\\## escaped\n');
+  assert.equal(story.text, '\n## Chapter\n```md\n## literal\n```\n\\## escaped\n');
 });
 
 test('heading projection keeps ATX levels H1-H6 and normalizes Setext input', () => {
@@ -72,7 +72,7 @@ test('serializer replaces projections while preserving unknown roots and order',
     STORY: '# New chapter\nText.',
     METADATA: '# Style\nSparse.\n',
   });
-  assert.equal(serialized, 'METADATA\n========\n\n# Style\nSparse.\n\nUNKNOWN\n=======\nKeep exactly.\n\nSTORY\n=====\n\n# New chapter\nText.\n');
+  assert.equal(serialized, 'METADATA\n========\n\n\n# Style\nSparse.\n\nUNKNOWN\n=======\nKeep exactly.\n\nSTORY\n=====\n\n\n# New chapter\nText.\n');
 });
 
 test('serializer creates missing optional roots using the existing line ending', () => {
@@ -96,7 +96,7 @@ test('serializer places newly created reserved roots in preferred order', () => 
     'AUTHOR-NOTES\n============\nKeep this section in place.\n',
     'VERSIONS\n========\n\nVersion data\n',
     'CHAT\n====\n\n## Session\n',
-    'METADATA\n========\n\n# Notes\n',
+    'METADATA\n========\n\n\n# Notes\n',
   ].join(''));
 });
 
@@ -126,15 +126,15 @@ test('heading projection round-trips randomized supported story structures', () 
   }
 });
 
-test('the story always ends with exactly one empty row, and it survives a save/load round trip', () => {
+test('the story always starts and ends with exactly one empty row, and it survives a save/load round trip', () => {
   const source = 'STORY\n=====\n\nOld.\nMETADATA\n========\n\nOld notes.\n';
-  for (const [visible, expected] of [['Line one.', 'Line one.\n'], ['Line one.\n', 'Line one.\n'], ['One.\n\nTwo.\n\n\n', 'One.\n\nTwo.\n'], ['', '']]) {
+  for (const [visible, expected] of [['Line one.', '\nLine one.\n'], ['Line one.\n', '\nLine one.\n'], ['One.\n\nTwo.\n\n\n', '\nOne.\n\nTwo.\n'], ['', '']]) {
     for (const root of ['STORY', 'METADATA']) {
       const serialized = serializeProjectDocument(parseProjectDocument(source), { [root]: visible });
       assert.equal(projectRoot(parseProjectDocument(serialized), root).text, expected, `${root}: ${JSON.stringify(visible)}`);
     }
   }
-  assert.equal(normalizeVisibleRootText('  a\n\n\n  '), 'a\n');
-  assert.equal(normalizeVisibleRootText('\n\n  a  '), 'a\n');
+  assert.equal(normalizeVisibleRootText('  a\n\n\n  '), '\na\n');
+  assert.equal(normalizeVisibleRootText('\n\n  a  '), '\na\n');
   assert.equal(normalizeVisibleRootText('  \n  '), '');
 });
