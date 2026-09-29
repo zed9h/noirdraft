@@ -515,6 +515,15 @@ aiModelSelect.addEventListener('change', async () => {
   aiModelChoice = chosen;
   koboldClient.model = chosen;
   await preferences?.set({ model: chosen });
+  // Distinct models can carry different context lengths/tokenizers, even
+  // without an admin reload, so re-fetch rather than trust the prior value.
+  try {
+    koboldContextLength = await koboldClient.fetchContextLength();
+  } catch {
+    koboldContextLength = null;
+  }
+  koboldModel = chosen;
+  onConnectionChange();
   showStatus(`Using model ${chosen}`);
 });
 const refreshModelChoices = async (client) => {
