@@ -983,7 +983,7 @@ try {
     const peak = job?.contextUsage?.peakPromptTokens;
     if (!peak) { badge.hidden = true; return badge; }
     const total = job.contextTotal ?? koboldContextLength;
-    badge.textContent = total ? `${peak} / ${total}` : `${peak}`;
+    badge.textContent = total ? `${peak} / ${total} tokens` : `${peak} tokens`;
     badge.title = 'Highest context size reached while NoirDraft processed this turn (diagnostic only, not saved with the document).';
     return badge;
   };

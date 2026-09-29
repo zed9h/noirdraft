@@ -183,13 +183,13 @@
           <div class="chat-history" data-chat-history aria-label="Chat history"></div>
           <div class="chat-composer" data-chat-composer>
           <div class="chat-context-preview chat-message-label">
-              <button type="button" class="chat-role-action" data-context-toggle title="Preview the raw context that would be sent with this message" aria-label="Preview context for draft message">USER</button>
+              <button type="button" class="chat-role-action" data-context-toggle title="Preview the raw context that would be sent with this message" aria-label="Preview context for draft message">CONTEXT</button>
               <span class="chat-token-count" data-chat-context-summary aria-live="polite"></span>
             </div>
             <textarea rows="3" data-chat-prompt aria-label="Chat prompt" placeholder="Message the agent…"></textarea>
             <div class="chat-composer-actions">
-              <label class="context-rows-control" title="Rows of document context around the cursor or selection to send with each message">Context <input type="number" data-context-rows min="1" max="200" step="1" value="12" aria-label="Rows of document context around cursor or selection"></label>
-              <label class="chat-context-controls" title="Number of prior chat turns to send as context">History <input type="number" min="0" step="1" value="6" data-chat-history-count aria-label="Number of prior chat turns to include as context"></label>
+              <label class="context-rows-control" title="Rows of document context around the cursor or selection to send with each message">Rows <input type="number" data-context-rows min="1" max="200" step="1" value="12" aria-label="Rows of document context around cursor or selection"></label>
+              <label class="chat-context-controls" title="Number of prior chat turns to send as context">Turns <input type="number" min="0" step="1" value="6" data-chat-history-count aria-label="Number of prior chat turns to include as context"></label>
               <button type="button" data-chat-cancel hidden title="Stop the AI's current response">Cancel generation</button>
               <button type="button" data-chat-send title="Enter sends. Shift+Enter or Ctrl+Enter adds a line break.">Send</button>
             </div>
