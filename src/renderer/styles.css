@@ -599,7 +599,14 @@ button { font: inherit; }
 .version-detail-title { margin: 0; color: #e9ddd0; font: 600 .95rem/1.2 "Noto Serif", serif; }
 .version-detail-actions { display: flex; gap: .25rem; }
 .version-detail-actions .icon-button { width: 1.7rem; height: 1.7rem; }
-.version-detail-meta { margin: .3rem 0 0; color: #7d746a; font-size: .7rem; }
+.version-detail-meta { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; margin: .3rem 0 0; color: #7d746a; font-size: .7rem; }
+.version-detail-meta-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.version-detail-parents { flex: 0 0 auto; display: flex; gap: .4rem; }
+.version-detail-parent { padding: 0; border: 0; background: none; font: inherit; font-size: .7rem; cursor: pointer; }
+.version-detail-parent-primary { color: #cf9f6c; }
+.version-detail-parent-primary:hover { color: #e9c193; }
+.version-detail-parent-secondary { color: #8fa8c9; border-bottom: 1px dashed currentColor; }
+.version-detail-parent-secondary:hover { color: #b7cbe4; }
 .version-detail-note { margin: .4rem 0; color: #857b70; font-size: .78rem; overflow-wrap: anywhere; cursor: text; }
 .version-detail-note-edit { display: block; width: 100%; margin: .4rem 0; padding: .1rem .2rem; color: #e9ddd0; font: inherit; font-size: .78rem; background: #1a1815; border: 1px solid #4a4238; border-radius: 3px; box-sizing: border-box; }
 .version-detail-payload { margin: .3rem 0 0; padding: .35rem 0; overflow-x: auto; color: #8f867b; background: #12100e; font: .74rem/1.5 "Noto Sans Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }

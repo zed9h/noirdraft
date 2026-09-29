@@ -2477,6 +2477,67 @@ try {
     pendingCopies[root] = addPendingCopy(pendingCopies[root], { sourceRevisionId: id, text });
   };
 
+  const navigateToRevisionInDetail = (revisionId) => {
+    focusedRevisionId = revisionId;
+    inspectedRevisionId = revisionId;
+    renderVersions();
+  };
+
+  const removeSecondaryParent = async (revision, parentId) => {
+    const decision = await showConfirmDialog({
+      title: 'Unlink secondary parent',
+      message: `Remove revision #${parentId} as a secondary parent of revision #${revision.id}?`,
+      detail: 'This only removes the provenance link; both revisions keep their text.',
+      buttons: ['Unlink', 'Cancel'],
+    });
+    if (decision !== 0) return;
+    const index = revision.parents.indexOf(parentId);
+    if (index <= 0) return;
+    revision.parents.splice(index, 1);
+    await persistAfterCommit();
+    // The edge set changed without the revision count changing, which the
+    // layout cache keys on: force a recompute so the dashed edge actually goes.
+    graphLayoutCache.size = -1;
+    renderVersions();
+  };
+
+  // Click jumps to the parent. On a secondary parent, holding briefly instead
+  // offers to unlink it (the primary parent is ancestry and can't be removed
+  // here). 500ms + a 6px cancel threshold matches the graph node hold-to-pin.
+  const renderParentLink = (parent, revision, parentId, isPrimary) => {
+    const link = graphElement('button', `version-detail-parent ${isPrimary ? 'version-detail-parent-primary' : 'version-detail-parent-secondary'}`, parent);
+    link.type = 'button';
+    link.textContent = `#${parentId}`;
+    link.title = isPrimary ? `Primary parent — revision ${parentId}` : `Secondary parent — revision ${parentId} (hold to unlink)`;
+    if (isPrimary) {
+      link.addEventListener('click', () => navigateToRevisionInDetail(parentId));
+      return;
+    }
+    let start = null;
+    let timer = null;
+    let held = false;
+    const cancel = () => { if (timer) clearTimeout(timer); timer = null; start = null; };
+    link.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      held = false;
+      start = { x: event.clientX, y: event.clientY };
+      timer = setTimeout(() => {
+        held = true;
+        timer = null;
+        void removeSecondaryParent(revision, parentId);
+      }, 500);
+    });
+    link.addEventListener('pointermove', (event) => {
+      if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 6) cancel();
+    });
+    link.addEventListener('pointerup', cancel);
+    link.addEventListener('pointerleave', cancel);
+    link.addEventListener('click', (event) => {
+      if (held) { event.preventDefault(); held = false; return; }
+      navigateToRevisionInDetail(parentId);
+    });
+  };
+
   const renderVersionDetail = (currentHistory, id) => {
     versionDetail.replaceChildren();
     const revision = id === null ? null : currentHistory.revisions.get(id);
@@ -2513,7 +2574,12 @@ try {
     checkout.disabled = isCurrent || !controller;
     const body = graphElement('div', 'version-detail-body', versionDetail);
     const meta = graphElement('p', 'version-detail-meta', body);
-    meta.textContent = `${revision.origin} · ${revision.timestamp}${entry?.approximate ? ' · similarity hint' : ''}`;
+    const metaText = graphElement('span', 'version-detail-meta-text', meta);
+    metaText.textContent = `${revision.origin} · ${revision.timestamp}${entry?.approximate ? ' · similarity hint' : ''}`;
+    if (revision.parents.length) {
+      const parents = graphElement('span', 'version-detail-parents', meta);
+      revision.parents.forEach((parentId, index) => renderParentLink(parents, revision, parentId, index === 0));
+    }
     const note = graphElement('p', 'version-detail-note', body);
     note.textContent = revision.note ?? '[no note]';
     note.title = 'Double-click to edit note';
