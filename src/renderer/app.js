@@ -18,6 +18,7 @@ import { passageHistory } from './history/lineage.js';
 import { edgePath, layoutRevisionGraph, secondaryEdgePath } from './history/graph-layout.js';
 import { excerptAround, findTextMatches, paragraphRange, searchHistory } from './search.js';
 import { insertedPassages, wordDiff } from './history/word-diff.js';
+import { scrubDocumentDiff } from './history/scrub-diff.js';
 import { extractHeadings, resolveHeadingPath } from './project/headings.js';
 import { createVisitLog, jumpVisitLog, recordVisit, stepVisitLog } from './history/visit-log.js';
 import { endScrub, startScrub, stepScrub } from './history/scrub-session.js';
@@ -656,6 +657,7 @@ const navTimelineForwardButton = document.querySelector('[data-nav-timeline-forw
 const saveNoteMenuButton = document.querySelector('[data-save-note]');
 const saveNoteConfirm = document.querySelector('[data-save-note-confirm]');
 const saveNoteCancel = document.querySelector('[data-save-note-cancel]');
+const scrubDiffOverlay = document.querySelector('[data-scrub-diff-overlay]');
 const models = {
   STORY: new StoryModel(initialStory),
   METADATA: new StoryModel(''),
@@ -1874,6 +1876,10 @@ try {
   let scrubRoot = null; // 'STORY' | 'METADATA'
   let scrubStarting = false;
   let scrubPanelWasOpen = false;
+  // The text of the revision the current scrub started from — the diff
+  // overlay's fixed reference point for the whole hold, so every step shows
+  // "what changed since the scrub began", not just since the last step.
+  let scrubOriginText = null;
 
   // Alt+Arrow section back/forward (browser-tab style), remembering caret
   // and scroll position per section.
@@ -2394,8 +2400,9 @@ try {
       const isPassage = passageIds?.has(id) ?? false;
       const isCurrent = id === currentHistory.currentRevision;
       const isPinned = pinnedRevisionIds.includes(id);
+      const isScrubOrigin = scrubSession != null && id === scrubSession.originId;
       button.className = ['graph-node', `origin-${revision.origin}`, isCurrent ? 'current' : '', id === focusedRevisionId ? 'focused' : '',
-        isPinned ? 'pinned' : '', searchHits.has(id) ? 'search-hit' : '', isPassage ? 'passage' : '']
+        isPinned ? 'pinned' : '', searchHits.has(id) ? 'search-hit' : '', isPassage ? 'passage' : '', isScrubOrigin ? 'scrub-origin' : '']
         .filter(Boolean).join(' ');
       button.setAttribute('aria-label', `Revision ${id}${isCurrent ? ', checked out' : ''}${isPinned ? ', pinned' : ''}${isPassage ? ', changed the selected passage' : ''}`);
       button.title = `Revision ${id}: ${revision.note ?? revision.origin}`;
@@ -3103,14 +3110,34 @@ try {
     event.preventDefault();
   });
   // Shared by the panel's own arrow keys below and the Ctrl+Alt scrub
-  // navigator: parent / first child / current rendered-neighbor step, ←/→/↑↓.
+  // navigator: parent / first child step, ←/→; up/down land on whichever
+  // node above/below is geometrically closest (straight-line distance in
+  // the layout, not just nearest row), so a neighbor a touch further off in
+  // row but much closer in depth wins over a marginally nearer row that
+  // sits far off in time — landing near the same depth instead of hopping
+  // to wherever the next row happens to start or end.
   const stepStructural = (currentHistory, currentId, key) => {
     const revision = currentHistory.revisions.get(currentId);
     if (key === 'left') return revision?.parents[0] ?? null;
     if (key === 'right') return childrenOf(currentHistory, currentId)[0]?.id ?? null;
-    const index = renderedGraphNodeIds.indexOf(currentId);
-    const offset = key === 'up' ? -1 : 1;
-    return renderedGraphNodeIds[index + offset] ?? null;
+    const { positions } = graphLayout(currentHistory);
+    const current = positions.get(currentId);
+    if (!current) return null;
+    const direction = key === 'up' ? -1 : 1;
+    let best = null;
+    let bestDistance = Infinity;
+    for (const [id, point] of positions) {
+      if (id === currentId) continue;
+      const dy = (point.y - current.y) * direction;
+      if (dy <= 1e-6) continue; // same row, or the wrong direction
+      const dx = point.x - current.x;
+      const distance = dy * dy + dx * dx;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = id;
+      }
+    }
+    return best;
   };
 
   versionGraph.addEventListener('keydown', (event) => {
@@ -3173,6 +3200,59 @@ try {
     },
   };
 
+  // Positions the diff overlay (a sibling outside the active editor's own
+  // contenteditable subtree — see the .scrub-diff-overlay rule in
+  // styles.css) to exactly cover that editor's box. Called on every step
+  // since opening the Versions panel at scrub start reflows the workspace.
+  const positionScrubOverlay = () => {
+    if (!scrubDiffOverlay || scrubDiffOverlay.hidden || !scrubRoot) return;
+    const editorEl = elements[scrubRoot];
+    if (!editorEl) return;
+    const workspaceRect = workspace.getBoundingClientRect();
+    const editorRect = editorEl.getBoundingClientRect();
+    scrubDiffOverlay.style.left = `${editorRect.left - workspaceRect.left}px`;
+    scrubDiffOverlay.style.top = `${editorRect.top - workspaceRect.top}px`;
+    scrubDiffOverlay.style.width = `${editorRect.width}px`;
+    scrubDiffOverlay.style.height = `${editorRect.height}px`;
+  };
+
+  // Renders the whole-document diff between scrubOriginText and the
+  // currently-previewed text, preserving the overlay's own scroll position
+  // (a plain replaceChildren would otherwise reset it to the top on every
+  // step) so the user can settle on a region to watch while scrubbing.
+  const renderScrubOverlay = (currentText) => {
+    if (!scrubDiffOverlay || scrubOriginText === null) return;
+    const savedScrollTop = scrubDiffOverlay.scrollTop;
+    scrubDiffOverlay.replaceChildren();
+    for (const op of scrubDocumentDiff(scrubOriginText, currentText)) {
+      if (op.type === 'equal') { scrubDiffOverlay.append(op.text); continue; }
+      const span = document.createElement(op.type === 'insert' ? 'ins' : 'del');
+      span.className = op.type === 'insert' ? 'diff-insert' : 'diff-delete';
+      span.textContent = op.text;
+      scrubDiffOverlay.append(span);
+    }
+    scrubDiffOverlay.scrollTop = savedScrollTop;
+  };
+
+  // The overlay's raw scroll offset, carried over onto the real editor once
+  // scrubbing ends (see cancelScrub / releaseScrub). A pixel offset, not a
+  // fraction of scrollable range: the overlay and the editor share the same
+  // width, font, and padding, so a given offset already lands on the same
+  // wrapped line in both regardless of how tall either viewport currently
+  // is (Versions being open shrinks the overlay's clientHeight, not its
+  // content). Scaling by scrollable-range fraction would fold that
+  // clientHeight difference back in and drift the landing spot every time
+  // Versions is open during the hold but not after, or vice versa.
+  const captureScrubScrollTop = () => scrubDiffOverlay?.scrollTop ?? 0;
+
+  const applyScrubScrollTop = (editorEl, scrollTop) => {
+    if (!editorEl) return;
+    requestAnimationFrame(() => {
+      const max = editorEl.scrollHeight - editorEl.clientHeight;
+      editorEl.scrollTop = max > 0 ? Math.min(scrollTop, max) : 0;
+    });
+  };
+
   const applyScrubStep = (mode, key) => {
     if (!scrubSession) return;
     const provider = mode === 'structural' ? structuralProvider : visitTimeProvider;
@@ -3184,9 +3264,19 @@ try {
     renderVersions();
     const currentHistory = scrubRoot === 'METADATA' ? metadataHistory : history;
     const targetModel = models[scrubRoot];
+    const targetEditor = editors[scrubRoot];
     void reconstructRevision(currentHistory, targetId).then((story) => {
       if (!scrubSession || scrubSession.currentId !== targetId) return; // superseded by a later step
+      // The preview replace collapses the caret to the document end (see
+      // StoryModel#replace), which would otherwise drag the editor's own
+      // scroll position to the bottom on every step even though it's hidden
+      // behind the diff overlay; restore it so it isn't stranded there once
+      // the overlay closes.
+      const savedScrollTop = targetEditor?.element.scrollTop;
       targetModel.replace(0, targetModel.text.length, story, { origin: 'scrub-preview' });
+      if (targetEditor && savedScrollTop != null) targetEditor.element.scrollTop = savedScrollTop;
+      renderScrubOverlay(story);
+      positionScrubOverlay();
     });
   };
 
@@ -3203,6 +3293,10 @@ try {
     const currentController = activeCommitController();
     if (!currentController) return;
     const rootName = activeRoot === 'METADATA' ? 'METADATA' : 'STORY';
+    // Captured now, before opening Versions (or anything else) can reflow
+    // and disturb the editor's own scroll position — this is the position
+    // the overlay should open on.
+    const originScrollTop = elements[rootName]?.scrollTop ?? 0;
     scrubStarting = true;
     void currentController.commitPending({ origin: 'user' }).then(() => {
       scrubStarting = false;
@@ -3212,9 +3306,33 @@ try {
       const currentHistory = rootName === 'METADATA' ? metadataHistory : history;
       scrubSession = startScrub({ originId: currentHistory.currentRevision, providerState: null });
       focusedRevisionId = currentHistory.currentRevision;
+      scrubOriginText = models[rootName].text;
       setVersionsOpen(true);
+      if (scrubDiffOverlay) {
+        scrubDiffOverlay.hidden = false;
+        // Size and position the overlay before touching its scroll, then
+        // start it wherever the editor itself was already scrolled to — so
+        // the overlay opens showing the same region the user was already
+        // looking at, not the top of the document.
+        positionScrubOverlay();
+        // Content must exist (so the overlay actually has somewhere to
+        // scroll to) before the scroll position is set, or it clamps
+        // straight back to 0 on an empty box.
+        renderScrubOverlay(scrubOriginText);
+        scrubDiffOverlay.scrollTop = originScrollTop;
+      }
       applyScrubStep(mode, key);
     });
+  };
+
+  const endScrubOverlay = () => {
+    const scrollTop = captureScrubScrollTop();
+    scrubOriginText = null;
+    if (scrubDiffOverlay) {
+      scrubDiffOverlay.hidden = true;
+      scrubDiffOverlay.replaceChildren();
+    }
+    return scrollTop;
   };
 
   const cancelScrub = () => {
@@ -3222,12 +3340,15 @@ try {
     const { originId } = endScrub(scrubSession);
     const controller = scrubRoot === 'METADATA' ? metadataCommitController : commitController;
     const wasPanelOpen = scrubPanelWasOpen;
+    const targetEditorEl = elements[scrubRoot];
+    const scrollTop = endScrubOverlay();
     scrubSession = null;
     scrubMode = null;
     focusedRevisionId = null;
     void controller.checkout(originId).then(() => {
       refreshHistoryControls();
       if (wasPanelOpen) renderVersions(); else setVersionsOpen(false);
+      applyScrubScrollTop(targetEditorEl, scrollTop);
     });
   };
 
@@ -3236,12 +3357,15 @@ try {
     const { finalId } = endScrub(scrubSession);
     const controller = scrubRoot === 'METADATA' ? metadataCommitController : commitController;
     const wasPanelOpen = scrubPanelWasOpen;
+    const targetEditorEl = elements[scrubRoot];
+    const scrollTop = endScrubOverlay();
     scrubSession = null;
     scrubMode = null;
     focusedRevisionId = null;
     void controller.checkout(finalId).then(() => {
       refreshHistoryControls();
       if (wasPanelOpen) renderVersions(); else setVersionsOpen(false);
+      applyScrubScrollTop(targetEditorEl, scrollTop);
     });
   };
 
@@ -3251,6 +3375,16 @@ try {
     if (scrubMode === 'visit-time' && event.shiftKey && event.altKey) return; // still held
     releaseScrub();
   });
+
+  // The browser reinterprets wheel input while Ctrl or Shift is held —
+  // Ctrl+wheel zooms the page, Shift+wheel scrolls horizontally — which is
+  // exactly the modifier combination held throughout a scrub. Take over the
+  // wheel by hand while one is active so it still just scrolls the overlay.
+  scrubDiffOverlay?.addEventListener('wheel', (event) => {
+    if (!scrubSession) return;
+    event.preventDefault();
+    scrubDiffOverlay.scrollTop += event.deltaY !== 0 ? event.deltaY : event.deltaX;
+  }, { passive: false });
   window.addEventListener('blur', cancelScrub);
 
   // --- Alt+Arrow section back/forward --------------------------------------
@@ -3908,7 +4042,7 @@ try {
   };
 
   window.addEventListener('keydown', (event) => {
-    if (scrubSession && event.key === 'Escape') {
+    if (scrubSession && event.key === 'Backspace') {
       event.preventDefault();
       cancelScrub();
       return;
@@ -4036,6 +4170,7 @@ try {
     getVisitLog: (rootName = 'STORY') => visitLogs[rootName],
     getScrubSession: () => scrubSession,
     getScrubMode: () => scrubMode,
+    getScrubDiffOverlay: () => scrubDiffOverlay,
     getSectionNav: () => sectionNav,
     isVersionsOpen: () => versionsOpen,
   });

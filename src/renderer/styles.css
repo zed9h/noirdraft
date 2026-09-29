@@ -418,6 +418,7 @@ button { font: inherit; }
 
 .workspace {
   flex: 1;
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -425,6 +426,27 @@ button { font: inherit; }
   padding: clamp(.4rem, 1vw, .8rem);
   gap: .5rem;
 }
+
+/* Read-only overlay shown over the active editor while a Ctrl+Alt/Shift+Alt
+   revision scrub is held: a whole-document diff against the revision the
+   scrub started from, positioned in JS to exactly cover the active editor's
+   box (see positionScrubOverlay in app.js) since it lives outside the
+   editor's own contenteditable subtree, which EditContextEditor re-renders
+   wholesale on every step. */
+.scrub-diff-overlay {
+  position: absolute;
+  z-index: 6;
+  overflow: auto;
+  padding: clamp(.65rem, 1.2vw, 1.1rem);
+  border: 1px solid #6a5a44;
+  border-radius: .25rem;
+  color: #e2dbd1;
+  background: #17140f;
+  font: 17px/1.7 "Noto Serif", serif;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.scrub-diff-overlay[hidden] { display: none; }
 
 .eyebrow { color: #bd8f61; font-size: .72rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; margin: 0; }
 
@@ -556,6 +578,7 @@ button { font: inherit; }
 .graph-node.focused { box-shadow: 0 0 0 3px #12100e, 0 0 0 7px #fff; }
 .graph-node.pinned::after { content: ''; position: absolute; right: -7px; top: -7px; width: 11px; height: 11px; border: 2px solid #12100e; border-radius: 50%; background: #b7e0a0; }
 .graph-node.passage::before { content: ''; position: absolute; inset: -12px; border: 3px solid #f0a52e; border-radius: 50%; pointer-events: none; }
+.graph-node.scrub-origin { outline: 2px dotted #fff; outline-offset: 7px; }
 .graph-node.passage { filter: drop-shadow(0 0 7px rgba(240, 165, 46, .75)); }
 .graph-node.search-hit { filter: drop-shadow(0 0 6px #ffef8a); }
 .graph-controls { display: flex; gap: .25rem; margin-left: -.5rem; }
