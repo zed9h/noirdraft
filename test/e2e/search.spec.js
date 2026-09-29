@@ -41,6 +41,15 @@ test('Ctrl+F searches the text: hits replace the outline, arrows navigate, Enter
     await expect(outline).toBeHidden();
     expect(await window.evaluate(() => CSS.highlights.get('search-term')?.size)).toBe(1);
 
+    // F2 is an alternate way to open the same search.
+    await search.fill('');
+    await window.keyboard.press('Escape');
+    await window.locator('#story-editor').first().focus();
+    await window.keyboard.press('F2');
+    await expect(search).toBeFocused();
+    await window.keyboard.type('lantern');
+    await expect(results).toHaveCount(2);
+
     await window.keyboard.press('ArrowDown');
     await expect(results.nth(1)).toHaveClass(/is-active/);
 
@@ -81,7 +90,7 @@ test('Ctrl+F searches the text: hits replace the outline, arrows navigate, Enter
   }
 });
 
-test('Alt+Shift+F searches revision notes and change sets from the Versions pane', async () => {
+test('Ctrl+Shift+F searches revision notes and change sets from the Versions pane', async () => {
   const application = await launch();
   try {
     const window = await application.firstWindow();
@@ -97,7 +106,7 @@ test('Alt+Shift+F searches revision notes and change sets from the Versions pane
     const count = window.locator('[data-version-search-count]');
 
     await window.locator('[data-story-editor], #story-editor').first().focus();
-    await window.keyboard.press('Alt+Shift+F');
+    await window.keyboard.press('Control+Shift+F');
     await expect(search).toBeFocused();
     await window.keyboard.type('thunderclap');
     await expect(count).toHaveText('1 of 1'); // only the change set of "Weather" contains it
@@ -107,7 +116,7 @@ test('Alt+Shift+F searches revision notes and change sets from the Versions pane
     await expect(search).toHaveValue('');
     await expect(window.locator('#story-editor')).toBeFocused();
 
-    await window.keyboard.press('Alt+Shift+F');
+    await window.keyboard.press('Control+Shift+F');
     await window.keyboard.type('first pass');
     await expect(count).toHaveText('1 of 1');
     await window.keyboard.press('Enter');
@@ -122,7 +131,7 @@ test('Alt+Shift+F searches revision notes and change sets from the Versions pane
       editors.STORY.replace(0, models.STORY.text.length, '# Chapter\n\nA violin hummed again.\n');
       await getCommitController().explicitSave('Weather again');
     });
-    await window.keyboard.press('Alt+Shift+F');
+    await window.keyboard.press('Control+Shift+F');
     await window.keyboard.type('weather');
     await expect(count).toHaveText('1 of 2');
     await expect(window.locator('.graph-node.search-hit')).not.toHaveCount(0);

@@ -665,7 +665,6 @@ button { font: inherit; }
 .search-results button:hover { color: #e2dbd1; }
 .search-results button.is-active { border-color: #6a5a44; color: #e2dbd1; background: #1c1916; }
 .search-results mark { color: #222; background: #ffa; }
-.graph-node.search-hit { box-shadow: 0 0 0 2px #ffa; }
 
 .version-search-count { color: #8a8074; font-size: .76rem; white-space: nowrap; }
 .version-search-count[hidden] { display: none; }

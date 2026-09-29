@@ -2584,7 +2584,7 @@ try {
   }, { passive: false });
   new ResizeObserver(() => { if (versionsOpen) renderLocalGraph(); }).observe(versionGraph);
 
-  // Alt+Shift+F search over revision notes and change sets. Results replace
+  // Ctrl+Shift+F search over revision notes and change sets. Results replace
   // nothing: the graph stays visible and steps to each hit as it is browsed.
   const versionSearch = { results: [], index: -1, originRevisionId: null, active: false };
 
@@ -3920,12 +3920,13 @@ try {
       handleLocationScrub(event);
       return;
     }
-    if (event.shiftKey && event.altKey && !event.ctrlKey && !event.metaKey && event.code === 'KeyF') {
+    if (event.shiftKey && (event.ctrlKey || event.metaKey) && !event.altKey && event.code === 'KeyF') {
       event.preventDefault();
       openVersionSearch();
       return;
     }
-    if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.code === 'KeyF') {
+    if (((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.code === 'KeyF') ||
+        (event.key === 'F2' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey)) {
       event.preventDefault();
       focusTextSearch();
       return;
